@@ -1,0 +1,20 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "#iI",
+    "OGO",
+    "RCR"
+  ],
+  "key": {
+    "#": "minecraft:iron_axe",
+    "i": "#c:ingots/iron",
+    "I": "minecraft:iron_pickaxe",
+    "O": "#c:obsidians/normal",
+    "G": "#c:storage_blocks/gold",
+    "R": "#c:dusts/redstone",
+    "C": "minecraft:crafting_table"
+  },
+  "result": {
+    "id": "simpleplanes:plane_workbench"
+  }
+}

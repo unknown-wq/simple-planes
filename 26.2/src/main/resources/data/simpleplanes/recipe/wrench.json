@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "i i",
+    " i ",
+    " i "
+  ],
+  "key": {
+    "i": "#c:ingots/iron"
+  },
+  "result": {
+    "id": "simpleplanes:wrench"
+  }
+}
