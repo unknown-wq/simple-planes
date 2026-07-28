@@ -1,0 +1,8 @@
+accessWidener	v1	official
+
+# Translated from the NeoForge 1.21.1 META-INF/accesstransformer.cfg.
+# All four entries verified present in 26.2 (/opt/mc-src) on 2026-07-28.
+accessible	method	net/minecraft/client/Camera	move	(FFF)V
+accessible	method	net/minecraft/client/Camera	getMaxZoom	(F)F
+accessible	method	net/minecraft/client/Camera	setPosition	(DDD)V
+accessible	field	net/minecraft/server/network/ServerGamePacketListenerImpl	aboveGroundVehicleTickCount	I
