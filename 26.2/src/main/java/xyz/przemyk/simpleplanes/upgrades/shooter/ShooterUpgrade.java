@@ -7,6 +7,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.tags.StructureTags;
+import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Player;
@@ -87,7 +88,9 @@ public class ShooterUpgrade extends Upgrade {
             }
             level.addFreshEntity(arrowEntity);
         } else if (item == Items.ENDER_EYE && level instanceof ServerLevel serverLevel) {
-            BlockPos blockpos = serverLevel.findNearestMapStructure(StructureTags.EYE_OF_ENDER_LOCATED, new BlockPos((int) x, (int) y, (int) z), 100, false);
+            // Mth.floor, not (int): a truncating cast rounds towards zero and searches from the
+            // wrong block at negative coordinates (x = -0.5 would give 0 instead of -1).
+            BlockPos blockpos = serverLevel.findNearestMapStructure(StructureTags.EYE_OF_ENDER_LOCATED, new BlockPos(Mth.floor(x), Mth.floor(y), Mth.floor(z)), 100, false);
             if (blockpos != null) {
                 EyeOfEnder eyeOfEnder = new EyeOfEnder(level, x, y, z);
                 eyeOfEnder.setItem(itemStack);

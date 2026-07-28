@@ -23,7 +23,7 @@ public record DropPayloadPacket() implements CustomPacketPayload {
 
     public void handle(ServerPlayer player) {
         Entity entity = player.getVehicle();
-        if (entity instanceof PlaneEntity planeEntity) {
+        if (entity instanceof PlaneEntity planeEntity && planeEntity.getControllingPassenger() == player) {
             planeEntity.dropPayload();
         }
     }

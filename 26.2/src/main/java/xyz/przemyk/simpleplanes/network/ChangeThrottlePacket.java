@@ -31,7 +31,7 @@ public record ChangeThrottlePacket(Direction direction) implements CustomPacketP
     }
 
     public void handle(ServerPlayer player) {
-        if (player.getVehicle() instanceof PlaneEntity planeEntity) {
+        if (player.getVehicle() instanceof PlaneEntity planeEntity && planeEntity.getControllingPassenger() == player) {
             planeEntity.changeThrottle(direction);
         }
     }
