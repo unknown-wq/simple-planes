@@ -27,8 +27,11 @@ public record RotationPacket(Quaternionf quaternion) implements CustomPacketPayl
         return TYPE;
     }
 
-    public void handle(ServerPlayer player) {
-        if (player.getVehicle() instanceof PlaneEntity planeEntity) {
+    public void handle(ServerPlayer sender) {
+        if (!isValidRotation(quaternion)) {
+            return;
+        }
+        if (sender.getVehicle() instanceof PlaneEntity planeEntity && planeEntity.getControllingPassenger() == sender) {
             planeEntity.setQ(quaternion);
             MathUtil.EulerAngles eulerAngles = MathUtil.toEulerAngles(quaternion);
             planeEntity.setYRot((float) eulerAngles.yaw);
@@ -36,5 +39,14 @@ public record RotationPacket(Quaternionf quaternion) implements CustomPacketPayl
             planeEntity.rotationRoll = (float) eulerAngles.roll;
             planeEntity.setQ_Client(quaternion);
         }
+    }
+
+    // the four components come straight off the wire, so they can be anything a client cares to send
+    private static boolean isValidRotation(Quaternionf q) {
+        if (!Float.isFinite(q.x()) || !Float.isFinite(q.y()) || !Float.isFinite(q.z()) || !Float.isFinite(q.w())) {
+            return false;
+        }
+        // a zero-length quaternion is not a rotation, MathUtil.normalizeQuaternionf would leave it at (0, 0, 0, 0)
+        return q.x() * q.x() + q.y() * q.y() + q.z() * q.z() + q.w() * q.w() > 1.0E-6F;
     }
 }

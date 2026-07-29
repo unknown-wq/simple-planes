@@ -106,6 +106,22 @@ public class PlaneEntity extends Entity {
     // 26.2: Entity#lerpTo is gone, position interpolation is handled by InterpolationHandler.
     private final InterpolationHandler interpolation = new InterpolationHandler(this, 10);
 
+    /**
+     * Per-entity motion scratch. This used to be a single {@code static} instance shared by every
+     * plane on both logical sides, which corrupted the motion of concurrently ticking planes.
+     */
+    private final TempMotionVars motionVars = new TempMotionVars();
+
+    /**
+     * Scratch quaternion reused by {@link #tick()}. Only ever read/written on the logical side that
+     * owns this entity, and never stored into a field that outlives the call (see
+     * {@link #setQ_Client(Quaternionf)} / {@link #setQ_prev(Quaternionf)}, which alias the argument).
+     */
+    private final Quaternionf tickQScratch = new Quaternionf();
+
+    /** Scratch quaternion reused by {@link #transformPos(Vector3f)}; must not be {@link #tickQScratch}, transformPos runs inside tick(). */
+    private final Quaternionf transformQScratch = new Quaternionf();
+
     public PlaneEntity(EntityType<? extends PlaneEntity> entityTypeIn, Level worldIn) {
         this(entityTypeIn, worldIn, Blocks.OAK_PLANKS);
     }
@@ -153,6 +169,16 @@ public class PlaneEntity extends Entity {
         return new Quaternionf(entityData.get(Q));
     }
 
+    /**
+     * Allocation-free variant of {@link #getQ()}: copies the value into {@code dest} and returns it.
+     * Never pass a buffer that is going to be handed to {@link #setQ(Quaternionf)},
+     * {@link #setQ_Client(Quaternionf)} or {@link #setQ_prev(Quaternionf)} — those store the
+     * reference itself, so a reused scratch object would alias the stored rotation.
+     */
+    public Quaternionf getQ(Quaternionf dest) {
+        return dest.set(entityData.get(Q));
+    }
+
     public void setQ(Quaternionf q) {
         entityData.set(Q, q);
     }
@@ -161,12 +187,22 @@ public class PlaneEntity extends Entity {
         return new Quaternionf(Q_Client);
     }
 
+    /** Allocation-free variant of {@link #getQ_Client()}; see {@link #getQ(Quaternionf)} for the aliasing rules. */
+    public Quaternionf getQ_Client(Quaternionf dest) {
+        return dest.set(Q_Client);
+    }
+
     public void setQ_Client(Quaternionf q) {
         Q_Client = q;
     }
 
     public Quaternionf getQ_Prev() {
         return new Quaternionf(Q_Prev);
+    }
+
+    /** Allocation-free variant of {@link #getQ_Prev()}; see {@link #getQ(Quaternionf)} for the aliasing rules. */
+    public Quaternionf getQ_Prev(Quaternionf dest) {
+        return dest.set(Q_Prev);
     }
 
     public void setQ_prev(Quaternionf q) {
@@ -445,7 +481,8 @@ public class PlaneEntity extends Entity {
         if (level().isClientSide() && !isLocalInstanceAuthoritative()) {
             tickLerp();
             setDeltaMovement(Vec3.ZERO);
-            tickDeltaRotation(getQ_Client());
+            // tickDeltaRotation only reads the quaternion, so the scratch buffer is safe here.
+            tickDeltaRotation(getQ_Client(tickQScratch));
             tickUpgrades();
             return;
         }
@@ -473,11 +510,13 @@ public class PlaneEntity extends Entity {
             tempMotionVars.moveStrafing = 0;
         }
 
+        // Scratch buffer: q is only mutated locally below and is replaced by a fresh instance from
+        // normalizeQuaternionf() before it ever reaches setQ()/setQ_Client(), which store the reference.
         Quaternionf q;
         if (level().isClientSide()) {
-            q = getQ_Client();
+            q = getQ_Client(tickQScratch);
         } else {
-            q = getQ();
+            q = getQ(tickQScratch);
         }
 
         EulerAngles anglesOld = toEulerAngles(q).copy();
@@ -628,9 +667,9 @@ public class PlaneEntity extends Entity {
     }
 
     protected TempMotionVars getMotionVars() {
-        TEMP_MOTION_VARS.reset();
-        TEMP_MOTION_VARS.maxPushSpeed = getMaxSpeed() * 10;
-        return TEMP_MOTION_VARS;
+        motionVars.reset();
+        motionVars.maxPushSpeed = getMaxSpeed() * 10;
+        return motionVars;
     }
 
     protected void tickDeltaRotation(Quaternionf q) {
@@ -823,7 +862,9 @@ public class PlaneEntity extends Entity {
             tempMotionVars.push = 0;
         }
         float f;
-        BlockPos pos = new BlockPos((int) getX(), (int) (getY() - 1.0D), (int) getZ());
+        // Mth.floor, not (int): a truncating cast rounds towards zero and samples the wrong block at
+        // negative coordinates (x = -0.5 would give 0 instead of -1).
+        BlockPos pos = new BlockPos(Mth.floor(getX()), Mth.floor(getY() - 1.0D), Mth.floor(getZ()));
         f = level().getBlockState(pos).getBlock().getFriction();
         tempMotionVars.dragMul *= 20 * (3 - f);
         return speedingUp;
@@ -879,7 +920,8 @@ public class PlaneEntity extends Entity {
     }
 
     public Vector3f transformPos(Vector3f relPos) {
-        EulerAngles angles = toEulerAngles(getQ_Client());
+        // toEulerAngles() only reads its argument, so the scratch buffer never escapes.
+        EulerAngles angles = toEulerAngles(getQ_Client(transformQScratch));
         angles.yaw = -angles.yaw;
         angles.roll = -angles.roll;
         relPos.rotate(toQuaternionf(angles.yaw, angles.pitch, angles.roll));
@@ -1069,7 +1111,7 @@ public class PlaneEntity extends Entity {
 
     public boolean isOnWater() {
         Vec3 pos = position();
-        return level().getBlockState(new BlockPos((int) pos.x, (int) Math.floor(pos.y + 0.4), (int) pos.z)).getFluidState().is(FluidTags.WATER);
+        return level().getBlockState(new BlockPos(Mth.floor(pos.x), Mth.floor(pos.y + 0.4), Mth.floor(pos.z))).getFluidState().is(FluidTags.WATER);
     }
 
     public boolean canAddUpgrade(UpgradeType upgradeType) {
@@ -1297,8 +1339,6 @@ public class PlaneEntity extends Entity {
             }
         }
     }
-
-    private static final TempMotionVars TEMP_MOTION_VARS = new TempMotionVars();
 
     public void changeThrottle(ChangeThrottlePacket.Direction type) {
         int throttle = getThrottle();

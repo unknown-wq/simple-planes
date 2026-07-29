@@ -68,7 +68,9 @@ public class ParachuteEntity extends Entity {
     public void tick() {
         Entity passenger = getControllingPassenger();
         // Can't use onGround since it detects plane collisions too.
-        if ((passenger == null && !hasStorageCrate()) || !level().getBlockState(new BlockPos((int) getX(), (int) getY() - 1, (int) getZ())).canBeReplaced()) {
+        // Mth.floor, not (int): a truncating cast rounds towards zero and samples the wrong block at
+        // negative coordinates (x = -0.5 would give 0 instead of -1).
+        if ((passenger == null && !hasStorageCrate()) || !level().getBlockState(new BlockPos(Mth.floor(getX()), Mth.floor(getY()) - 1, Mth.floor(getZ()))).canBeReplaced()) {
             if (level() instanceof ServerLevel serverLevel) {
                 kill(serverLevel);
                 spawnAtLocation(serverLevel, SimplePlanesItems.PARACHUTE_ITEM.get());

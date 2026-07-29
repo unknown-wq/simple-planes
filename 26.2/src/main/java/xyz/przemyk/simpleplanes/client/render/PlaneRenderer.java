@@ -42,6 +42,13 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
     protected final Identifier metalTexture;
     protected final Identifier propellerTexture;
 
+    /**
+     * Reusable buffers for {@link #extractRenderState}. Renderers are per-entity-type and are only
+     * ever used from the render thread, and neither buffer is stored anywhere past the call.
+     */
+    private final Quaternionf qPrevScratch = new Quaternionf();
+    private final Quaternionf qClientScratch = new Quaternionf();
+
     public PlaneRenderer(EntityRendererProvider.Context context,
                          EntityModel<PlaneRenderState> planeModel,
                          EntityModel<PlaneRenderState> planeMetalModel,
@@ -71,7 +78,10 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
     public void extractRenderState(T planeEntity, PlaneRenderState state, float partialTicks) {
         super.extractRenderState(planeEntity, state, partialTicks);
 
-        state.rotation.set(MathUtil.lerpQ(partialTicks, planeEntity.getQ_Prev(), planeEntity.getQ_Client()));
+        // Scratch buffers: extractRenderState runs once per visible plane per frame on the render
+        // thread only, lerpQ does not retain or mutate its arguments, and state.rotation copies.
+        state.rotation.set(MathUtil.lerpQ(partialTicks,
+                planeEntity.getQ_Prev(qPrevScratch), planeEntity.getQ_Client(qClientScratch)));
         state.propellerRotation = Mth.lerp(partialTicks, planeEntity.propellerRotationOld, planeEntity.propellerRotationNew);
         state.timeSinceHit = planeEntity.getTimeSinceHit() - partialTicks;
         state.materialTexture = getMaterialTexture(planeEntity.getMaterial());

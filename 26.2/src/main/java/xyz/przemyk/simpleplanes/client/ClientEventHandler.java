@@ -76,7 +76,9 @@ public final class ClientEventHandler {
 
             if (mc.gui.screen() == null && openPlaneInventoryKey.consumeClick()) {
                 ClientPlayNetworking.send(new OpenPlaneInventoryPacket());
-            } else if (dropPayloadKey.consumeClick()) {
+            } else if (dropPayloadKey.consumeClick() && planeEntity.getControllingPassenger() == player) {
+                // Must match DropPayloadPacket's server-side guard: dropPayload() removes the
+                // upgrade locally before sending, so a passenger the server rejects would desync.
                 planeEntity.dropPayload();
             }
 
