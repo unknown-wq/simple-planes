@@ -2,6 +2,9 @@
 
 Compiled build of the Fabric / Minecraft 26.2 port (source in `../26.2/`).
 
+The jar below is a **finished, ready-to-install build** — you do not need to compile anything to
+play, just drop it into `mods/` (see below). The sources it was built from live in `../26.2/`.
+
 | File | `simpleplanes-26.2-5.3.7.jar` |
 |---|---|
 | Minecraft | 26.2 |
