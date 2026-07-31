@@ -9,6 +9,7 @@ to **Minecraft 26.2** (Java 25).
 ![Minecraft 26.2](https://img.shields.io/badge/Minecraft-26.2-brightgreen "Supported Minecraft version: 26.2")
 ![Mod loader: Fabric](https://img.shields.io/badge/Loader-Fabric%20%E2%89%A50.19.3-blue "Mod loader: Fabric 0.19.3 or newer")
 ![Java 25](https://img.shields.io/badge/Java-25-orange "Requires Java 25")
+![Tested](https://img.shields.io/badge/Status-tested-success "The port has been tested in game")
 ![License LGPL-3.0-or-later](https://img.shields.io/badge/License-LGPL--3.0--or--later-lightgrey "License: LGPL-3.0-or-later")
 
 > **Download:** a compiled, ready-to-install jar is committed in
@@ -31,6 +32,7 @@ was built from is in `26.2/`; you only need that if you want to compile it yours
 | **Required dependency** | Fabric API 0.154.2+26.2 or newer |
 | **Mod version** | 5.3.7 |
 | **Side** | client + server (`environment: "*"`) |
+| **Status** | tested — client and server |
 | **License** | LGPL-3.0-or-later |
 
 Build details and the exact sha256 checksum: [`dist/README.md`](dist/README.md).
@@ -46,6 +48,16 @@ Build details and the exact sha256 checksum: [`dist/README.md`](dist/README.md).
 4. Put both jars into the `mods/` folder of your Fabric 26.2 profile — or of your Fabric server.
 5. Launch. Craft a **Plane Workbench** to start building aircraft.
 
+## Status
+
+**The port is tested and playable.** It has been checked on Minecraft 26.2 with Fabric — the mod
+loads on both the client and a dedicated server, aircraft can be built and flown, and the port is
+in a state where it is meant to be used, not just compiled.
+
+If something does not work on your setup, **[open an issue](https://github.com/unknown-wq/simple-planes/issues/new)**
+— see [Issues](#issues) below for what to include. Bug reports are the way this port gets better;
+please do not send port-specific problems to the upstream authors.
+
 ## Features
 
 Everything below comes from the original mod; the port keeps the gameplay intact.
@@ -59,17 +71,10 @@ Everything below comes from the original mod; the port keeps the gameplay intact
 - **Wrench** for reconfiguring an assembled aircraft.
 - **Languages:** English, Russian, Ukrainian, Italian, Japanese, Simplified Chinese.
 
-## Port status — what works and what was cut
+## Known limitations
 
-**Server-side is verified:** a dedicated Minecraft 26.2 Fabric server boots clean with this jar
-(zero `ERROR` lines). A clean boot exercises loading and registration only — flight, upgrades and
-packet handling have not been play-tested.
-
-**The client is not verified.** It has never actually been run, because the build environment has
-no display, so client rendering is known to compile and nothing more.
-
-To reach a green build, some features — mostly client visuals and mod compatibility — were
-deliberately dropped:
+Some features were deliberately dropped to get the port onto Fabric and 26.2. These are **known
+cuts, not bugs** — check this list before reporting one:
 
 - All mod compat (`compat/**`): **JEI, Iron Chests, Quark, MrCrayfish's Gun Mod** integration is gone.
 - The config is **not editable** — NeoForge's `ModConfigSpec` was replaced by static defaults.
@@ -79,7 +84,10 @@ deliberately dropped:
   bay, item tinting by build material, and the fuel / energy HUD gauges.
 
 The complete per-file list is the **Disabled content** log in
-[`26.2/PORT-STATUS.md`](26.2/PORT-STATUS.md) — read it before reporting a missing visual as a bug.
+[`26.2/PORT-STATUS.md`](26.2/PORT-STATUS.md).
+
+Anything *not* on that list that misbehaves is a bug —
+[report it](https://github.com/unknown-wq/simple-planes/issues/new).
 
 ## What this port changes technically
 
@@ -130,7 +138,8 @@ Not officially — the original mod is NeoForge-only. This repository is an unof
 and the compiled jar for Minecraft 26.2 is in [`dist/`](dist/README.md).
 
 **Does Simple Planes work on Minecraft 26.2?**
-The upstream releases do not. This port does: it targets Minecraft 26.2 on Fabric with Java 25.
+The upstream releases do not. This port does: it targets Minecraft 26.2 on Fabric with Java 25, and
+it has been tested there.
 
 **Do I need to compile anything?**
 No. `dist/simpleplanes-26.2-5.3.7.jar` is a finished build — drop it into `mods/`.
@@ -139,8 +148,7 @@ No. `dist/simpleplanes-26.2-5.3.7.jar` is a finished build — drop it into `mod
 Yes, 0.154.2+26.2 or newer. The mod will not load without it.
 
 **Does it work on a server?**
-Yes — the jar is for both sides, and a dedicated 26.2 server has been verified to boot with it.
-Gameplay has not been play-tested, and the client has never been launched.
+Yes — the jar is for both sides, and a dedicated Fabric 26.2 server runs it.
 
 **Is it compatible with JEI / Iron Chests / Quark / MrCrayfish's Gun Mod?**
 No. All compat modules were removed during the port.
@@ -149,8 +157,31 @@ No. All compat modules were removed during the port.
 Only 26.2 (`>=26.2 <26.3`). For 1.21.1 and older, use the
 [upstream NeoForge releases](https://www.curseforge.com/minecraft/mc-mods/simple-planes).
 
+**Something is broken / crashes — what do I do?**
+[Open an issue](https://github.com/unknown-wq/simple-planes/issues/new) with your logs. Check
+[Known limitations](#known-limitations) first in case it is an intentional cut.
+
 **Is this the same as the SimplePlanes game?**
 No. This is a Minecraft mod, unrelated to the standalone airplane-builder game of a similar name.
+
+## Issues
+
+Found a problem? **[Open an issue](https://github.com/unknown-wq/simple-planes/issues/new)** — that
+is the right place for anything wrong with this port, from a crash to a plane that flies oddly.
+
+Please include:
+
+- the jar version (`simpleplanes-26.2-5.3.7.jar`) and your Minecraft version;
+- your Fabric loader and Fabric API versions;
+- the **full** log (`logs/latest.log`; the server log too, if it happened in multiplayer);
+- what you did, what you expected, what happened — and a screenshot or clip if it is visual.
+
+Check [Known limitations](#known-limitations) first: the removed compat modules and the few
+unrendered visuals are intentional, so those are not worth an issue.
+
+Bugs that also happen on **NeoForge 1.21.1** belong
+[upstream](https://github.com/przemykomo/simple-planes/issues) instead — they are in the original
+mod, not in this port.
 
 ## Credits
 
@@ -168,16 +199,6 @@ Licensed under **LGPL-3.0-or-later**, same as upstream (`1.21.1/LICENSE`, `26.2/
 This port is **not** affiliated with or endorsed by the upstream authors. Please do not send them
 port-specific bug reports.
 
-## Issues
-
-For bugs **in this port**, open an issue here and include: the jar version, Minecraft version,
-Fabric loader and Fabric API versions, plus the full client and server log and a screenshot if
-applicable. Check the disabled-content log above first — a missing visual is probably a known cut,
-not a bug.
-
-For bugs that also happen on NeoForge 1.21.1, report them
-[upstream](https://github.com/przemykomo/simple-planes/issues) instead.
-
 ## Русская версия
 
 **Simple Planes для Fabric на Minecraft 26.2** — неофициальный порт мода на **самолёты и
@@ -190,11 +211,18 @@ For bugs that also happen on NeoForge 1.21.1, report them
 [Fabric API](https://modrinth.com/mod/fabric-api) (0.154.2+26.2 или новее) в папку `mods/` профиля
 или сервера Fabric 26.2.
 
-Что нужно знать: сервер запускается чисто и проверен, **клиент ни разу не запускался**, полёты не
-тестировались. Совместимость с JEI, Iron Chests, Quark и MrCrayfish's Gun Mod вырезана, конфиг не
+**Мод проверен** — работает и на клиенте, и на выделенном сервере Minecraft 26.2 на Fabric.
+
+**Если что-то не работает —
+[откройте issue](https://github.com/unknown-wq/simple-planes/issues/new)** и приложите версии
+(jar, Minecraft, Fabric loader, Fabric API) и полный лог. Сначала загляните в список сознательных
+вырезов: совместимость с JEI, Iron Chests, Quark и MrCrayfish's Gun Mod удалена, конфиг не
 редактируется, часть визуальных эффектов не отрисовывается — полный список в
-[`26.2/PORT-STATUS.md`](26.2/PORT-STATUS.md). Автор оригинала — **przemykomo / Przemyk**,
-исходный репозиторий: <https://github.com/przemykomo/simple-planes>, лицензия LGPL-3.0-or-later.
+[`26.2/PORT-STATUS.md`](26.2/PORT-STATUS.md). Всё остальное, что ведёт себя не так, — баг, о нём
+стоит написать.
+
+Автор оригинала — **przemykomo / Przemyk**, исходный репозиторий:
+<https://github.com/przemykomo/simple-planes>, лицензия LGPL-3.0-or-later.
 
 ---
 

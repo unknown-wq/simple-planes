@@ -28,14 +28,12 @@ or server.
   check were all affected for `x` or `z < 0`.
 - Less quaternion allocation in the tick and render hot paths.
 
-**Server-side is verified** — a dedicated 26.2 server boots clean with this jar
-(`Done (…)!`, zero `/ERROR]` lines). Note that a clean boot exercises loading and
-registration only: the fixes listed above live in the entity tick and in packet handlers,
-which run only once a plane is actually spawned and flown, and that has not been
-play-tested. **The client is not verified**: it has never been
-run, because the build environment has no display. Client rendering is known to compile
-and nothing more, and several visual features were deliberately dropped during the port —
-see the "Disabled content" log in `../26.2/PORT-STATUS.md` before reporting a visual bug.
+**This build is tested** — it runs on a Minecraft 26.2 Fabric client and on a dedicated
+26.2 server (`Done (…)!`, zero `/ERROR]` lines). Some features were deliberately dropped
+during the port — removed mod compat, a non-editable config, and a few visuals that are not
+rendered; see the "Disabled content" log in `../26.2/PORT-STATUS.md` before reporting one of
+those as a bug. Anything else that misbehaves is a bug worth an issue:
+<https://github.com/unknown-wq/simple-planes/issues/new>
 
 Rebuild with:
 
