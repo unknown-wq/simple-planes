@@ -13,6 +13,7 @@ loader-specific parts (Loom, Fabric API, `fabric.mod.json`, mixins config) do no
 
 | File | What it is |
 |---|---|
+| `PORT-ANY-MOD-26.2.md` | **Mod-agnostic playbook** (in Russian): orchestrator loop, agent roles and prompts, environment setup, contracts, acceptance criteria — distilled from all four completed ports. Start here when porting a *new* mod. |
 | `PORTING-GUIDE-26.2.md` | **Read first.** Technical reference: why naive porting breaks, the mandatory staged path, per-version breaking changes, and the web-recheck prompt to run before implementing anything version-specific. |
 | `PORT-PLAN-26.2.md` | Execution plan: order of work, stage-by-stage done-criteria. |
 | `PORT-MOD-26.2.md` | The verified yarn→Mojang / 1.21→26.2 rename map plus per-area porting recipes (registration, entities, renderers, networking, worldgen). |
