@@ -10,6 +10,14 @@ Out of scope, deliberately untouched (other agents own them): the collision bloc
 `PlaneEntity.java:577..602` (`horizontalCollision` / `crash()`), `hurtServer`, `checkFallDamage`,
 `causeFallDamage`. Problems found there are listed but not fixed.
 
+> **Update:** the collision block described above has since been replaced wholesale by
+> `entities/PlaneCollisions.java` — the `speedBefore/speedAfter` crash check, the `onGroundTicks`
+> crash gate and the `causeFallDamage` roll rule no longer exist. Impact detection is now per-axis
+> geometric (full blocked-axis velocity of the motion handed to `move()`), and nothing is inferred
+> from `getKnownMovement()` history, which packet timing makes non-monotonic. See
+> `COLLISION-DIAGNOSIS.md` for the full derivation and the test-rig numbers. Collision-block
+> remarks below are kept for the record and marked where superseded.
+
 ---
 
 ## 1. How the model actually works
@@ -197,6 +205,11 @@ The 26.2 form is arguably the *correct* physics; the point is that it silently c
 tuning. **Left alone: lines 577–590 are inside the collision block owned by another agent.**
 Recommendation for whoever owns it: decide deliberately, and if 1.21.1 parity is wanted, use
 `MathUtil.getHorizontalDistanceSqr(getDeltaMovement())`, which still exists.
+
+> **Superseded:** the `speedBefore/speedAfter` expression is gone entirely; impact severity is now
+> measured in `PlaneCollisions.afterMove` from the blocked-axis component of the motion vector, so
+> this distance-vs-distance² distinction no longer feeds any crash decision. The move-gate use at
+> line 577 (first bullet) is unchanged and the note about it still applies.
 
 #### P2 — block friction lost its per-BlockState hook *(accepted, documented in code)*
 `PlaneEntity.java:939` vs `1.21.1:765`. NeoForge's
@@ -415,6 +428,11 @@ out of every 7 while taxiing (`getOnGround()` is true for the other 4 of the 7-t
 the ground, which is a behavioural change inside the collision block another agent owns. Suggested fix
 if that agent wants it: `if (onGround()) onGroundTicks = 5; else onGroundTicks--;` plus a separate
 explicit flag for the crash gate.
+
+> **Partially superseded:** the crash gate is gone — `PlaneCollisions` uses no `onGroundTicks` gate
+> (taxi bumps are excused by a ground-speed tolerance instead), so the "open 2 ticks out of 7" half
+> of this note is history. The hysteresis half (non-deterministic ground/air transition timing for
+> the flight model itself) still stands.
 
 #### N5 — `rotationToVector(yaw, pitch, size)` did a redundant sqrt+divide *(FIXED)*
 `MathUtil.java:76`. The base vector is unit by construction

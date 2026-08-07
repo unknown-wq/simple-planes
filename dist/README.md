@@ -11,7 +11,7 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `0095dc1ac7fe1b27c61c5c6d0da0cccac74de58c6e32c14da30b0dd18baad427` |
+| sha256 | `e78a282a85f28c77b95a3b971385c3b72a17777a3ec9eac1440ce94ecb6141e5` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
@@ -41,15 +41,34 @@ ground. Its descent component was only 0.29, under the wings-level vertical tole
 horizontal test never fired because an aircraft that ends up inside terrain ploughs to a halt
 over several ticks without the engine ever setting `horizontalCollision`.
 
-Impacts are now measured as a single scalar — how much of the motion the aircraft asked for the
-world refused to give it this tick — covering horizontal and vertical hits and entity
-collisions, scaled by lost speed and airframe mass. Speed lost is speed lost, whichever axis
-carried it. Landings are unaffected by construction: on touchdown the horizontal component is
-not blocked, the aircraft keeps rolling, so only the small vertical part is measured.
+That scalar measure had two faults of its own, both found on the test rig and fixed in this
+build:
 
-Verified server-side without a pilot: the same dive that previously left the aircraft intact now
-destroys it. The **player-ridden** case could not be tested here — there is no client in this
-environment — so that half is reasoned, not measured.
+- **It measured only the part of the tick the wall cut off**, and where the obstacle falls
+  within a tick's travel is effectively random — so the reading was a lottery between 0 and the
+  real speed. Measured: a head-on into a vertical wall at 2.99 blocks/tick registered 0.555 and
+  dealt 5.7 damage; the aircraft survived and stayed pinned against the wall. The same dive into
+  the ground read 0.054 on one flight (intact) and 1.438 on another (destroyed). An impact is
+  now charged the **full component of the tick's motion on every axis the world blocked** — the
+  velocity that actually got destroyed, since the collision response zeroes those axes right
+  after. Same wall, same approach, after the fix: impact 2.476, damage 122, aircraft destroyed
+  at the wall. Resting, taxiing and gentle landings stay free by the same measure (a parked
+  airframe shows contact of ~0.09 against a tolerance of 0.6; a two-block drop lands at 0.32).
+- **A "speed dropped too fast" fallback could destroy a ridden aircraft in clean air.** It
+  compared consecutive `getKnownMovement()` samples, but for a player-ridden vehicle that value
+  is per-packet client displacement: `handleClientTickEnd` zeroes it on any server tick where
+  the movement packet did not arrive, and the catch-up packet then carries two ticks of
+  displacement. One late packet at cruise reads as a 0.76 blocks/tick deceleration — 11 damage,
+  instant mid-air destruction, nothing hit. The fallback is deleted; every charge now requires
+  the world to have geometrically blocked the aircraft's motion that tick, and the remaining
+  consumers of `getKnownMovement()` (wing scrapes, ramming) take the min of two adjacent
+  samples so a single packet hiccup cannot inflate them.
+
+Verified server-side without a pilot (autopilot flights with per-tick instrumentation): full
+climb/cruise/dive profiles produce zero impact charges in clean air, and every terrain contact
+charge in the logs matches a real wall, crater or stall pancake. The **player-ridden** packet
+path could not be driven here — no client in this environment — so that half is reasoned
+against the decompiled 26.2 networking code, not measured.
 
 ### Flight physics
 
@@ -119,9 +138,12 @@ Strike #248 hit the target at 300, 80, 294 (6 blocks off).
 A runway survey reports length, width, slope, designators, threshold elevations, roughness and
 approach obstacles.
 
-**Not yet working: route flights.** The aircraft spawns on the ground, never enters the takeoff
-phase and sinks into terrain instead of climbing to its cruise altitude. Landings, go-arounds
-and holding patterns are consequently untested. Helicopters are out of scope.
+**Route flights are partial.** Route aircraft now launch at flying speed (they used to spawn
+with zero airspeed and fall), and straight cruise legs fly clean, but the 180-degree turnback
+between legs and the improvised-landing descent can still bleed speed into an unrecovered stall
+and pancake in — a real impact, correctly charged by the detector, but a flying-quality bug in
+the flight director. Landings, go-arounds and holding patterns are consequently untested.
+Helicopters are out of scope.
 
 Details: [`../26.2/PHYSICS-AUDIT.md`](../26.2/PHYSICS-AUDIT.md) and
 [`../26.2/COLLISION-DIAGNOSIS.md`](../26.2/COLLISION-DIAGNOSIS.md).

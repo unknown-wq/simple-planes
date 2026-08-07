@@ -43,14 +43,24 @@ import java.util.List;
  * <h2>What is used instead</h2>
  * <ul>
  *   <li><b>Predicate</b> — the geometry still works: the server-side plane sits at the
- *       client-reported position, so its {@code move()} really does clip against the wall and
- *       {@code horizontalCollision} / the blocked motion vector are trustworthy.</li>
- *   <li><b>Magnitude</b> — {@link Entity#getKnownMovement()}. For a player-ridden vehicle the server
- *       gets the client's real per-tick displacement out of
- *       {@code ServerGamePacketListenerImpl.handleMoveVehicle} (it calls
- *       {@code handlePlayerKnownMovement(clientDeltaMovement)}), so this is the one
- *       <i>authoritative</i> speed reading available server-side. With no player aboard it falls
- *       back to {@code getDeltaMovement()}, which is authoritative too.</li>
+ *       client-reported position, so its {@code move()} really does clip against the wall. An axis
+ *       counts as blocked when the position change {@code move()} produced differs from the motion
+ *       that was asked for on that axis. Every charge below requires this positive geometric
+ *       evidence of contact; nothing is inferred from speed history alone, because the only
+ *       authoritative speed history on the server ({@link Entity#getKnownMovement()}) is fed by
+ *       client packets and legitimately jumps to zero or doubles whenever a movement packet misses
+ *       a tick ({@code ServerGamePacketListenerImpl.handleClientTickEnd} zeroes it, and a late
+ *       packet carries two ticks of displacement).</li>
+ *   <li><b>Magnitude</b> — the full component of this tick's motion on the blocked axes. On the
+ *       first contact tick that is the plane's real approach velocity: where the obstacle sits
+ *       inside the tick's travel does not matter. The engine (or
+ *       {@link #restoreCollisionResponse}) zeroes those axes immediately afterwards, so follow-up
+ *       ticks only carry the small delta the physics rebuilds (thrust ~0.03, gravity ~0.05 per
+ *       tick) and an aircraft parked against a wall or resting on the ground stays below every
+ *       tolerance. Measuring only the clipped remainder of the tick — what an earlier version did —
+ *       makes the reading a random fraction in {@code [0, v]} of the impact speed, depending on
+ *       where the wall happens to fall within the tick's travel; most impacts then land under the
+ *       tolerance and deal nothing.</li>
  * </ul>
  * Damage is then proportional to the kinetic energy that was actually destroyed, scaled by the
  * plane type's mass, with separate tolerance bands for horizontal and vertical impacts so that
@@ -90,11 +100,11 @@ public final class PlaneCollisions {
     public static final double SCRAPE_MIN_SPEED = 0.20;
 
     /**
-     * Single-tick horizontal deceleration that the plane's own physics can never produce
-     * (worst case is ~0.10 blocks/tick: brakes on a high-friction block plus a full-rate pitch
-     * change). Used as a fallback when the geometric predicate is missed.
+     * Per-axis threshold above which the difference between the motion handed to {@code move()} and
+     * the position change it produced counts as contact. Double rounding across a position
+     * round-trip is ~1e-13 at survival coordinates, so 1e-5 is pure signal.
      */
-    public static final double UNAMBIGUOUS_DECELERATION = 0.35;
+    public static final double CONTACT_EPSILON = 1.0E-5;
 
     /** Ticks of silence after a registered impact, so one obstacle deals damage once. */
     public static final int IMPACT_COOLDOWN = 8;
@@ -191,9 +201,13 @@ public final class PlaneCollisions {
         state.sampled = true;
 
         // What the world actually let us do, measured from positions so it does not depend on how
-        // (or whether) the engine post-processed getDeltaMovement().
+        // (or whether) the engine post-processed getDeltaMovement(). An axis with a mismatch is an
+        // axis the world pushed back on: positive geometric evidence of contact.
         Vec3 achieved = plane.position().subtract(posBefore);
         Vec3 blocked = wanted.subtract(achieved);
+        boolean blockedX = Math.abs(blocked.x) > CONTACT_EPSILON;
+        boolean blockedY = Math.abs(blocked.y) > CONTACT_EPSILON;
+        boolean blockedZ = Math.abs(blocked.z) > CONTACT_EPSILON;
 
         restoreCollisionResponse(plane, blocked);
 
@@ -223,27 +237,24 @@ public final class PlaneCollisions {
             return;
         }
 
-        // How much motion the world destroyed this tick, as a single scalar.
+        // The velocity the world destroyed this tick: the FULL component of the requested motion on
+        // every axis the world refused, not just the clipped remainder of the tick. On the first
+        // contact tick this is the plane's real approach speed regardless of where the obstacle sat
+        // within the tick's travel — measuring only the remainder (an earlier version did) turned
+        // every impact into a lottery: a 3.0 blocks/tick head-on registered anywhere between 0 and
+        // 3.0 depending on the sub-tick phase, and most rolls came up under the tolerance.
         //
-        // Measuring the whole vector rather than each axis separately is deliberate. An earlier
-        // version split the impact into a horizontal part (gated on Entity#horizontalCollision) and
-        // a vertical part with its own tolerance, and a plane diving into a hillside at 1.35
-        // blocks/tick survived: its descent component was only 0.29, under the 0.60 wings-level
-        // vertical tolerance, while the horizontal part never fired because the aircraft ended up
-        // inside the terrain and ploughed to a halt over several ticks without the engine ever
-        // setting horizontalCollision. Verified in game - the aircraft was found intact on the
-        // ground. Speed lost is speed lost, whichever axis carried it and whichever flag the engine
-        // decided to set.
+        // The follow-up ticks are naturally cheap: the engine's restituteMovementAfterCollisions
+        // (or restoreCollisionResponse above, for a client-authoritative vehicle) zeroes the
+        // blocked axes right after the hit, so a plane resting on the ground or parked against a
+        // wall only re-accumulates ~0.03-0.08 blocks/tick of thrust/gravity between moves and stays
+        // below every tolerance.
         //
-        // A landing is not caught by this because the horizontal component is not blocked: the
-        // aircraft keeps rolling forward, so only the small vertical part shows up.
-        double wantedSpeed = wanted.length();
-        double achievedSpeed = achieved.length();
-        double blockedSpeed = Math.max(0.0, wantedSpeed - achievedSpeed);
-        // The plane's own speed before the move bounds the impact, so leaning on a wall with the
-        // throttle open cannot invent energy.
-        double reference = Math.max(state.prevKnownMovement.length(), wantedSpeed);
-        double impact = Math.min(blockedSpeed, reference);
+        // A landing is not caught by this because the horizontal axes are not blocked: the
+        // aircraft keeps rolling forward, so only the vertical component is charged, against the
+        // (generous, wings-level) vertical tolerance.
+        Vec3 vHit = new Vec3(blockedX ? wanted.x : 0, blockedY ? wanted.y : 0, blockedZ ? wanted.z : 0);
+        double impact = vHit.length();
 
         double mass = massOf(plane);
         double up = upY(plane);
@@ -251,7 +262,7 @@ public final class PlaneCollisions {
         // Tolerance depends on what kind of contact this is. A mostly-downward loss is a landing and
         // gets the wings-level allowance; a mostly-horizontal loss is a wall or a hillside and does
         // not - flying level into rock is exactly the case that must hurt.
-        double descentShare = blockedSpeed > 1.0E-5 ? descent(blocked) / blockedSpeed : 0;
+        double descentShare = impact > 1.0E-5 ? descent(vHit) / impact : 0;
         double tolerance;
         if (descentShare > 0.7) {
             tolerance = V_TOLERANCE_MIN + V_TOLERANCE_LEVEL_BONUS * Mth.clamp(up, 0.0, 1.0);
@@ -267,21 +278,21 @@ public final class PlaneCollisions {
             damage += mass * factor * (impact * impact - tolerance * tolerance) * softening;
         }
 
-        // Fallback for a plane that is already inside terrain, where move() may report no collision
-        // at all: a deceleration this large cannot come from the aircraft's own physics.
-        double hReference = Math.max(horizontal(state.prevKnownMovement), horizontal(state.knownMovement));
-        double hLost = horizontal(state.prevKnownMovement) - horizontal(state.knownMovement);
-        if (damage <= 0 && hLost > UNAMBIGUOUS_DECELERATION) {
-            damage += mass * H_DAMAGE_FACTOR * (hLost * hLost - H_TOLERANCE_AIR * H_TOLERANCE_AIR);
-        }
-
         // Wing/nose strike: the hitbox is a plain box, so a cartwheel produces almost no blocked
         // motion. Charge for touching the ground at a bad attitude instead, scaled by speed —
         // this replaces the old binary "roll > 45 deg on any ground contact => explode" rule.
-        boolean groundContact = plane.onGround() || descent(blocked) > 1.0E-5;
+        //
+        // The speed here prefers the plane's own pre-move velocity and only trusts
+        // getKnownMovement() through the min of two consecutive samples: for a ridden plane that
+        // reading is fed by client packets, and a single missed packet reads as 0 while the
+        // catch-up packet after it carries two ticks of displacement. min() of two adjacent samples
+        // is immune to any single such spike.
+        boolean groundContact = plane.onGround() || (blockedY && wanted.y < 0);
+        double hSteady = Math.min(horizontal(state.knownMovement), horizontal(state.prevKnownMovement));
+        double hSpeed = Math.max(horizontal(wanted), hSteady);
         double attitudeBad = Mth.clamp(1.0 - up, 0.0, 2.0);
-        if (groundContact && attitudeBad > SCRAPE_ATTITUDE && hReference > SCRAPE_MIN_SPEED) {
-            damage += mass * SCRAPE_DAMAGE_FACTOR * (attitudeBad - SCRAPE_ATTITUDE) * hReference * hReference;
+        if (groundContact && attitudeBad > SCRAPE_ATTITUDE && hSpeed > SCRAPE_MIN_SPEED) {
+            damage += mass * SCRAPE_DAMAGE_FACTOR * (attitudeBad - SCRAPE_ATTITUDE) * hSpeed * hSpeed;
         }
 
         applyDamage(plane, serverLevel, damage);
@@ -322,8 +333,10 @@ public final class PlaneCollisions {
             return;
         }
 
+        // min() of two consecutive samples, so a single packet hiccup (a zero sample or a doubled
+        // catch-up sample) can neither arm the ram below real speed nor inflate its damage.
         Vec3 movement = state.knownMovement;
-        double speed = movement.length();
+        double speed = Math.min(movement.length(), state.prevKnownMovement.length());
         if (speed < ENTITY_RAM_MIN_SPEED) {
             return;
         }
