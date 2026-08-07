@@ -53,7 +53,10 @@ public class HelicopterEntity extends LargePlaneEntity {
         if (isPowered() && entityData.get(MOVE_UP) && tempMotionVars.moveForward >= 0) {
             tempMotionVars.push += 0.01F * getThrottle();
         }
-        return transformPos(new Vector3f(0, tempMotionVars.push, 0));
+        // Rotor thrust is vertical in the helicopter's own frame. Reuses the base class' scratch
+        // vector; transformPos() mutates and returns its argument and the result is copied into a
+        // Vec3 by tickMotion() straight away.
+        return transformPos(pushScratch.set(0, tempMotionVars.push, 0));
     }
 
     @Override
