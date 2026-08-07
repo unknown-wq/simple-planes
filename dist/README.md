@@ -11,7 +11,7 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `879ea3347a7a529a97c13f63b82eab64165eb34adbf2fe1dbd2910b4639c27c9` |
+| sha256 | `9edcd1dfe0776546ef85d3a22372b66fbff5b2bef8757a428259b533b893b4f0` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
@@ -35,9 +35,21 @@ the plane solely when roll exceeds 45 degrees — so a nose-first dive into a hi
 level wings did nothing, while a wingtip scrape on landing exploded the plane at any speed,
 since `crash()` ignored its damage argument. That asymmetry is why detection felt random.
 
-Impacts are now measured from actual positions and `getKnownMovement()`, cover horizontal and
-vertical hits and entity collisions, and scale damage with lost speed and airframe mass, with
-a tolerance band so ordinary landings and taxiing stay harmless.
+A first fix measured the impact per axis and still missed: reproduced on a server, an aircraft
+diving into a hillside at 1.35 blocks/tick decelerated to 0.08 and was found **intact** on the
+ground. Its descent component was only 0.29, under the wings-level vertical tolerance, while the
+horizontal test never fired because an aircraft that ends up inside terrain ploughs to a halt
+over several ticks without the engine ever setting `horizontalCollision`.
+
+Impacts are now measured as a single scalar — how much of the motion the aircraft asked for the
+world refused to give it this tick — covering horizontal and vertical hits and entity
+collisions, scaled by lost speed and airframe mass. Speed lost is speed lost, whichever axis
+carried it. Landings are unaffected by construction: on touchdown the horizontal component is
+not blocked, the aircraft keeps rolling, so only the small vertical part is measured.
+
+Verified server-side without a pilot: the same dive that previously left the aircraft intact now
+destroys it. The **player-ridden** case could not be tested here — there is no client in this
+environment — so that half is reasoned, not measured.
 
 ### Flight physics
 
@@ -68,9 +80,22 @@ A server-side flight director with strike, route and runway-survey tools, plus
 `/autopilot strike|route|survey|airfields|status|stop`. See
 [`../26.2/AUTOPILOT.md`](../26.2/AUTOPILOT.md).
 
-Verified on a dedicated 26.2 server: a strike flight spawns 400 blocks out, accelerates to
-1.27 blocks/tick under its own physics and hits its target; a runway survey reports length,
-width, slope, designators, threshold elevations, roughness and approach obstacles.
+Verified on a dedicated 26.2 server. A strike is launched with a booster fitted, the throttle
+open and already at attack speed pointed at the target, rather than accelerating from a
+standstill and sagging towards the ground while it does; it reaches about 2 blocks/tick and
+goes in **3 blocks from the aimpoint** 400 blocks away. The terminal phase commands the
+elevation angle to the target rather than tracking an altitude — tracking an altitude arrives
+overhead still high and lands the aircraft 50-odd blocks beyond.
+
+The strike tool now reports both ends of the flight, so nothing happens silently:
+
+```
+Strike #126 spawned at 301, 153, 701 (45 above ground), inbound to 300, 80, 300 - 400 blocks, bearing 180.
+Strike #126 hit the target at 301, 83, 299 (3 blocks off).
+```
+
+A runway survey reports length, width, slope, designators, threshold elevations, roughness and
+approach obstacles.
 
 **Not yet working: route flights.** The aircraft spawns on the ground, never enters the takeoff
 phase and sinks into terrain instead of climbing to its cruise altitude. Landings, go-arounds
