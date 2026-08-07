@@ -11,10 +11,38 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `b2f083f06c3bc1be20bad73457748227c9cfcab35dd3c224025255ef4c1770dc` |
+| sha256 | `71347ae2ee08a9c8fe526147f4f819085422c0db592a58f3174756102749380e` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
+
+## Changes in this build — flight physics and impact detection
+
+- **Small planes could barely accelerate for takeoff.** Ground thrust was cut to a fifth
+  whenever the nose sat above one degree, and a small plane parks at five degrees, so the
+  penalty was permanently on: thrust balanced drag at three percent of the speed needed to
+  fly. The penalty now scales with the nose angle.
+- **Planes could leave the ground below their own stall speed** — lift saturated at 0.2
+  blocks/tick while takeoff speed is 0.3. Lift is now quadratic in airspeed and the stall
+  sits back at the takeoff speed.
+- The elevator did nothing below takeoff speed and then engaged at its full rate; elevator
+  and ground steering authority now scale with airspeed.
+- Slabs, paths and farmland used to stop a takeoff run dead. Aircraft get a step height at
+  taxi speed only, so flying into a slope still collides.
+- **Impacts were never detected on a plane carrying a pilot.** The check compared speed
+  before and after the move, but the server never applies the collision velocity response
+  to a client-authoritative vehicle, so the difference was always zero and the damage term
+  a constant −5.0 against a threshold of 5.0. The threshold was also set above the aircraft's
+  own terminal speed. Impacts are now measured from real positions, cover vertical hits and
+  entity collisions, and scale damage with lost speed and airframe mass.
+- Rolling on touchdown no longer destroys the aircraft outright at any speed, and a nose-first
+  dive into terrain is no longer free.
+- Fixed `normalizeQuaternionf` returning a zero quaternion, which collapsed seat positions,
+  the thrust vector and the landing-angle check.
+- Fewer per-tick allocations and block lookups in the flight hot path.
+
+Details: [`../26.2/PHYSICS-AUDIT.md`](../26.2/PHYSICS-AUDIT.md) and
+[`../26.2/COLLISION-DIAGNOSIS.md`](../26.2/COLLISION-DIAGNOSIS.md).
 
 ## Changes since the first 26.2 build
 
