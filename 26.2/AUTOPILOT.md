@@ -63,8 +63,8 @@ All three are in the Simple Planes creative tab.
 * **Right-click the air** — status report.
 * **Sneak + right-click the air** — cycle the spawn distance: 100 → 200 → 400 → 800.
 
-The aircraft terrain-follows on the way in, then commits to a dive 200 blocks out. Impact is handled
-by the plane's own collision code (`horizontalCollision → crash`), i.e. a real explosion.
+The aircraft is launched already at attack speed with a booster fitted, cruises the run-in at
+**100 blocks above the ground**, and only then dives — see [The attack run](#the-attack-run).
 
 ### Route Wand
 
@@ -115,7 +115,7 @@ IDLE ──► TAKEOFF ──► CLIMB ──► CRUISE ──► DESCENT ──
 | `TAKEOFF` | Full power, ground steering on the runway heading, rotate at 0.35 speed, wings level |
 | `CLIMB` | Climb to cruise altitude on the first waypoint's bearing |
 | `CRUISE` | Fly waypoints, terrain-following, advancing on arrival within 30 blocks |
-| `STRIKE` | Run in high, then dive at the target |
+| `STRIKE` | Hold 100 above the ground, then dive at the target — see [The attack run](#the-attack-run) |
 | `DESCENT` | Fly to the initial approach fix, 300 blocks out at circuit height |
 | `APPROACH` | Track the extended centreline and capture the glide slope |
 | `FINAL` | As above, plus the landing gates are enforced |
@@ -126,6 +126,59 @@ IDLE ──► TAKEOFF ──► CLIMB ──► CRUISE ──► DESCENT ──
 
 Mode changes are announced to the owning player on the action bar; surveys and confirmations go to
 chat.
+
+### The attack run
+
+Three things decide whether a strike arrives: the speed it is launched at, how high it runs in, and
+when it stops holding that height.
+
+**Speed.** The aircraft is spawned with a booster fitted, the throttle at 10 and its attack speed
+already in the velocity vector, pointed at the target. Accelerating from a standstill instead costs
+the first seconds of the run and makes the aircraft sag towards the ground while it does it. The
+speed ceiling is set through `PlaneEntity#setMaxSpeed`, which is not a limiter but the point the
+thrust fades out at: `tickMotion` scales the push by `1 − speed / (maxSpeed × 10 × (push + 0.05))`,
+so raising it from 2.0 to 3.0 moves the balance against the drag curve from about 2.0 to about 2.8
+blocks/tick. Measured on a 400-block run, the speed rises monotonically 2.30 → 3.13 and never falls.
+
+**Height.** The run-in is flown at 100 blocks *above the ground*, not above the target. This is the
+whole fix for aircraft that used to end up stuck in a tree: a glancing hit on a canopy blocks only
+the small vertical part of the motion, so the impact registers as a gentle landing — correctly, that
+is what it is — and the aircraft settles into the branches at walking pace, undamaged, and stays
+there. Nothing on the way in reaches 100 blocks up.
+
+**When to dive.** Not at a fixed distance. The run-in is held until the target sits
+`STRIKE_DIVE_ANGLE` (32°) below the nose, so the dive point follows the height actually being flown
+— about 160–200 blocks out from 100 up. Past that point the nose is aimed *straight at the target*
+rather than at an altitude, which makes the commanded angle `atan(height / distance)`: nearly
+constant for most of the dive and steepening towards vertical over the last few blocks.
+
+```
+ alt          ______________________________
+              run-in, 100 above ground       \
+                                              \__     atan(h/d) — steepens as d → 0
+                                                 \_
+                                                   \|  target
+              |------------------------------|-----|
+              400 blocks                    ~180    0
+```
+
+That shape is not decoration. An earlier build dived from a fixed 350 blocks out at a 35-block
+run-in — a 6° glide starting almost immediately after launch, which is what "descends too early"
+looks like. Tracking an altitude in the terminal phase does not work either: the cascade turns
+altitude error into vertical speed and then into a flight path angle, and the aircraft arrives over
+the target still high, going in 54–57 blocks long (measured twice). Aiming the nose is
+self-correcting — the further behind the profile it falls, the steeper the dive it commands.
+
+**Fusing.** A 3-block sphere is too small at 3 blocks/tick, so the fuse radius scales with speed and
+is backed by closest-point-of-approach detection: if the range starts opening again inside 24
+blocks, the aircraft is already past and detonates. And because a strike aircraft carries a warhead,
+it also goes off wherever it stops — touching the ground or dropping below 0.35 blocks/tick on the
+run counts as an impact. Without that last rule a run that clips something leaves an intact,
+permanently stationary aircraft parked in the scenery with the autopilot still running.
+
+Measured over three runs: 400 blocks, launched at 100 above ground, **3-6 blocks from the aimpoint**.
+That is the tick discretisation, not the guidance - at 3.13 blocks/tick the aircraft cannot be
+sampled any closer than that to the aimpoint, and the detonation covers the difference.
 
 ---
 

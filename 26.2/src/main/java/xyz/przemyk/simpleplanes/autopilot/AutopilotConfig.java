@@ -111,21 +111,39 @@ public final class AutopilotConfig {
     public static final int MAX_ACTIVE_AUTOPILOTS = 24;
     /** Default spawn distance of the strike tool. */
     public static final int STRIKE_SPAWN_DISTANCE = 400;
-    /** Height above the target the strike aircraft is spawned at. */
-    public static final int STRIKE_SPAWN_HEIGHT = 55;
     /**
-     * Distance to the target at which the strike run stops terrain-following and dives.
+     * Height above the ground the strike aircraft is spawned at, and the height above ground its
+     * run-in is flown at. Kept equal so the aircraft never has to trade speed for height after
+     * launch.
      *
-     * <p>This has to be read together with the run-in altitude below and with the launch speed. A
-     * strike aircraft is boosted, so it arrives at roughly 2 blocks/tick, and the faster it goes the
-     * more lift it makes and the harder it is to push the nose down: dived from 200 blocks out at
-     * 60 above the target it only shed 36 blocks of height and went in 57 blocks past the aimpoint.
-     * Starting the dive further out, from a lower run-in, keeps the required angle shallow enough
-     * for the airframe to actually fly it.
+     * <p>High on purpose. A run-in flown low crosses whatever stands between the launch point and
+     * the target — and what it usually meets first is a tree: a glancing hit on a canopy blocks only
+     * the small vertical part of the motion, so the aircraft settles into the branches at walking
+     * pace and sits there undamaged instead of reaching the target. Above the tree line there is
+     * nothing to snag on.
      */
-    public static final double STRIKE_DIVE_DISTANCE = 350.0;
-    /** Height above the target the run-in is flown at, before the dive. */
-    public static final int STRIKE_RUN_IN_HEIGHT = 35;
+    public static final int STRIKE_RUN_IN_AGL = 100;
+    /**
+     * Flight path angle the terminal dive is entered at, which is what decides <i>when</i> it is
+     * entered: the run-in is held until the target sits this far below the nose, so the dive point
+     * follows the run-in height instead of being a fixed distance that only suits one altitude.
+     *
+     * <p>An earlier build dived from a fixed 350 blocks out, which at a 35-block run-in meant a
+     * 6-degree glide starting almost immediately after launch — a long, shallow, treetop-scraping
+     * descent. From 100 blocks up, 32 degrees commits the dive about 160 blocks out.
+     *
+     * <p>Past that point the nose is aimed straight at the target rather than at an altitude, so the
+     * commanded angle is {@code atan(height / distance)}: it stays near this value for most of the
+     * dive and steepens hyperbolically towards vertical over the last few blocks, which is both the
+     * shape that hits accurately and the shape a dive bomber actually flies.
+     */
+    public static final double STRIKE_DIVE_ANGLE = 32.0;
+    /** Floor and ceiling on the computed dive point, so an odd target height cannot produce an
+     *  un-flyable one. */
+    public static final double STRIKE_MIN_DIVE_DISTANCE = 60.0;
+    public static final double STRIKE_MAX_DIVE_DISTANCE = 320.0;
+    /** Speed under which an aircraft on a strike run is considered to have hit something. */
+    public static final double STRIKE_STALLED_SPEED = 0.35;
 
     // ---- waypoints ----
     public static final double WAYPOINT_ARRIVAL_RADIUS = 30.0;

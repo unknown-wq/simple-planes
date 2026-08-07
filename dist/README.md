@@ -11,7 +11,7 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `9edcd1dfe0776546ef85d3a22372b66fbff5b2bef8757a428259b533b893b4f0` |
+| sha256 | `0095dc1ac7fe1b27c61c5c6d0da0cccac74de58c6e32c14da30b0dd18baad427` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
@@ -82,16 +82,38 @@ A server-side flight director with strike, route and runway-survey tools, plus
 
 Verified on a dedicated 26.2 server. A strike is launched with a booster fitted, the throttle
 open and already at attack speed pointed at the target, rather than accelerating from a
-standstill and sagging towards the ground while it does; it reaches about 2 blocks/tick and
-goes in **3 blocks from the aimpoint** 400 blocks away. The terminal phase commands the
-elevation angle to the target rather than tracking an altitude — tracking an altitude arrives
-overhead still high and lands the aircraft 50-odd blocks beyond.
+standstill and sagging towards the ground while it does. It goes in **3-6 blocks from the
+aimpoint** 400 blocks away.
+
+Three things about the attack run changed in this build, all from the same report — the aircraft
+slowed down, hit a tree without breaking, and started down far too early:
+
+- **It no longer loses speed.** The speed ceiling is not a limiter but the point where
+  `tickMotion` fades the thrust out, so raising it moves the balance against the drag curve.
+  Measured over a 400-block run the speed now rises monotonically 2.30 → 3.13 blocks/tick.
+- **The run-in is flown 100 blocks above the ground**, not 35 above the target. This is what
+  actually fixes the aircraft parked in a tree: a glancing hit on a canopy blocks only the small
+  vertical part of the motion, so the impact registers as a gentle landing — which is what it
+  physically is — and the aircraft settles into the branches undamaged. Nothing on the way in
+  reaches 100 blocks up. Belt and braces, a strike aircraft now also detonates wherever it stops,
+  so a run that clips something can no longer leave an intact airframe in the scenery.
+- **The dive starts late and steepens.** It used to begin at a fixed 350 blocks out, which from a
+  35-block run-in is a 6-degree glide starting almost immediately after launch. The run-in height
+  is now held until the target is 32 degrees below the nose — about 180 blocks out — and the
+  terminal phase then aims the nose straight at the target, so the commanded angle is
+  `atan(height / distance)`: near-constant through the dive and steepening towards vertical over
+  the last few blocks. Measured pitch through one run: −20°, −40°, −47°, −52°, −63°, −76°.
+
+The terminal phase commands that elevation angle rather than tracking an altitude because
+tracking an altitude arrives overhead still high and lands the aircraft 50-odd blocks beyond.
+The fuse radius scales with speed and is backed by closest-point-of-approach detection — at 3
+blocks/tick a fixed 3-block sphere can be stepped straight over between two ticks.
 
 The strike tool now reports both ends of the flight, so nothing happens silently:
 
 ```
-Strike #126 spawned at 301, 153, 701 (45 above ground), inbound to 300, 80, 300 - 400 blocks, bearing 180.
-Strike #126 hit the target at 301, 83, 299 (3 blocks off).
+Strike #248 spawned at 301, 208, 701 (100 above ground), inbound to 300, 80, 300 - 400 blocks, bearing 180.
+Strike #248 hit the target at 300, 80, 294 (6 blocks off).
 ```
 
 A runway survey reports length, width, slope, designators, threshold elevations, roughness and

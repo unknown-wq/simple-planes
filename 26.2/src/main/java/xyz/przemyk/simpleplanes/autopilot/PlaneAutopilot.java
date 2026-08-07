@@ -47,6 +47,8 @@ public class PlaneAutopilot {
     private boolean gatesDisabled;
     /** Set once the end-of-flight report has been sent, so it is never sent twice. */
     private boolean outcomeReported;
+    /** Previous tick's range to the strike target, for closest-point-of-approach detection. */
+    private double previousSlantRange = Double.MAX_VALUE;
 
     /** Distance from the aimpoint still counted as a hit rather than a miss. */
     public static final double STRIKE_HIT_RADIUS = 8.0;
@@ -349,10 +351,22 @@ public class PlaneAutopilot {
         cmdSpeed = AutopilotConfig.STRIKE_SPEED;
 
         double distance = AutopilotMath.horizontalDistance(position, target);
-        if (distance > AutopilotConfig.STRIKE_DIVE_DISTANCE) {
-            // Cruise in high enough to clear the terrain between here and the target.
-            cmdTargetAltitude = target.y + AutopilotConfig.STRIKE_RUN_IN_HEIGHT;
+
+        // Where to stop cruising and start diving. Derived from the height still to be lost rather
+        // than fixed, so the dive point moves with the run-in altitude and with the terrain: hold
+        // the height until the target is STRIKE_DIVE_ANGLE degrees below the nose, then go for it.
+        double heightToLose = Math.max(position.y - target.y, 0.0);
+        double diveEntry = Mth.clamp(
+            heightToLose / Math.tan(Math.toRadians(AutopilotConfig.STRIKE_DIVE_ANGLE)),
+            AutopilotConfig.STRIKE_MIN_DIVE_DISTANCE, AutopilotConfig.STRIKE_MAX_DIVE_DISTANCE);
+
+        if (distance > diveEntry) {
+            // Run-in: hold height above the ground, not above the target. A target in a valley is
+            // no reason to fly the whole approach down in the valley with it.
+            cmdTargetAltitude = Math.max(groundBelow(plane), target.y) + AutopilotConfig.STRIKE_RUN_IN_AGL;
             cmdTerrainFollow = true;
+            // Never trade height for speed on the way in; the dive is where height gets spent.
+            cmdMaxDescentAngle = 4.0;
         } else {
             // Committed: point the nose straight at the aim point.
             //
@@ -372,7 +386,28 @@ public class PlaneAutopilot {
                 -80.0, AutopilotConfig.MAX_PITCH);
         }
 
-        if (position.distanceTo(target) < 3.0) {
+        // Proximity fuse. A fixed 3-block sphere is not enough at attack speed: the aircraft covers
+        // most of 3 blocks in a single tick and can step straight over the sphere between two
+        // samples. Scale the radius with the speed, and fall back to detecting the closest point of
+        // approach — if the range starts opening again the aircraft is already past the target.
+        double slantRange = position.distanceTo(target);
+        double closureSpeed = plane.getDeltaMovement().length();
+        boolean atTarget = slantRange < Math.max(3.0, closureSpeed * 1.2)
+            || (slantRange < 24.0 && slantRange > previousSlantRange);
+        previousSlantRange = slantRange;
+        if (atTarget) {
+            plane.crash(16);
+            stop(plane);
+            return;
+        }
+
+        // Hit something that was not the target. A strike aircraft is a one-shot weapon carrying a
+        // warhead, so it goes off wherever it stops — otherwise a run that clips a tree or a ridge
+        // leaves an intact, permanently stationary aircraft parked in the scenery with the autopilot
+        // still running, which is exactly what was being reported.
+        boolean stalled = plane.getDeltaMovement().length() < AutopilotConfig.STRIKE_STALLED_SPEED;
+        if (modeTicks > 20 && (plane.getOnGround() || stalled)) {
+            reportOutcome(plane);
             plane.crash(16);
             stop(plane);
         }
@@ -745,12 +780,13 @@ public class PlaneAutopilot {
             .append(' ').append(mode.getName())
             .append(String.format(" pos=%.0f,%.0f,%.0f", position.x, position.y, position.z))
             .append(String.format(" agl=%.0f", position.y - groundBelow(plane)))
-            .append(String.format(" hdg=%03.0f", AutopilotMath.compassHeading(plane.getYRot())))
+            .append(String.format(" hdg=%03d", AutopilotMath.compassDisplay(plane.getYRot())))
             .append(String.format(" pitch=%+.0f roll=%+.0f", plane.getXRot(), Mth.wrapDegrees(plane.rotationRoll)))
             .append(String.format(" spd=%.2f vs=%+.2f", velocity.length(), velocity.y))
             .append(" thr=").append(plane.getThrottle())
-            .append(String.format(" want[hdg=%03.0f alt=%.0f spd=%.2f]",
-                AutopilotMath.compassHeading(cmdHeading), cmdTargetAltitude, cmdSpeed));
+            .append(String.format(" want[hdg=%03d alt=%.0f spd=%s]",
+                AutopilotMath.compassDisplay(cmdHeading), cmdTargetAltitude,
+                cmdSpeed >= AutopilotConfig.STRIKE_SPEED ? "MAX" : String.format("%.2f", cmdSpeed)));
 
         Vec3 target = currentTarget();
         if (target != null) {

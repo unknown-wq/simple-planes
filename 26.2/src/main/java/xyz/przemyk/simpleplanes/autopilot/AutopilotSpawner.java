@@ -34,10 +34,21 @@ public final class AutopilotSpawner {
      * Speed a strike aircraft is launched with, in blocks/tick. Roughly the terminal speed of a
      * boosted plane, so the run starts at attack speed instead of building up to it.
      */
-    public static final double STRIKE_LAUNCH_SPEED = 1.4;
+    public static final double STRIKE_LAUNCH_SPEED = 2.0;
 
-    /** Raised speed ceiling for a strike aircraft; the scaling in tickMotion is tied to this. */
-    public static final float STRIKE_MAX_SPEED = 2.0f;
+    /**
+     * Raised speed ceiling for a strike aircraft.
+     *
+     * <p>This is what actually sets the terminal speed, and not through any limiter:
+     * {@code PlaneEntity#tickMotion} fades the thrust out as the plane approaches
+     * {@code maxPushSpeed = getMaxSpeed() * 10}, by the factor
+     * {@code 1 - speed / (maxPushSpeed * (push + 0.05))}. At throttle 10 that denominator is
+     * {@code maxSpeed * 1.125}, so thrust reaches zero at 1.125x this value and balances the drag
+     * curve ({@code 0.001 v^2 + 0.0005 v + 0.001}) a little below it — about 2.0 blocks/tick at the
+     * old ceiling of 2.0, about 2.8 at 3.0. The hard limiter in the same method sits at 3.0, so this
+     * is as fast as the airframe goes.
+     */
+    public static final float STRIKE_MAX_SPEED = 3.0f;
 
     private AutopilotSpawner() {}
 
@@ -59,7 +70,12 @@ public final class AutopilotSpawner {
         if (terrain == TerrainScanner.UNKNOWN_HEIGHT) {
             terrain = targetVec.y;
         }
-        double altitude = Math.max(targetVec.y + AutopilotConfig.STRIKE_SPAWN_HEIGHT, terrain + 45);
+        // Launched straight onto the run-in profile: at the run-in height above whichever is higher,
+        // the ground under the launch point or the target itself. Climbing to it afterwards would
+        // cost the speed the run is supposed to start with.
+        double altitude = Math.min(
+            Math.max(terrain, targetVec.y) + AutopilotConfig.STRIKE_RUN_IN_AGL,
+            level.getMaxY() - 8);
 
         double heading = AutopilotMath.headingTo(spawn, targetVec);
         PlaneEntity plane = create(level, spawn.x, altitude, spawn.z, heading);

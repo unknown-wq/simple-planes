@@ -45,6 +45,14 @@ public final class AutopilotMath {
         return compass < 0 ? compass + 360.0 : compass;
     }
 
+    /**
+     * Whole-degree compass heading for a readout. Rounding {@link #compassHeading} on its own prints
+     * north as 360, which is not a heading anyone writes.
+     */
+    public static int compassDisplay(double minecraftYaw) {
+        return (int) Math.round(compassHeading(minecraftYaw)) % 360;
+    }
+
     /** Runway designator ("09", "27", "36") for a Minecraft yaw. */
     public static String designator(double minecraftYaw) {
         int tens = (int) Math.round(compassHeading(minecraftYaw) / 10.0);
