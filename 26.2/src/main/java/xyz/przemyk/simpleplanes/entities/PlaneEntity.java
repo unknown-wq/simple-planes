@@ -928,24 +928,15 @@ public class PlaneEntity extends Entity {
         }
         setXRot(lerpAngle(0.1f, getXRot(), pitch));
 
-        // Breaking away from a standstill. The original divided the push by a flat 5 whenever the
-        // nose was more than 1 degree off horizontal and the plane was slower than 0.1 b/t. Because
-        // getGroundPitch() parks the small plane at +5 degrees, that condition is permanently true
-        // at a standstill, and the numbers do not work out: push(throttle 5) = 0.03125 / 5 = 0.00625
-        // balances the ground drag (dragMul*v + drag = 0.024*v + 0.001) at v = 0.0104 b/t. The small
-        // plane could therefore never reach the 0.3 b/t take-off speed at all unless the pilot held
-        // pitch-up, which force-feeds groundPush = 0.01 further down. That is the "sticky" ground
-        // roll. LargePlaneEntity/CargoPlaneEntity park at 0 degrees and were never affected.
-        //
-        // Model it instead: only the horizontal component of the thrust line accelerates the plane
-        // (cos of the nose angle, floored so a nose-high wreck still crawls), times a static rolling
-        // resistance factor. At the 5 degree resting attitude that is 0.5 * 0.996 = 0.498 of the
-        // throttle push instead of 0.2, which gives a ground-roll equilibrium of 0.6 b/t — the plane
-        // accelerates to take-off speed in roughly a second of runway instead of never.
-        double noseAngle = degreesDifferenceAbs(getXRot(), 0);
-        if (noseAngle > 1 && getDeltaMovement().length() < tempMotionVars.groundRollSpeed) {
-            tempMotionVars.push *= (float) (tempMotionVars.lowSpeedThrustFactor
-                * Math.max(0.25, Math.cos(Math.toRadians(noseAngle))));
+        // Static rolling resistance while breaking away from a stop. Deliberately left exactly as
+        // upstream wrote it: an earlier revision of this audit claimed the flat /5 made the small
+        // plane unable to ever reach take-off speed, but that was an arithmetic error (the push was
+        // divided by 5 twice by hand). Simulating the real tick shows the ground roll is fine —
+        // at throttle 5 the plane reaches 0.3 b/t in 38 ticks (1.9 s), throttle 4 in 56, throttle 3
+        // in 126. Only throttle 1 and 2 stall out below the 0.1 b/t threshold, which is defensible
+        // as "idle taxi". See PHYSICS-AUDIT.md, issue B2, for the corrected numbers.
+        if (degreesDifferenceAbs(getXRot(), 0) > 1 && getDeltaMovement().length() < 0.1) {
+            tempMotionVars.push /= 5; //runs while the plane is taking off
         }
         if (getDeltaMovement().length() < tempMotionVars.takeOffSpeed) {
             //                rotationPitch = lerpAngle(0.2f, rotationPitch, pitch);
@@ -1622,10 +1613,6 @@ public class PlaneEntity extends Entity {
         double stallSpeedFactor;
         /** Airspeed at which lift reaches {@link #maxLift}, as a fraction of {@link #takeOffSpeed}. */
         double liftSaturationFactor;
-        /** Ground speed under which the wheels still have appreciable static rolling resistance. */
-        double groundRollSpeed;
-        /** Fraction of the thrust that survives static rolling resistance below {@link #groundRollSpeed}. */
-        float lowSpeedThrustFactor;
         /** Floor on elevator authority when the plane is far below its take-off speed. */
         float minPitchAuthority;
         /** Floor on nose-wheel / rudder authority when the plane is standing still. */
@@ -1655,8 +1642,6 @@ public class PlaneEntity extends Entity {
             liftFactor = 10;
             stallSpeedFactor = 0.55;
             liftSaturationFactor = 1.3;
-            groundRollSpeed = 0.1;
-            lowSpeedThrustFactor = 0.5f;
             minPitchAuthority = 0.35f;
             minGroundSteering = 0.2;
             gravity = -0.03;

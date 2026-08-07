@@ -72,7 +72,11 @@ through the normal entity sync. A remote client runs no physics at all — `tick
 Vanilla comparison for the ground roll (`AbstractBoat#floatBoat`, line 527): boats use *multiplicative*
 friction `v *= landFriction` with `landFriction` averaged from `Block.getFriction()`. The mod instead
 uses an additive/linear/quadratic drag polynomial. Both are defensible; the mod's is stiffer at low
-speed, which is the root of issue **B2**.
+speed, which is what makes the low-throttle creep behaviour described in **B2** possible.
+
+One more non-obvious limiter: the terminal speed is set **not** by the drag polynomial but by the push
+scaling in `tickMotion`, `push *= clamp(1 − dot·v/(maxPushSpeed·(push+0.05)), 0, 2)`. On the ground at
+throttle 5 that caps the plane at **0.48 b/t**; drag alone would allow 1.20 b/t.
 
 ### 1.4 The per-tick pipeline
 
@@ -112,11 +116,13 @@ setDeltaMovement(rotationToVector(
   efficiency curve: full authority at 0° AoA, zero at 60° AoA.
 
 Gravity fights this geometrically: adding `-0.03` to `y` tilts the velocity vector down by
-`atan(0.03 / speed)` degrees per tick — **5.7°/tick at speed 0.3, 1.7°/tick at speed 1.0**. Equilibrium
-(level flight) is where `0.2·Δ·d + lift == atan(0.03/v)`. Because `0.2·Δ·d` is maximised at
-`Δ = 60/√3 ≈ 34.6°` with value **4.62°/tick**, there is a hard aerodynamic ceiling: the plane cannot
-sustain level flight below roughly `v = 0.03 / tan(4.62° + lift)`. That is the implicit stall speed,
-and tuning `lift` is how you place it. See issue **B3**.
+`atan(0.03 / speed)` degrees per tick — **5.7°/tick at speed 0.3, 1.7°/tick at speed 1.0**. Note that
+**`lift` carries the same `d` factor as the `pitchToMotion` term** (`lift = min(...) * d` in the
+source), so level flight is where `d·(0.2·Δ + lift) == atan(0.03/v)`, *not* `0.2·Δ·d + lift`. Getting
+that wrong is what produced the bad stall-speed numbers in the first revision of this document.
+Maximising `d·(0.2Δ + L)` over Δ gives the hard aerodynamic ceiling — **6.01°/tick** at full lift
+(`L = 2`, at `Δ ≈ 31.5°`) — so the plane cannot sustain level flight below `v = 0.03/tan(6.01°) ≈
+0.285 b/t`. That is the implicit stall speed, and tuning `lift` is how you place it. See issue **B3**.
 
 Nothing in the model has mass, wing area, air density, or a lift/drag polar. `maxSpeed` is a hard
 speed clamp, not a thrust/drag equilibrium.
@@ -130,14 +136,14 @@ speed clamp, not a thrust/drag equilibrium.
 | Constant | Value | Where used | Effect | Reasonable? |
 |---|---|---|---|---|
 | `maxSpeed` | 3 | `tickMotion` | hard clamp on `|v|`, lerped at 0.2 | Yes — 60 b/s is never reached in practice |
-| `maxPushSpeed` | `getMaxSpeed()*10` = 10 | `tickMotion` push scaling | how fast thrust stops helping | Fine |
+| `maxPushSpeed` | `getMaxSpeed()*10` = 10 | `tickMotion` push scaling | **the real terminal-speed limiter**, not the drag polynomial: push is scaled by `1 − v/(maxPushSpeed·(push+0.05))`. Ground terminal at throttle 5 is **0.48 b/t** with it, 1.20 without | Fine, but badly named |
 | `takeOffSpeed` | 0.3 | `tickOnGround` (elevator gate, rest attitude), now also lift/authority scaling | minimum flying speed | Yes; now consistently the stall speed too |
 | `maxLift` | 2 (°/tick) | `tickRotateMotion` | extra upward bias on the velocity vector | Yes |
-| `liftFactor` | 10 | **now unused** (deprecated) | old lift slope; saturated at v=0.2 | No — see **B3** |
+| `liftFactor` | 10 | **now unused** (deprecated) | old lift slope; saturated at v=0.2 | Shape is wrong (linear, early ceiling) — see **B3** |
 | `stallSpeedFactor` | 0.55 *(new)* | `getLiftRatio` | stall at `0.55 × 0.3 = 0.165` b/t | New |
 | `liftSaturationFactor` | 1.3 *(new)* | `getLiftRatio` | full lift at `1.3 × 0.3 = 0.39` b/t | New |
 | `gravity` | −0.03 | `tickMotion` | 0.6 b/s² — 2.7× weaker than vanilla's 0.08 | Arcade, but internally consistent |
-| `drag` | 0.001 | `tickMotion` | constant speed loss; sets the ~0.01 b/t creep floor | Borderline — it is what made **B2** fatal |
+| `drag` | 0.001 | `tickMotion` | constant speed loss; sets the low-throttle creep floor (0.010 b/t at throttle 1) | Fine |
 | `dragMul` | 0.0005, **×48 on the ground** | `tickMotion` | linear drag; `20*(3−f)`, f=0.6 normal, 0.98 ice | Value fine, but the 48× step at lift-off is a discontinuity (**B4**) |
 | `dragQuad` | 0.001 | `tickMotion` | quadratic drag; only matters above v≈1 | Yes |
 | `push` | `0.00625 × throttle` | `tickMotion` via `getTickPush` | thrust. 0.03125 at throttle 5, 0.0625 with booster (throttle 10) | Yes |
@@ -147,8 +153,6 @@ speed clamp, not a thrust/drag equilibrium.
 | `pitchToMotion` | 0.2 | `tickRotateMotion` | how fast the velocity follows the attitude — **the actual lift term** | Yes |
 | `yawMultiplayer` | 0.5 | **never read anywhere** | dead constant | Dead code |
 | `turnThreshold` | `TURN_THRESHOLD/100` = 0.2 | `tick()` | strafe deadzone | Yes |
-| `groundRollSpeed` | 0.1 *(new)* | `tickOnGround` | speed under which static rolling resistance applies | Preserves the original 0.1 threshold |
-| `lowSpeedThrustFactor` | 0.5 *(new)* | `tickOnGround` | thrust surviving rolling resistance (was an effective 0.2) | New |
 | `minPitchAuthority` | 0.35 *(new)* | `getPitchAuthority` | elevator floor far below take-off speed | New |
 | `minGroundSteering` | 0.2 *(new)* | `tickRoll` | nose-wheel floor at a standstill | New |
 | pitch rate ramp / clamp | ±0.5 / ±5.0 °/tick | `tickPitch` | ×`getRotationSpeedMultiplier()` | Yes |
@@ -156,7 +160,7 @@ speed clamp, not a thrust/drag equilibrium.
 | roll rate ramp / clamp | ±0.5 / ±5.0 °/tick | `tickRoll` | **not** scaled by `getRotationSpeedMultiplier()` | Inconsistent (**M5**) |
 | ground steering | ±3 °/tick | `tickRoll` | now speed-scaled | Was unconditional |
 | `getRotationSpeedMultiplier()` | 1.0 / 0.5 / 0.2 | Plane / Large+Heli / Cargo | mass proxy | Yes |
-| `getGroundPitch()` | 5 / 0 / 0 | Plane / Large / Cargo+Heli | resting nose-up attitude | 5° is what triggered **B2** |
+| `getGroundPitch()` | 5 / 0 / 0 | Plane / Large / Cargo+Heli | resting nose-up attitude | Fine (see **B2**, retracted) |
 | `getLandingAngle()` | 30 | `checkFallDamage` | max attitude for a safe touchdown | Yes |
 | `brakesMul` | 5.0 at throttle 0 | `tickMotion` | air/ground brake | Yes |
 | `MAX_THROTTLE` | 5 (10 with booster) | `changeThrottle` | — | Yes |
@@ -230,72 +234,101 @@ Fix: override `maxUpStep()` to return `0.6F` while horizontal speed is below 0.5
 ground-roll range) and `0.0F` above it, so flying into terrain still collides and still crashes
 exactly as before. 0.6 clears slabs (0.5) and path/farmland lips (0.0625) but not a full block.
 
-#### B2 — the small plane could not reach take-off speed at all *(FIXED)*
-`PlaneEntity.java:896..913` (was `if (degreesDifferenceAbs(getXRot(), 0) > 1 && |v| < 0.1) push /= 5;`).
+#### B2 — RETRACTED. The ground roll was never broken; my arithmetic was *(change REVERTED)*
+`PlaneEntity.java:896..904`.
 
-Arithmetic, at throttle 5 on grass (`f = 0.6` → `dragMul = 0.0005 × 20 × 2.4 = 0.024`):
+**An earlier revision of this document claimed the small plane could never reach take-off speed
+without holding pitch-up, settling at 0.0104 b/t. That was wrong, and the code change made on the
+strength of it has been reverted.** The error: I divided the push by 5 **twice** — once for the
+`push /= 5` in `tickOnGround` and, by mistake, a second time when substituting the number. The value
+0.00625 is *both* the raw push at throttle 1 *and* the post-`/5` push at throttle 5, and I conflated
+them. Correct arithmetic for throttle 5 on grass (`dragMul = 0.0005 × 20 × 2.4 = 0.024`):
 
-* `getGroundPitch()` returns **5** for `PlaneEntity`, and `tickOnGround` lerps `xRot` toward it, so
-  `degreesDifferenceAbs(xRot, 0) > 1` is **permanently true** at rest.
-* thrust therefore becomes `0.03125 / 5 = 0.00625`.
-* `tickMotion` drag at speed `v` is `0.001·v² + 0.024·v + 0.001`.
-* Equilibrium: `0.00625 = 0.024·v + 0.001` → **v = 0.0104 b/t**, and the `< 0.1` guard never releases.
+`0.024·v + 0.001 = 0.00625` → **v = 0.219 b/t**, not 0.0104. 0.0104 is the throttle-**1** figure.
 
-So without holding pitch-up the small plane **converges to 0.0104 b/t and stays there forever** —
-3 % of the 0.3 b/t take-off speed. Holding pitch-up rescues it only because the `getPitchUp() > 0`
-branch further down force-feeds `push = groundPush = 0.01`, and because the pitch target flips to 0°
-so the `> 1°` guard eventually releases. That is the "sticky" ground roll, and it is why take-off felt
-like it required a secret handshake. `LargePlaneEntity`/`CargoPlaneEntity` park at 0° and were never
-affected, which is why only the starter plane felt broken.
+Since 0.219 > the 0.1 b/t threshold, the plane *escapes* the reduced-thrust regime, full thrust is
+restored, and it accelerates away. Verified by transcribing the real tick (`tickRotateMotion` →
+`tickOnGround` → `tickMotion` → ground clamp) into a simulation rather than trusting algebra again:
 
-Fix: replace the flat `/5` with a physical thrust-alignment model —
-`push *= lowSpeedThrustFactor (0.5) × max(0.25, cos(noseAngle))`. At the 5° resting attitude that is
-`0.5 × 0.996 = 0.498` instead of `0.2`, giving `push = 0.01556` and a ground-roll equilibrium of
-**0.607 b/t**, comfortably above the 0.3 b/t take-off speed. A genuinely nose-high wreck (60°+) still
-only gets `0.5 × 0.5 = 0.25` of its thrust. The `noseAngle > 1` guard is kept so Large/Cargo behaviour
-is bit-identical to before.
+| throttle | ticks to reach 0.3 b/t (original code) |
+|---|---|
+| 1 | never — settles at **0.010** b/t |
+| 2 | never — settles at **0.061** b/t |
+| 3 | 126 ticks (6.3 s) |
+| 4 | 56 ticks (2.8 s) |
+| 5 | **38 ticks (1.9 s)** |
+
+So the upstream ground roll is **fine**: full throttle gets a small plane airborne in under two
+seconds of runway with no pitch input at all. What actually exists is much narrower and is *not*
+clearly a bug: the `push /= 5` step makes the roll **bistable**, because escaping it requires the
+reduced-thrust equilibrium `(push·cos(nose) − drag)/dragMul` to exceed the 0.1 b/t threshold. It does
+from throttle 3 up and does not at throttle 1–2, so those two notches settle into a permanent crawl.
+That reads perfectly well as "idle taxi power", so it is left alone and recorded here as a wart, not
+a defect.
+
+**Reverted:** `tickOnGround` is back to the upstream `push /= 5`, and the `groundRollSpeed` /
+`lowSpeedThrustFactor` knobs added for it were removed. The shipped code's ground roll is now
+bit-identical to upstream — re-simulated at 38 ticks at throttle 5, matching the original exactly.
+
+Lesson recorded for the rest of this document: every remaining numeric claim below was re-derived by
+simulation, not by hand.
 
 #### B3 — lift saturated *below* the take-off speed *(FIXED)*
 `PlaneEntity.java:1026` (was `lift = min(speed * liftFactor, maxLift) * d`, `liftFactor = 10`).
 
 `speed × 10` reaches `maxLift = 2` at **speed 0.2** — a third *below* the 0.3 b/t take-off speed. So
-a plane crawling at 0.2 b/t had exactly the same wing authority as one at cruise. Combined with
-`pitchToMotion` dragging the velocity vector toward the nose at 0.2/tick, this is the mechanism behind
-"взлетел на нулевой": get to 0.2 b/t, pull up, and the velocity follows the nose with full lift behind
-it. Real lift is quadratic in airspeed with a hard floor at the stall speed; this was linear with an
-early ceiling and no floor at all.
+a plane crawling at 0.2 b/t had exactly the same wing coefficient as one at cruise. Real lift is
+quadratic in airspeed with a hard floor at the stall speed; this was linear with an early ceiling and
+no floor at all.
 
-Using the equilibrium condition from §1.5, the *old* stall speed worked out to ≈ **0.24 b/t**, i.e.
-20 % below the nominal take-off speed — so the take-off speed was never actually the minimum flying
-speed.
+**Corrected severity.** An earlier revision of this section claimed the old stall speed was ≈0.24 b/t
+("20 % below take-off speed") and used that to explain "взлетел на нулевой". That was also wrong: I
+dropped the `* d` that multiplies `lift`, so I summed `0.2·Δ·d + lift` instead of the correct
+`d·(0.2·Δ + lift)`. Re-derived numerically (maximising `d·(0.2Δ + L)` over the angle of attack Δ and
+comparing against the gravity tilt `atan(0.03/v)`):
+
+| speed | gravity tilt needed | old max climb | old | new max climb | new |
+|---|---|---|---|---|---|
+| 0.20 | 8.53 °/t | 6.01 | sinks | 4.76 | sinks |
+| 0.25 | 6.84 °/t | 6.01 | sinks | 5.00 | sinks |
+| 0.28 | 6.12 °/t | 6.01 | sinks | 5.18 | sinks |
+| 0.30 | 5.71 °/t | 6.01 | flies | 5.31 | sinks (marginal) |
+| 0.32 | 5.36 °/t | 6.01 | flies | 5.44 | flies |
+| 0.35 | 4.90 °/t | 6.01 | flies | 5.67 | flies |
+| ≥0.39 | ≤4.40 °/t | 6.01 | flies | 6.01 | **identical** |
+
+**Old stall speed: 0.285 b/t. New: 0.316 b/t. Take-off speed: 0.300 b/t.** So the old model did *not*
+let you fly at 0.2 b/t — it stalled 5 % *below* the nominal take-off speed, and the new one stalls 5 %
+*above* it. This is a modest tightening that makes `takeOffSpeed` mean what its name says, not a
+rescue from a broken model, and the "взлетел на нулевой" story is **not** supported by the code.
 
 Fix: `getLiftRatio()` — zero below `takeOffSpeed × 0.55` (0.165 b/t), rising with `v²`, saturating at
-`takeOffSpeed × 1.3` (0.39 b/t). New numbers:
+`takeOffSpeed × 1.3` (0.39 b/t). Everything at and above 0.39 b/t — i.e. all normal flight — is
+**numerically identical** to the old model. Simulation also confirms the change is ground-roll
+neutral: 38 ticks to take-off speed at throttle 5 either way.
 
-| speed | old lift | new lift | gravity tilt needed | verdict |
-|---|---|---|---|---|
-| 0.20 | 2.00 | 0.09 | 8.53 °/t | stalls (was: also stalled, barely) |
-| 0.25 | 2.00 | 0.35 | 6.84 °/t | stalls |
-| 0.30 | 2.00 | 1.01 | 5.71 °/t | marginal — exactly at take-off speed |
-| 0.35 | 2.00 | 1.42 | 4.90 °/t | flies |
-| ≥0.45 | 2.00 | 2.00 | ≤3.81 °/t | **unchanged from before** |
+The honest justification for keeping it is therefore the *shape*, not a bug fix: lift now builds
+progressively through the roll instead of being pinned at maximum from 0.2 b/t onward, which is what
+makes the lift-off gradual, and the stall speed now coincides with the documented take-off speed.
 
-Stall speed moves from ≈0.24 to ≈0.31 b/t, i.e. it now coincides with `takeOffSpeed`. Cruise flight
-(anything above 0.45 b/t, which is everything at throttle ≥ 1) is **numerically identical** to the old
-model. "Не добрал скорость — не взлетел" now actually holds.
-
-#### B4 — the elevator went from "disabled" to "full authority" in one tick *(FIXED)*
+#### B4 — elevator authority does not depend on airspeed *(FIXED — but scope corrected)*
 `PlaneEntity.java:754..757` (`tickPitch` clamp).
 
-`tickOnGround()` returns `speedingUp = false` below `takeOffSpeed`, and `tick()` skips `tickPitch()`
-entirely in that case. The instant the roll crosses 0.3 b/t, `tickPitch` starts and ramps `pitchSpeed`
-by 0.5°/tick to a **5°/tick** ceiling — 100°/s. Two seconds later the nose is vertical. With
-`pitchToMotion` pulling the velocity along, that is the "instant jump upward".
+`tickPitch` ramps `pitchSpeed` by 0.5°/tick to a **5°/tick** ceiling — 100°/s. From a standing start
+that is 27.5° of nose-up in the first 10 ticks and **vertical in ~22 ticks (1.1 s)**, at any airspeed,
+because nothing in the clamp knows about airflow.
 
-Fix: `getPitchAuthority()` scales the `pitchSpeed` clamp by `clamp(speed / takeOffSpeed, 0.35, 1)`.
-**At and above the take-off speed the factor is exactly 1 and the clamp is identical to before**; only
-the slow/stalled regime is damped, where reduced elevator authority is the physically correct answer
-(and forces the pilot to nose down to recover from a stall instead of pulling harder).
+**Scope correction.** An earlier revision billed this as the cause of the take-off "jump", on the
+grounds that the elevator switches from disabled to full authority as the roll crosses 0.3 b/t. The
+switch is real — `tickOnGround()` returns `speedingUp = false` below `takeOffSpeed` and `tick()` then
+skips `tickPitch()` entirely — but the fix does **not** affect it: `getPitchAuthority()` returns
+exactly 1.0 at and above `takeOffSpeed`, and on the ground `tickPitch` only ever runs at or above
+`takeOffSpeed`. **So this change is a no-op for the entire ground roll and lift-off.**
+
+What it actually does is damp the elevator when flying *below* take-off speed, i.e. while stalled,
+where reduced control authority is the physically correct answer and forces a nose-down recovery
+instead of rewarding pulling harder. That is worth having, but it is a stall-handling change, not a
+take-off change. The binary `speedingUp` gate itself is left alone.
 
 #### B5 — the plane could pirouette on the spot *(FIXED)*
 `PlaneEntity.java:799..808` (`tickRoll`, ground branch).
@@ -375,8 +408,8 @@ if (onGroundTicks < 0) { onGroundTicks = 5; } else { onGroundTicks--; }
 While the plane sits on the runway this cycles `5,4,3,2,1,0,−1 → 5,…`, so `getOnGround()`
 (`onGroundTicks > 1`) is a **7-tick square wave** and the ground/air hysteresis after lift-off is a
 random 0–4 ticks depending on which phase the plane happened to leave the ground in. Non-deterministic
-transition timing, and it also means the crash gate `onGroundTicks <= 0` is open for ~3 ticks out of
-every 7 while taxiing.
+transition timing, and it also means the crash gate `onGroundTicks <= 0` is open for exactly 2 ticks
+out of every 7 while taxiing (`getOnGround()` is true for the other 4 of the 7-tick cycle 5,4,3,2,1,0,−1).
 
 **Not fixed on purpose**: latching it to 5 while in contact would close the crash gate permanently on
 the ground, which is a behavioural change inside the collision block another agent owns. Suggested fix
@@ -451,13 +484,13 @@ Not fixed, described only:
 
 ### `entities/PlaneEntity.java`
 7. New `TempMotionVars` fields `stallSpeedFactor` (0.55), `liftSaturationFactor` (1.3),
-   `groundRollSpeed` (0.1), `lowSpeedThrustFactor` (0.5), `minPitchAuthority` (0.35),
-   `minGroundSteering` (0.2). `liftFactor` deprecated but kept.
+   `minPitchAuthority` (0.35), `minGroundSteering` (0.2). `liftFactor` deprecated but kept.
 8. `getLiftRatio()` — quadratic, stall-floored, saturating lift curve (**B3**).
-9. `getPitchAuthority()` — airspeed-scaled elevator clamp, no-op at/above take-off speed (**B4**).
+9. `getPitchAuthority()` — airspeed-scaled elevator clamp; **no-op at/above take-off speed, so it
+   does not touch the ground roll or lift-off at all** — it only damps a stalled plane (**B4**).
 10. `maxUpStep()` override — 0.6 blocks below 0.5 b/t horizontal speed, 0 above (**B1**).
-11. `tickOnGround` (`:896`): flat `push /= 5` → `lowSpeedThrustFactor × max(0.25, cos(noseAngle))` (**B2**);
-    friction gated on real contact (**B6**).
+11. `tickOnGround` (`:896`): thrust handling **reverted to upstream** — the `push /= 5` change was
+    made on bad arithmetic and is gone (**B2**). Friction is still gated on real contact (**B6**).
 12. `tickRoll` (`:799`): ground steering scaled by speed (**B5**).
 13. Allocation/lookup work listed in §4.
 
@@ -465,28 +498,27 @@ Not fixed, described only:
 14. `getTickPush` reuses the shared `pushScratch` instead of allocating. **No physics change** — and
     the helicopter is unaffected by items 8–12 by construction: it overrides `tickRotateMotion`
     (returns `q`, no lift at all), `tickPitch`, `tickYaw`, `tickRoll` and `tickOnGround` (which
-    replaces `push` wholesale after calling `super`), and inherits `getGroundPitch() == 0` from
-    `LargePlaneEntity` so the nose-angle thrust term is never even entered. Vertical take-off is
-    untouched.
+    replaces `push` wholesale after calling `super`). Vertical take-off is untouched.
 
 ### `entities/LargePlaneEntity.java`, `entities/CargoPlaneEntity.java`
-15. **Not modified.** They inherit the fixes. Because `getGroundPitch()` is 0 for both, item 11's
-    `noseAngle > 1` guard means their ground roll is bit-identical to before; they gain **B1**
-    (step-up), **B3** (stall), **B4** (elevator authority), **B5** (steering) and **B6** (lift-off
-    drag spike) unchanged in form.
+15. **Not modified.** They inherit **B1** (step-up), **B3** (stall), **B4** (elevator authority
+    below take-off speed), **B5** (ground steering) and **B6** (lift-off drag spike). Their ground
+    roll was already bit-identical to upstream and remains so — `getGroundPitch()` is 0 for both, so
+    the reverted **B2** branch never applied to them in the first place.
 
 ---
 
 ## 6. What to check in game
 
-1. **Small plane, flat runway, throttle 5, no pitch input** — should now accelerate from rest to
-   0.3 b/t in roughly a second of runway and keep accelerating toward ~0.6 b/t. Before this change it
-   stuck at ~0.01 b/t forever (**B2**).
-2. **Rotation** — pull up at take-off speed; the nose should rise progressively rather than snapping
-   to 45° in a second (**B4**).
-3. **Stall** — cut the throttle in level flight. The plane should mush and drop below ~0.31 b/t and
-   need a nose-down recovery. Verify this does not make normal landings unpleasant (**B3** is the most
-   behaviour-changing item here; `stallSpeedFactor`/`liftSaturationFactor` are the dials).
+1. **Small plane, flat runway, throttle 5, no pitch input** — ground roll should be *unchanged from
+   upstream*: ~38 ticks (1.9 s) to 0.3 b/t, terminal ground speed ~0.48 b/t. If it feels different,
+   the **B2** revert did not land (**B2**).
+2. **Rotation** — should be *unchanged from upstream* on the ground; **B4** only bites below
+   take-off speed. What should feel different is the lift-off itself, via **B3** (**B3**/**B4**).
+3. **Stall** — cut the throttle in level flight. The plane should mush below ~0.316 b/t (was
+   0.285 b/t) and need a nose-down recovery. That 11 % shift is the *whole* of **B3**'s effect on
+   handling; anything at or above 0.39 b/t is bit-identical to upstream. Verify it does not make
+   normal landings unpleasant — `stallSpeedFactor`/`liftSaturationFactor` are the dials.
 4. **Taxi over a slab / dirt path / farmland** — should roll over it instead of stopping dead
    (**B1**). Also verify that flying into a hillside at cruise speed **still** crashes.
 5. **Parked steering** — turning on the spot should be slow but possible (**B5**).
