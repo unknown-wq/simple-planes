@@ -4,6 +4,8 @@ import net.fabricmc.api.ModInitializer;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.Items;
+import xyz.przemyk.simpleplanes.autopilot.AutopilotCommand;
+import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesBlocks;
@@ -38,6 +40,10 @@ public class SimplePlanesMod implements ModInitializer {
 
         SimplePlanesNetworking.register();
         CommonEventHandler.register();
+
+        // autopilot feature: data components for the tools + the /autopilot debug command.
+        AutopilotComponents.init();
+        AutopilotCommand.register();
 
         registerUpgradeItems();
     }

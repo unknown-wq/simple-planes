@@ -47,6 +47,7 @@ import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
 import org.joml.Vector3f;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot; // autopilot:
 import xyz.przemyk.simpleplanes.container.ModifyUpgradesContainer;
 import xyz.przemyk.simpleplanes.container.PlaneInventoryContainer;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
@@ -137,6 +138,33 @@ public class PlaneEntity extends Entity {
 
     /** Last rotation actually pushed to the server, so an idle plane stops spamming RotationPacket. */
     private final Quaternionf lastSentQ = new Quaternionf();
+
+    // autopilot: server-side flight director. When present it supplies the same four control inputs
+    // a player would (throttle / pitch / yaw / roll) instead of the plane being flown by a passenger.
+    // All of the logic lives in xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot.
+    private @Nullable PlaneAutopilot autopilot;
+
+    // autopilot: accessors for the flight director.
+    public @Nullable PlaneAutopilot getAutopilot() {
+        return autopilot;
+    }
+
+    // autopilot:
+    public void setAutopilot(@Nullable PlaneAutopilot autopilot) {
+        this.autopilot = autopilot;
+    }
+
+    // autopilot: true when the flight director is flying this plane, i.e. control inputs come from
+    // the autopilot rather than from a controlling passenger.
+    public boolean isAutopilotEngaged() {
+        return autopilot != null && autopilot.isActive();
+    }
+
+    // autopilot: exposes the protected rotation-rate multiplier so the controllers can size their
+    // braking correctly on the larger airframes, which turn more slowly.
+    public float autopilotRotationSpeedMultiplier() {
+        return getRotationSpeedMultiplier();
+    }
 
     public PlaneEntity(EntityType<? extends PlaneEntity> entityTypeIn, Level worldIn) {
         this(entityTypeIn, worldIn, Blocks.OAK_PLANKS);
@@ -260,7 +288,9 @@ public class PlaneEntity extends Entity {
     public static final TagKey<DimensionType> BLACKLISTED_DIMENSIONS_TAG = TagKey.create(Registries.DIMENSION_TYPE, Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "blacklisted_dimensions"));
 
     public boolean isPowered() {
-        return isAlive() && !level().dimensionTypeRegistration().is(BLACKLISTED_DIMENSIONS_TAG) && (isCreative() || (engineUpgrade != null && engineUpgrade.isPowered()));
+        // autopilot: aircraft conjured by the autopilot tools run on autopilot fuel; a plane the
+        // player built still needs a working engine (PlaneAutopilot#providesPower).
+        return isAlive() && !level().dimensionTypeRegistration().is(BLACKLISTED_DIMENSIONS_TAG) && (isCreative() || (autopilot != null && autopilot.providesPower()) || (engineUpgrade != null && engineUpgrade.isPowered()));
     }
 
     @Override
@@ -504,6 +534,12 @@ public class PlaneEntity extends Entity {
         }
         markHurt(); //TODO: this might be the cause of high network usage
 
+        // autopilot: the flight director runs before the control inputs are read below, so the
+        // throttle/pitch/yaw it sets this tick are the ones the physics acts on. Server only.
+        if (!level().isClientSide() && autopilot != null) {
+            autopilot.tick(this);
+        }
+
         TempMotionVars tempMotionVars = getMotionVars();
         if (isNoGravity()) {
             tempMotionVars.gravity = 0;
@@ -515,6 +551,11 @@ public class PlaneEntity extends Entity {
         if (controllingPassenger instanceof Player playerEntity) {
             tempMotionVars.moveForward = getMoveForward(playerEntity);
             tempMotionVars.moveStrafing = playerEntity.xxa;
+        } else if (isAutopilotEngaged()) {
+            // autopilot: with nobody aboard, the roll/strafe input comes from the flight director.
+            tempMotionVars.moveForward = autopilot.getMoveForward();
+            tempMotionVars.moveStrafing = autopilot.getMoveStrafing();
+            setSprinting(false);
         } else {
             tempMotionVars.moveForward = 0;
             tempMotionVars.moveStrafing = 0;
@@ -1078,6 +1119,9 @@ public class PlaneEntity extends Entity {
 
         deserializeUpgrades(input);
 
+        // autopilot: restore an in-progress route so a flight survives a restart.
+        PlaneAutopilot.load(this, input);
+
         setQ(MathUtil.toQuaternionf(getYRot(), getXRot(), 0));
     }
 
@@ -1123,6 +1167,21 @@ public class PlaneEntity extends Entity {
         output.putFloat("max_speed", entityData.get(MAX_SPEED));
         output.putString("material", entityData.get(MATERIAL));
         writeUpgrades(output);
+
+        // autopilot: persist an in-progress route (strike flights deliberately write nothing).
+        if (autopilot != null) {
+            autopilot.save(output);
+        }
+    }
+
+    // autopilot: releasing the runway reservation and the traffic slot when the aircraft goes away,
+    // so a destroyed plane never keeps a runway blocked or an autopilot slot allocated.
+    @Override
+    public void remove(RemovalReason reason) {
+        if (autopilot != null && autopilot.isActive()) {
+            autopilot.stop(this);
+        }
+        super.remove(reason);
     }
 
     private void writeUpgrades(ValueOutput output) {

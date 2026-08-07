@@ -18,6 +18,9 @@ import xyz.przemyk.simpleplanes.items.DescriptionItem;
 import xyz.przemyk.simpleplanes.items.ParachuteItem;
 import xyz.przemyk.simpleplanes.items.PlaneArmorItem;
 import xyz.przemyk.simpleplanes.items.PlaneItem;
+import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
+import xyz.przemyk.simpleplanes.items.RouteWandItem;
+import xyz.przemyk.simpleplanes.items.RunwayToolItem;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -98,6 +101,14 @@ public class SimplePlanesItems {
 
     public static final Supplier<ParachuteItem> PARACHUTE_ITEM = register("parachute", ParachuteItem::new, new Item.Properties());
 
+    // ---- autopilot tools ----
+    public static final Supplier<PlaneStrikeToolItem> PLANE_STRIKE_TOOL =
+        register("plane_strike_tool", PlaneStrikeToolItem::new, new Item.Properties());
+    public static final Supplier<RouteWandItem> ROUTE_WAND =
+        register("route_wand", RouteWandItem::new, new Item.Properties());
+    public static final Supplier<RunwayToolItem> RUNWAY_TOOL =
+        register("runway_tool", RunwayToolItem::new, new Item.Properties());
+
     public static final Supplier<CreativeModeTab> PLANES_TAB = registerTab("planes_tab", FabricCreativeModeTab.builder()
         .icon(() -> PLANE_ITEM.get().getDefaultInstance())
         .title(Component.translatable(SimplePlanesMod.MODID + ".planes_tab"))
@@ -119,6 +130,9 @@ public class SimplePlanesItems {
             output.accept(PLANE_WORKBENCH.get());
             output.accept(CHARGING_STATION.get());
             output.accept(PARACHUTE_ITEM.get());
+            output.accept(PLANE_STRIKE_TOOL.get());
+            output.accept(ROUTE_WAND.get());
+            output.accept(RUNWAY_TOOL.get());
 
             BuiltInRegistries.BLOCK.get(PlaneWorkbenchContainer.PLANE_MATERIALS_TAG).ifPresent(tag -> tag.forEach(block -> {
                 ItemStack planeStack = new ItemStack(PLANE_ITEM.get());
