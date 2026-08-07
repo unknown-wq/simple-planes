@@ -11,35 +11,70 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `71347ae2ee08a9c8fe526147f4f819085422c0db592a58f3174756102749380e` |
+| sha256 | `879ea3347a7a529a97c13f63b82eab64165eb34adbf2fe1dbd2910b4639c27c9` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
 
-## Changes in this build — flight physics and impact detection
+## Changes in this build
 
-- **Small planes could barely accelerate for takeoff.** Ground thrust was cut to a fifth
-  whenever the nose sat above one degree, and a small plane parks at five degrees, so the
-  penalty was permanently on: thrust balanced drag at three percent of the speed needed to
-  fly. The penalty now scales with the nose angle.
-- **Planes could leave the ground below their own stall speed** — lift saturated at 0.2
-  blocks/tick while takeoff speed is 0.3. Lift is now quadratic in airspeed and the stall
-  sits back at the takeoff speed.
-- The elevator did nothing below takeoff speed and then engaged at its full rate; elevator
-  and ground steering authority now scale with airspeed.
-- Slabs, paths and farmland used to stop a takeoff run dead. Aircraft get a step height at
-  taxi speed only, so flying into a slope still collides.
-- **Impacts were never detected on a plane carrying a pilot.** The check compared speed
-  before and after the move, but the server never applies the collision velocity response
-  to a client-authoritative vehicle, so the difference was always zero and the damage term
-  a constant −5.0 against a threshold of 5.0. The threshold was also set above the aircraft's
-  own terminal speed. Impacts are now measured from real positions, cover vertical hits and
-  entity collisions, and scale damage with lost speed and airframe mass.
-- Rolling on touchdown no longer destroys the aircraft outright at any speed, and a nose-first
-  dive into terrain is no longer free.
-- Fixed `normalizeQuaternionf` returning a zero quaternion, which collapsed seat positions,
-  the thrust vector and the landing-angle check.
-- Fewer per-tick allocations and block lookups in the flight hot path.
+### Impact detection
+
+**Collisions were never detected on a plane carrying a pilot** — not intermittently, never.
+The check compared horizontal speed before and after the move and required the difference to
+exceed 1.0 blocks/tick, but `Entity.move()` only zeroes the blocked axes of the velocity
+inside `restituteMovementAfterCollisions`, and that call is gated on `canSimulateMovement()`.
+On the server that resolves to `!isClientAuthoritative()`, and `Player.isClientAuthoritative()`
+returns `true` unconditionally, so a ridden plane never has its velocity corrected server-side.
+The difference was therefore always zero and the damage term a constant −5.0 against a
+threshold of 5.0. The threshold was unreachable regardless: terminal speed is 0.763
+blocks/tick, so a head-on hit at full throttle would have produced 2.6.
+
+Vertical impacts had no handling at all. The only path was `causeFallDamage`, which destroys
+the plane solely when roll exceeds 45 degrees — so a nose-first dive into a hillside with
+level wings did nothing, while a wingtip scrape on landing exploded the plane at any speed,
+since `crash()` ignored its damage argument. That asymmetry is why detection felt random.
+
+Impacts are now measured from actual positions and `getKnownMovement()`, cover horizontal and
+vertical hits and entity collisions, and scale damage with lost speed and airframe mass, with
+a tolerance band so ordinary landings and taxiing stay harmless.
+
+### Flight physics
+
+- Fixed `normalizeQuaternionf` returning a zero quaternion on a zero-length input, which
+  collapsed seat positions, the thrust vector and the landing-angle check — and was written
+  back into the entity.
+- Slabs, paths and farmland stopped a takeoff run dead, because `Entity.maxUpStep()` returns
+  `0.0F` and step-up is gated on it being positive; the `setOnGround(true)` call before the
+  move never did anything. Aircraft now get a step height at taxi speed only, so flying into a
+  slope still collides and still crashes.
+- Ground drag applied for four ticks after liftoff, producing a braking jolt exactly at the
+  ground-to-air transition; it now applies only on real contact.
+- Lift is now quadratic in airspeed rather than saturating at two thirds of takeoff speed, and
+  the elevator is damped below takeoff speed instead of being inert and then fully effective.
+  This changes the shape of the curve near the stall; cruise flight is numerically unchanged.
+- Fewer per-tick allocations and block lookups in the flight hot path — `isOnWater()` alone
+  read the same block state up to five times per tick.
+
+An earlier revision of this changelog claimed the ground roll was broken and that small planes
+could not reach takeoff speed. **That was wrong** — the arithmetic behind it divided the thrust
+by five twice. Simulating the real tick shows the original ground roll reaches takeoff speed in
+38 ticks at full throttle. That change has been reverted and the claim retracted; see issue B2
+in the audit.
+
+### Autopilot and route tools (new, partly verified)
+
+A server-side flight director with strike, route and runway-survey tools, plus
+`/autopilot strike|route|survey|airfields|status|stop`. See
+[`../26.2/AUTOPILOT.md`](../26.2/AUTOPILOT.md).
+
+Verified on a dedicated 26.2 server: a strike flight spawns 400 blocks out, accelerates to
+1.27 blocks/tick under its own physics and hits its target; a runway survey reports length,
+width, slope, designators, threshold elevations, roughness and approach obstacles.
+
+**Not yet working: route flights.** The aircraft spawns on the ground, never enters the takeoff
+phase and sinks into terrain instead of climbing to its cruise altitude. Landings, go-arounds
+and holding patterns are consequently untested. Helicopters are out of scope.
 
 Details: [`../26.2/PHYSICS-AUDIT.md`](../26.2/PHYSICS-AUDIT.md) and
 [`../26.2/COLLISION-DIAGNOSIS.md`](../26.2/COLLISION-DIAGNOSIS.md).
