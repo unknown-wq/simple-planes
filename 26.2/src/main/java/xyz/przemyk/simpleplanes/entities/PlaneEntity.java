@@ -83,6 +83,8 @@ public class PlaneEntity extends Entity {
     public Quaternionf Q_Prev = new Quaternionf();
 
     private int onGroundTicks;
+    /** Impact-detection state; the whole collision tract lives in {@link PlaneCollisions}. */
+    public final PlaneCollisions.State collisionState = new PlaneCollisions.State();
     public final HashMap<Identifier, Upgrade> upgrades = new HashMap<>();
     public EngineUpgrade engineUpgrade = null;
 
@@ -575,27 +577,20 @@ public class PlaneEntity extends Entity {
         reapplyPosition();
 
         if (!onGround() || getDeltaMovement().horizontalDistanceSqr() > (double) 1.0E-5F || (tickCount + getId()) % 4 == 0) {
-            double speedBefore = Math.sqrt(getDeltaMovement().horizontalDistanceSqr());
             boolean onGroundOld = onGround();
             Vec3 motion = getDeltaMovement();
             if (motion.lengthSqr() > 0.25 || getPitchUp() != 0) {
                 setOnGround(true);
             }
+            Vec3 posBeforeMove = position();
             move(MoverType.SELF, motion);
             setOnGround(((motion.y()) == 0.0) ? onGroundOld : onGround());
-            if (horizontalCollision && !level().isClientSide() && onGroundTicks <= 0) {
-                if (getHealth() <= 0) {
-                    crash(16);
-                } else {
-                    double speedAfter = Math.sqrt(getDeltaMovement().horizontalDistanceSqr());
-                    double speedDiff = speedBefore - speedAfter;
-                    float f2 = (float) (speedDiff * 10.0D - 5.0D);
-                    if (f2 > 5.0F) {
-                        crash(f2);
-                    }
-                }
-            }
+            // Impact detection: the old speedBefore/speedAfter test is a constant -5.0 on 26.2
+            // (Entity.move() skips the collision velocity response for client-authoritative
+            // vehicles), so the measurement is done from positions + getKnownMovement() instead.
+            PlaneCollisions.afterMove(this, motion, posBeforeMove);
         }
+        PlaneCollisions.tickEntityCollisions(this);
 
         if (getHealth() <= 0 && onGround() && !isRemoved()) {
             crash(16);
@@ -1200,8 +1195,9 @@ public class PlaneEntity extends Entity {
     @Override
     protected void checkFallDamage(double y, boolean onGroundIn, BlockState state, BlockPos pos) {
         if ((onGroundIn || isOnWater())) {
-            final double y1 = transformPos(new Vector3f(0, 1, 0)).y();
-            if (y1 < Math.cos(Math.toRadians(getLandingAngle()))) {
+            // PlaneCollisions.upY(), not transformPos(): transformPos reads Q_Client, which on the
+            // server is only refreshed by RotationPacket and is stale for an unmanned plane.
+            if (PlaneCollisions.upY(this) < Math.cos(Math.toRadians(getLandingAngle()))) {
                 state.getBlock().fallOn(level(), state, pos, this, getDeltaMovement().length() * 5);
             }
             fallDistance = 0.0F;
@@ -1214,10 +1210,7 @@ public class PlaneEntity extends Entity {
 
     @Override
     public boolean causeFallDamage(double fallDistance, float damageMultiplier, DamageSource p_146830_) {
-        if (degreesDifferenceAbs(rotationRoll, 0) > 45) {
-            crash((float) (fallDistance * damageMultiplier));
-        }
-        return false;
+        return PlaneCollisions.causeFallDamage(this, fallDistance, damageMultiplier);
     }
 
     public void crash(float damage) {
