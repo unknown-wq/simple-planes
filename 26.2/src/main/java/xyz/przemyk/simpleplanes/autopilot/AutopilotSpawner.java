@@ -13,22 +13,36 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
 
 import java.util.List;
 
-/** Creates and tasks autopilot aircraft. */
+/**
+ * Creates and tasks autopilot aircraft.
+ *
+ * <p>Nothing here needs a player. A player is only ever an optional owner for status messages, so
+ * every entry point works from the server console, a command block or a datapack function.
+ */
 public final class AutopilotSpawner {
+
+    /**
+     * Run-in direction used when nothing better is known: the aircraft is placed due south of the
+     * target (Minecraft yaw 0 is +Z) and flies north into it. Fixed rather than random so a headless
+     * test produces the same flight every time.
+     */
+    public static final double DEFAULT_STRIKE_BEARING = 0.0;
 
     private AutopilotSpawner() {}
 
     /**
-     * Spawns an aircraft {@link AutopilotConfig#STRIKE_SPAWN_DISTANCE} blocks from {@code target},
-     * on the far side of the player so it runs in past them, and sends it at the target at full
-     * throttle.
+     * Spawns an aircraft {@code distance} blocks from {@code target} on the given bearing and sends
+     * it at the target at full throttle.
      *
+     * @param approachBearing Minecraft yaw from the target towards the spawn point, i.e. the side
+     *                        the attack run comes in from
+     * @param owner           optional, only used for progress messages
      * @return the aircraft, or null if it could not be created
      */
-    public static @Nullable PlaneEntity launchStrike(Level level, Player player, BlockPos target, int distance) {
+    public static @Nullable PlaneEntity launchStrike(Level level, BlockPos target, int distance,
+                                                     double approachBearing, @Nullable Player owner) {
         Vec3 targetVec = new Vec3(target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5);
-        double bearingToPlayer = AutopilotMath.headingTo(targetVec, player.position());
-        Vec3 spawn = AutopilotMath.pointAlong(targetVec, bearingToPlayer, distance);
+        Vec3 spawn = AutopilotMath.pointAlong(targetVec, approachBearing, distance);
 
         double terrain = TerrainScanner.surfaceHeight(level, spawn.x, spawn.z);
         if (terrain == TerrainScanner.UNKNOWN_HEIGHT) {
@@ -40,27 +54,37 @@ public final class AutopilotSpawner {
         if (plane == null) {
             return null;
         }
-        level.addFreshEntity(plane);
-        // The aircraft is usually spawned far from anyone; without a ticket its chunk never ticks
-        // and it would simply hang in the air. The autopilot renews this every 20 ticks.
-        if (level instanceof ServerLevel serverLevel) {
-            PlaneAutopilot.keepChunksLoaded(serverLevel, plane);
-        }
+        addToWorld(level, plane);
 
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
         // Powered by the autopilot, and never persisted: a strike aircraft is a one-shot weapon.
-        autopilot.start(plane, FlightPlan.strike(target), true, false, player);
+        autopilot.start(plane, FlightPlan.strike(target), true, false, owner);
         return plane;
     }
 
     /**
-     * Spawns an aircraft at the first waypoint and sets it flying the route. The aircraft is a
-     * normal plane: it is <em>not</em> expendable, so it needs the terrain to be reasonable and it
-     * will be persisted with the world.
+     * Bearing an attack run should come in on, given where the order was issued from. Using the
+     * issuer's position makes the aircraft run in past them, which is the nice behaviour when a
+     * player triggers it; when the order comes from the console the origin is usually the world
+     * spawn, and if that is on top of the target we fall back to a fixed bearing.
      */
-    public static @Nullable PlaneEntity launchRoute(Level level, Player player, List<BlockPos> waypoints,
-                                                    int cruiseAltitude, int legs, @Nullable String airfieldName) {
+    public static double approachBearingFrom(Vec3 origin, BlockPos target) {
+        Vec3 targetVec = new Vec3(target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5);
+        if (AutopilotMath.horizontalDistance(origin, targetVec) < 2.0) {
+            return DEFAULT_STRIKE_BEARING;
+        }
+        return AutopilotMath.headingTo(targetVec, origin);
+    }
+
+    /**
+     * Spawns an aircraft at the first waypoint and sets it flying the route.
+     *
+     * @param owner optional, only used for progress messages
+     */
+    public static @Nullable PlaneEntity launchRoute(Level level, List<BlockPos> waypoints,
+                                                    int cruiseAltitude, int legs,
+                                                    @Nullable String airfieldName, @Nullable Player owner) {
         if (waypoints.isEmpty()) {
             return null;
         }
@@ -74,19 +98,39 @@ public final class AutopilotSpawner {
         if (plane == null) {
             return null;
         }
-        level.addFreshEntity(plane);
-        // The aircraft is usually spawned far from anyone; without a ticket its chunk never ticks
-        // and it would simply hang in the air. The autopilot renews this every 20 ticks.
-        if (level instanceof ServerLevel serverLevel) {
-            PlaneAutopilot.keepChunksLoaded(serverLevel, plane);
-        }
+        addToWorld(level, plane);
 
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
         // Powered by the autopilot so a courier aircraft does not need an engine upgrade, and
         // persisted so the route resumes after a restart.
-        autopilot.start(plane, FlightPlan.route(waypoints, cruiseAltitude, legs, airfieldName), true, true, player);
+        autopilot.start(plane, FlightPlan.route(waypoints, cruiseAltitude, legs, airfieldName), true, true, owner);
         return plane;
+    }
+
+    /** Cruise high enough to clear the terrain under every waypoint. */
+    public static int cruiseAltitudeFor(Level level, List<BlockPos> waypoints) {
+        int highest = Integer.MIN_VALUE;
+        for (BlockPos waypoint : waypoints) {
+            int surface = TerrainScanner.surfaceHeight(level, waypoint.getX() + 0.5, waypoint.getZ() + 0.5);
+            int candidate = surface == TerrainScanner.UNKNOWN_HEIGHT ? waypoint.getY() : Math.max(surface, waypoint.getY());
+            highest = Math.max(highest, candidate);
+        }
+        if (highest == Integer.MIN_VALUE) {
+            return (int) AutopilotConfig.DEFAULT_CRUISE_ALTITUDE;
+        }
+        return Math.min(highest + 60, level.getMaxY() - 10);
+    }
+
+    private static void addToWorld(Level level, PlaneEntity plane) {
+        // Ticket first: the aircraft is usually spawned far from anyone, and an entity in a chunk
+        // nobody keeps loaded never ticks — it would simply hang in the air. Requesting before the
+        // entity is added gets the chunk load under way first. The autopilot renews this every
+        // 20 ticks; the ticket itself expires after 40, so nothing leaks.
+        if (level instanceof ServerLevel serverLevel) {
+            PlaneAutopilot.keepChunksLoaded(serverLevel, plane);
+        }
+        level.addFreshEntity(plane);
     }
 
     private static @Nullable PlaneEntity create(Level level, double x, double y, double z, double heading) {

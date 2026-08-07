@@ -231,19 +231,36 @@ and two init calls appended in `SimplePlanesMod.onInitialize()`.
 
 ## 8. Testing without a client
 
-`/autopilot` (permission level: gamemasters) drives the whole feature from a dedicated server:
+`/autopilot` (permission level: gamemasters) drives the whole feature from a dedicated server.
+**No subcommand requires a player** — every one takes explicit coordinates, so they all run from the
+server console, a command block or a datapack function. A player is an optional convenience: it
+makes relative coordinates (`~ ~ ~`) work and decides which side an attack run comes in from.
 
 ```
-/autopilot strike <x y z> [distance]      launch an attack run
-/autopilot route <x y z> <x y z>          fly A -> B -> A and land
-/autopilot survey <x y z> <x y z>         survey a runway between two thresholds
-/autopilot airfields                      list registered airfields
-/autopilot status                         mode, plan and position of every autopilot aircraft
-/autopilot stop                           stop every autopilot aircraft in this dimension
+/autopilot strike <x y z> [distance] [bearing]   launch an attack run
+/autopilot route <x y z> <x y z>                 fly A -> B -> A and land
+/autopilot survey <x y z> <x y z>                survey a runway between two thresholds
+/autopilot airfields                             list registered airfields
+/autopilot status                                full telemetry for every autopilot aircraft
+/autopilot stop                                  stop every autopilot aircraft in this dimension
 ```
 
-`status` is the useful one while debugging — it prints each aircraft's current mode, flight plan,
-chosen runway and go-around count.
+`bearing` is the compass direction the attack run comes in *from*, 0–359. Omit it and the bearing is
+derived from wherever the command was issued (the player, or the console's world-spawn origin); if
+that origin sits on top of the target it falls back to a fixed due-south run-in. Given explicitly,
+the whole flight is deterministic and repeatable, which is what makes headless testing useful.
+
+`status` is the one to watch while debugging. Per aircraft it prints:
+
+```
+#42 approach pos=118,96,-204 agl=41 hdg=047 pitch=-3 roll=+2 spd=0.51 vs=-0.07 thr=3
+    want[hdg=044 alt=93 spd=0.50] tgt=300,72,300 dist=286 rwy=airfield-1/09 legs=1/2
+```
+
+`pos`/`agl`/`hdg`/`spd`/`thr` are what the aircraft is *actually* doing; `want[...]` is what the
+flight director is *commanding*. Comparing the two is how you tell a controller that is tracking
+from one that is saturated or fighting itself — and a `pos` that does not change between two polls
+means the aircraft is not ticking at all (see chunk loading below).
 
 ### Chunk loading
 
@@ -273,3 +290,6 @@ leaks if the aircraft is destroyed. Without this the 400-block strike would just
   never-visited terrain holds altitude rather than reacting to ground it cannot see. The chunk
   ticket keeps a bubble loaded around the aircraft itself, which covers the normal case.
 * **Route legs are fixed at 2** (out and back) from the wand. Use the `FlightPlan` API for more.
+* **No player is ever required.** Aircraft spawn, fly, land, save and load with no player involved;
+  an owning player is only an optional recipient for progress messages, and `AutopilotFeedback`
+  no-ops when there is none.

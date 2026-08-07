@@ -63,7 +63,9 @@ public class PlaneStrikeToolItem extends Item {
 
         BlockPos target = context.getClickedPos();
         int distance = getDistance(context.getItemInHand());
-        PlaneEntity plane = AutopilotSpawner.launchStrike(level, player, target, distance);
+        // Run in from the player's side, so the aircraft passes them on the way to the target.
+        double bearing = AutopilotSpawner.approachBearingFrom(player.position(), target);
+        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing, player);
         if (plane == null) {
             AutopilotFeedback.warn(player, "Could not create the aircraft.");
             return InteractionResult.CONSUME;

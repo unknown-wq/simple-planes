@@ -689,6 +689,59 @@ public class PlaneAutopilot {
         AutopilotFeedback.mode(owner, plane, next);
     }
 
+    /**
+     * One-line telemetry for {@code /autopilot status}: everything needed to tell "flying the
+     * approach correctly" apart from "stuck in mid-air" without a game client. Prints the actual
+     * state and the commanded state side by side, so a controller that is not tracking is obvious.
+     */
+    public String statusLine(PlaneEntity plane) {
+        Vec3 position = plane.position();
+        Vec3 velocity = plane.getDeltaMovement();
+        StringBuilder builder = new StringBuilder();
+        builder.append('#').append(plane.getId())
+            .append(' ').append(mode.getName())
+            .append(String.format(" pos=%.0f,%.0f,%.0f", position.x, position.y, position.z))
+            .append(String.format(" agl=%.0f", position.y - groundBelow(plane)))
+            .append(String.format(" hdg=%03.0f", AutopilotMath.compassHeading(plane.getYRot())))
+            .append(String.format(" pitch=%+.0f roll=%+.0f", plane.getXRot(), Mth.wrapDegrees(plane.rotationRoll)))
+            .append(String.format(" spd=%.2f vs=%+.2f", velocity.length(), velocity.y))
+            .append(" thr=").append(plane.getThrottle())
+            .append(String.format(" want[hdg=%03.0f alt=%.0f spd=%.2f]",
+                AutopilotMath.compassHeading(cmdHeading), cmdTargetAltitude, cmdSpeed));
+
+        Vec3 target = currentTarget();
+        if (target != null) {
+            builder.append(String.format(" tgt=%.0f,%.0f,%.0f dist=%.0f",
+                target.x, target.y, target.z, AutopilotMath.horizontalDistance(position, target)));
+        }
+        if (landingEnd != null) {
+            builder.append(" rwy=").append(landingAirfield == null ? "?" : landingAirfield.name())
+                .append('/').append(landingEnd.designator());
+        }
+        if (goArounds > 0) {
+            builder.append(" go-arounds=").append(goArounds);
+        }
+        if (plan != null && plan.kind() == FlightPlan.Kind.ROUTE) {
+            builder.append(" legs=").append(plan.legsFlown()).append('/').append(plan.maxLegs());
+        }
+        return builder.toString();
+    }
+
+    /** Whatever the current mode is actually steering towards, for the status readout. */
+    private @Nullable Vec3 currentTarget() {
+        if (plan == null) {
+            return null;
+        }
+        if (plan.kind() == FlightPlan.Kind.STRIKE) {
+            return plan.strikeTargetVec();
+        }
+        if (landingEnd != null && (mode == AutopilotMode.DESCENT || mode == AutopilotMode.HOLD
+            || mode == AutopilotMode.GO_AROUND || mode.usesRunway())) {
+            return landingEnd.threshold();
+        }
+        return plan.currentWaypoint();
+    }
+
     public String describe(PlaneEntity plane) {
         StringBuilder builder = new StringBuilder();
         builder.append("Plane #").append(plane.getId()).append(" mode=").append(mode.getName());

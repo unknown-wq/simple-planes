@@ -22,7 +22,6 @@ import xyz.przemyk.simpleplanes.autopilot.AutopilotFeedback;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotSavedData;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotSpawner;
 import xyz.przemyk.simpleplanes.autopilot.RunwayOccupancy;
-import xyz.przemyk.simpleplanes.autopilot.TerrainScanner;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 import java.util.ArrayList;
@@ -45,8 +44,6 @@ public class RouteWandItem extends Item {
 
     /** Legs flown before the aircraft goes off to land: two means out and back. */
     private static final int DEFAULT_LEGS = 2;
-    /** Clearance added above the highest waypoint to pick a cruise altitude. */
-    private static final int CRUISE_CLEARANCE = 60;
 
     public RouteWandItem(Properties properties) {
         super(properties.stacksTo(1));
@@ -149,7 +146,7 @@ public class RouteWandItem extends Item {
             return InteractionResult.CONSUME;
         }
 
-        int cruiseAltitude = pickCruiseAltitude(level, route);
+        int cruiseAltitude = AutopilotSpawner.cruiseAltitudeFor(level, route);
 
         // Land at the nearest surveyed airfield to the first waypoint, if there is one.
         String airfieldName = null;
@@ -161,7 +158,7 @@ public class RouteWandItem extends Item {
             }
         }
 
-        PlaneEntity plane = AutopilotSpawner.launchRoute(level, player, route, cruiseAltitude, DEFAULT_LEGS, airfieldName);
+        PlaneEntity plane = AutopilotSpawner.launchRoute(level, route, cruiseAltitude, DEFAULT_LEGS, airfieldName, player);
         if (plane == null) {
             AutopilotFeedback.warn(player, "Could not create the aircraft.");
             return InteractionResult.CONSUME;
@@ -174,20 +171,6 @@ public class RouteWandItem extends Item {
         return InteractionResult.CONSUME;
     }
 
-    /** Cruise high enough to clear the terrain under every waypoint. */
-    private static int pickCruiseAltitude(Level level, List<BlockPos> route) {
-        int highest = Integer.MIN_VALUE;
-        for (BlockPos waypoint : route) {
-            int surface = TerrainScanner.surfaceHeight(level, waypoint.getX() + 0.5, waypoint.getZ() + 0.5);
-            int candidate = surface == TerrainScanner.UNKNOWN_HEIGHT ? waypoint.getY() : Math.max(surface, waypoint.getY());
-            highest = Math.max(highest, candidate);
-        }
-        if (highest == Integer.MIN_VALUE) {
-            return (int) AutopilotConfig.DEFAULT_CRUISE_ALTITUDE;
-        }
-        return Math.min(highest + CRUISE_CLEARANCE, level.getMaxY() - 10);
-    }
-
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, TooltipDisplay display,
                                 Consumer<Component> builder, TooltipFlag flag) {
@@ -198,13 +181,4 @@ public class RouteWandItem extends Item {
         }
     }
 
-    /** Exposed so the debug command can reuse the same route preview. */
-    public static void previewRoute(ServerLevel level, List<BlockPos> route) {
-        preview(level, route);
-    }
-
-    /** Exposed so the debug command can reuse the altitude heuristic. */
-    public static int cruiseAltitudeFor(Level level, List<BlockPos> route) {
-        return pickCruiseAltitude(level, route);
-    }
 }
