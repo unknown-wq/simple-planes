@@ -1170,6 +1170,7 @@ public class PlaneEntity extends Entity {
     @Override
     public void remove(RemovalReason reason) {
         if (autopilot != null && autopilot.isActive()) {
+            autopilot.reportOutcome(this);
             autopilot.stop(this);
         }
         super.remove(reason);

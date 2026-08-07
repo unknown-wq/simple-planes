@@ -112,13 +112,20 @@ public final class AutopilotConfig {
     /** Default spawn distance of the strike tool. */
     public static final int STRIKE_SPAWN_DISTANCE = 400;
     /** Height above the target the strike aircraft is spawned at. */
-    public static final int STRIKE_SPAWN_HEIGHT = 90;
+    public static final int STRIKE_SPAWN_HEIGHT = 55;
     /**
-     * Distance to the target at which the strike run stops terrain-following and dives. Chosen so
-     * the required dive angle from the run-in altitude (about 17 degrees) stays inside
-     * {@link #MAX_PITCH}, otherwise the aircraft cannot point at the target and overshoots.
+     * Distance to the target at which the strike run stops terrain-following and dives.
+     *
+     * <p>This has to be read together with the run-in altitude below and with the launch speed. A
+     * strike aircraft is boosted, so it arrives at roughly 2 blocks/tick, and the faster it goes the
+     * more lift it makes and the harder it is to push the nose down: dived from 200 blocks out at
+     * 60 above the target it only shed 36 blocks of height and went in 57 blocks past the aimpoint.
+     * Starting the dive further out, from a lower run-in, keeps the required angle shallow enough
+     * for the airframe to actually fly it.
      */
-    public static final double STRIKE_DIVE_DISTANCE = 200.0;
+    public static final double STRIKE_DIVE_DISTANCE = 350.0;
+    /** Height above the target the run-in is flown at, before the dive. */
+    public static final int STRIKE_RUN_IN_HEIGHT = 35;
 
     // ---- waypoints ----
     public static final double WAYPOINT_ARRIVAL_RADIUS = 30.0;

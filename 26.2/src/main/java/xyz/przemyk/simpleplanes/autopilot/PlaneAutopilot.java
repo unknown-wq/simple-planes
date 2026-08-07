@@ -45,6 +45,11 @@ public class PlaneAutopilot {
     private boolean persistent;
     private int goArounds;
     private boolean gatesDisabled;
+    /** Set once the end-of-flight report has been sent, so it is never sent twice. */
+    private boolean outcomeReported;
+
+    /** Distance from the aimpoint still counted as a hit rather than a miss. */
+    public static final double STRIKE_HIT_RADIUS = 8.0;
 
     private final TerrainScanner scanner = new TerrainScanner();
     private @Nullable Airfield landingAirfield;
@@ -103,6 +108,33 @@ public class PlaneAutopilot {
             setMode(plane, AutopilotMode.TAKEOFF);
         } else {
             setMode(plane, AutopilotMode.CLIMB);
+        }
+    }
+
+    /**
+     * Reports how a flight ended, so a launch never just goes quiet. Without this the only
+     * observable difference between "hit the target", "hit a hillside on the way" and "never
+     * spawned" is that the aircraft is no longer in the status list.
+     */
+    public void reportOutcome(PlaneEntity plane) {
+        if (!active || plan == null || outcomeReported) {
+            return;
+        }
+        outcomeReported = true;
+        String where = Math.round(plane.getX()) + ", " + Math.round(plane.getY()) + ", " + Math.round(plane.getZ());
+        Vec3 target = plan.strikeTargetVec();
+        if (target == null) {
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " lost at " + where
+                + " in " + mode.name().toLowerCase(java.util.Locale.ROOT) + ".");
+            return;
+        }
+        long miss = Math.round(plane.position().distanceTo(target));
+        if (miss <= STRIKE_HIT_RADIUS) {
+            AutopilotFeedback.report(owner, "Strike #" + plane.getId() + " hit the target at " + where
+                + " (" + miss + " blocks off).");
+        } else {
+            AutopilotFeedback.report(owner, "Strike #" + plane.getId() + " went down at " + where
+                + ", " + miss + " blocks short of the target.");
         }
     }
 
@@ -319,14 +351,25 @@ public class PlaneAutopilot {
         double distance = AutopilotMath.horizontalDistance(position, target);
         if (distance > AutopilotConfig.STRIKE_DIVE_DISTANCE) {
             // Cruise in high enough to clear the terrain between here and the target.
-            cmdTargetAltitude = Math.max(target.y + 60, plan.cruiseAltitude());
+            cmdTargetAltitude = target.y + AutopilotConfig.STRIKE_RUN_IN_HEIGHT;
             cmdTerrainFollow = true;
         } else {
-            // Committed: dive at the aim point, terrain following off, steep descent allowed.
+            // Committed: point the nose straight at the aim point.
+            //
+            // Tracking an altitude here does not work at strike speed. The cascade converts an
+            // altitude error into a vertical speed and then into a flight path angle, and by the
+            // time the aircraft has flown that gently sloping profile it is over the target still
+            // high and goes in well beyond it - measured twice, 57 and 54 blocks long. Commanding
+            // the elevation angle to the target instead makes the run self-correcting: the further
+            // behind the profile it falls, the steeper the commanded dive becomes.
             cmdTargetAltitude = target.y;
             cmdTerrainFollow = false;
             cmdBankLimit = 10;
-            cmdMaxDescentAngle = 55.0;
+            cmdMaxDescentAngle = 80.0;
+            double horizontalToTarget = Math.max(AutopilotMath.horizontalDistance(position, target), 1.0);
+            cmdPitchOverride = Mth.clamp(
+                Math.toDegrees(Math.atan2(target.y - position.y, horizontalToTarget)),
+                -80.0, AutopilotConfig.MAX_PITCH);
         }
 
         if (position.distanceTo(target) < 3.0) {

@@ -3,6 +3,8 @@ package xyz.przemyk.simpleplanes.autopilot;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Player;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 /**
@@ -15,7 +17,22 @@ import xyz.przemyk.simpleplanes.entities.PlaneEntity;
  */
 public final class AutopilotFeedback {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger("simpleplanes-autopilot");
+
     private AutopilotFeedback() {}
+
+    /**
+     * Report that must not vanish when nobody owns the flight. A launch from the console, a command
+     * block or a datapack function has no player to talk to, and silently dropping the end-of-flight
+     * report there makes the feature impossible to debug headlessly.
+     */
+    public static void report(Player player, String message) {
+        if (player != null) {
+            player.sendSystemMessage(Component.literal(message));
+        } else {
+            LOGGER.info(message);
+        }
+    }
 
     public static void info(Player player, String message) {
         if (player != null) {
