@@ -98,9 +98,8 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
         }
-        source.sendSuccess(() -> Component.literal(String.format(
-            "Strike launched: plane #%d inbound to %s from %d blocks on bearing %03.0f.",
-            plane.getId(), target.toShortString(), distance, AutopilotMath.compassHeading(bearing))), true);
+        source.sendSuccess(() -> Component.literal(
+            AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))), true);
         return 1;
     }
 

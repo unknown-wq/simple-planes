@@ -223,49 +223,62 @@ public final class PlaneCollisions {
             return;
         }
 
-        double hBlocked = horizontal(blocked);
-        double hReference = Math.max(horizontal(state.prevKnownMovement), horizontal(state.knownMovement));
-        double hLost = horizontal(state.prevKnownMovement) - horizontal(state.knownMovement);
-
-        double hImpact = 0;
-        if (plane.horizontalCollision && hBlocked > 1.0E-5) {
-            // The wall ate hBlocked of motion; cap it by the speed the plane really had, so that
-            // leaning on a wall with the throttle open does not grind the plane to pieces.
-            hImpact = Math.min(hBlocked, hReference);
-        } else if (hLost > UNAMBIGUOUS_DECELERATION) {
-            // Geometric predicate missed (server sim pointing somewhere slightly different); a
-            // deceleration this large cannot come from the plane's own physics.
-            hImpact = hLost;
-        }
-
-        double vBlocked = descent(blocked);
-        double vReference = Math.max(descent(state.prevKnownMovement), descent(state.knownMovement));
-        double vImpact = vBlocked > 1.0E-5 ? Math.min(vBlocked, vReference) : 0;
-        // Ceiling strikes: blocked upwards motion.
-        double ceilingBlocked = blocked.y > 0 ? blocked.y : 0;
-        if (ceilingBlocked > 1.0E-5) {
-            double ceilingReference = Math.max(Math.max(state.prevKnownMovement.y, state.knownMovement.y), 0);
-            vImpact = Math.max(vImpact, Math.min(ceilingBlocked, ceilingReference));
-        }
+        // How much motion the world destroyed this tick, as a single scalar.
+        //
+        // Measuring the whole vector rather than each axis separately is deliberate. An earlier
+        // version split the impact into a horizontal part (gated on Entity#horizontalCollision) and
+        // a vertical part with its own tolerance, and a plane diving into a hillside at 1.35
+        // blocks/tick survived: its descent component was only 0.29, under the 0.60 wings-level
+        // vertical tolerance, while the horizontal part never fired because the aircraft ended up
+        // inside the terrain and ploughed to a halt over several ticks without the engine ever
+        // setting horizontalCollision. Verified in game - the aircraft was found intact on the
+        // ground. Speed lost is speed lost, whichever axis carried it and whichever flag the engine
+        // decided to set.
+        //
+        // A landing is not caught by this because the horizontal component is not blocked: the
+        // aircraft keeps rolling forward, so only the small vertical part shows up.
+        double wantedSpeed = wanted.length();
+        double achievedSpeed = achieved.length();
+        double blockedSpeed = Math.max(0.0, wantedSpeed - achievedSpeed);
+        // The plane's own speed before the move bounds the impact, so leaning on a wall with the
+        // throttle open cannot invent energy.
+        double reference = Math.max(state.prevKnownMovement.length(), wantedSpeed);
+        double impact = Math.min(blockedSpeed, reference);
 
         double mass = massOf(plane);
         double up = upY(plane);
-        double hTolerance = plane.getOnGround() ? H_TOLERANCE_GROUND : H_TOLERANCE_AIR;
-        double vTolerance = V_TOLERANCE_MIN + V_TOLERANCE_LEVEL_BONUS * Mth.clamp(up, 0.0, 1.0);
+
+        // Tolerance depends on what kind of contact this is. A mostly-downward loss is a landing and
+        // gets the wings-level allowance; a mostly-horizontal loss is a wall or a hillside and does
+        // not - flying level into rock is exactly the case that must hurt.
+        double descentShare = blockedSpeed > 1.0E-5 ? descent(blocked) / blockedSpeed : 0;
+        double tolerance;
+        if (descentShare > 0.7) {
+            tolerance = V_TOLERANCE_MIN + V_TOLERANCE_LEVEL_BONUS * Mth.clamp(up, 0.0, 1.0);
+        } else {
+            tolerance = plane.getOnGround() ? H_TOLERANCE_GROUND : H_TOLERANCE_AIR;
+        }
+
+        double factor = descentShare > 0.7 ? V_DAMAGE_FACTOR : H_DAMAGE_FACTOR;
+        double softening = descentShare > 0.7 ? state.softLandingMultiplier : 1.0;
 
         double damage = 0;
-        if (hImpact > hTolerance) {
-            damage += mass * H_DAMAGE_FACTOR * (hImpact * hImpact - hTolerance * hTolerance);
+        if (impact > tolerance) {
+            damage += mass * factor * (impact * impact - tolerance * tolerance) * softening;
         }
-        if (vImpact > vTolerance) {
-            damage += mass * V_DAMAGE_FACTOR * (vImpact * vImpact - vTolerance * vTolerance)
-                * state.softLandingMultiplier;
+
+        // Fallback for a plane that is already inside terrain, where move() may report no collision
+        // at all: a deceleration this large cannot come from the aircraft's own physics.
+        double hReference = Math.max(horizontal(state.prevKnownMovement), horizontal(state.knownMovement));
+        double hLost = horizontal(state.prevKnownMovement) - horizontal(state.knownMovement);
+        if (damage <= 0 && hLost > UNAMBIGUOUS_DECELERATION) {
+            damage += mass * H_DAMAGE_FACTOR * (hLost * hLost - H_TOLERANCE_AIR * H_TOLERANCE_AIR);
         }
 
         // Wing/nose strike: the hitbox is a plain box, so a cartwheel produces almost no blocked
         // motion. Charge for touching the ground at a bad attitude instead, scaled by speed —
         // this replaces the old binary "roll > 45 deg on any ground contact => explode" rule.
-        boolean groundContact = plane.onGround() || vBlocked > 1.0E-5;
+        boolean groundContact = plane.onGround() || descent(blocked) > 1.0E-5;
         double attitudeBad = Mth.clamp(1.0 - up, 0.0, 2.0);
         if (groundContact && attitudeBad > SCRAPE_ATTITUDE && hReference > SCRAPE_MIN_SPEED) {
             damage += mass * SCRAPE_DAMAGE_FACTOR * (attitudeBad - SCRAPE_ATTITUDE) * hReference * hReference;

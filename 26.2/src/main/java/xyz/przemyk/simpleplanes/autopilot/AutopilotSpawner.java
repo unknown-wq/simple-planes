@@ -10,6 +10,8 @@ import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
+import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
 import java.util.List;
 
@@ -27,6 +29,15 @@ public final class AutopilotSpawner {
      * test produces the same flight every time.
      */
     public static final double DEFAULT_STRIKE_BEARING = 0.0;
+
+    /**
+     * Speed a strike aircraft is launched with, in blocks/tick. Roughly the terminal speed of a
+     * boosted plane, so the run starts at attack speed instead of building up to it.
+     */
+    public static final double STRIKE_LAUNCH_SPEED = 1.4;
+
+    /** Raised speed ceiling for a strike aircraft; the scaling in tickMotion is tied to this. */
+    public static final float STRIKE_MAX_SPEED = 2.0f;
 
     private AutopilotSpawner() {}
 
@@ -50,10 +61,23 @@ public final class AutopilotSpawner {
         }
         double altitude = Math.max(targetVec.y + AutopilotConfig.STRIKE_SPAWN_HEIGHT, terrain + 45);
 
-        PlaneEntity plane = create(level, spawn.x, altitude, spawn.z, AutopilotMath.headingTo(spawn, targetVec));
+        double heading = AutopilotMath.headingTo(spawn, targetVec);
+        PlaneEntity plane = create(level, spawn.x, altitude, spawn.z, heading);
         if (plane == null) {
             return null;
         }
+
+        // A strike aircraft is launched, not taxied. Fit a booster (which raises the throttle
+        // ceiling from 5 to 10), open the throttle fully and give it its cruise speed at t=0,
+        // pointed at the target - otherwise it spends the first seconds of the run accelerating
+        // from a standstill and sagging towards the ground while it does.
+        plane.addUpgradeUsingWrench(SimplePlanesItems.BOOSTER.get().getDefaultInstance(),
+            new BoosterUpgrade(plane));
+        plane.setMaxSpeed(STRIKE_MAX_SPEED);
+        plane.setThrottle(BoosterUpgrade.MAX_THROTTLE);
+        Vec3 run = targetVec.subtract(spawn.x, altitude, spawn.z).normalize();
+        plane.setDeltaMovement(run.scale(STRIKE_LAUNCH_SPEED));
+
         addToWorld(level, plane);
 
         PlaneAutopilot autopilot = new PlaneAutopilot();
@@ -61,6 +85,22 @@ public final class AutopilotSpawner {
         // Powered by the autopilot, and never persisted: a strike aircraft is a one-shot weapon.
         autopilot.start(plane, FlightPlan.strike(target), true, false, owner);
         return plane;
+    }
+
+    /**
+     * Launch report for a strike. Reports where the aircraft actually appeared, not just how far
+     * away it was asked to appear: without the real position there is no way to tell a strike that
+     * failed to spawn from one that spawned and fell out of the sky.
+     */
+    public static String describeLaunch(PlaneEntity plane, BlockPos target, int distance, double bearing) {
+        double terrain = TerrainScanner.surfaceHeight(plane.level(), plane.getX(), plane.getZ());
+        String agl = terrain == TerrainScanner.UNKNOWN_HEIGHT
+            ? "?"
+            : String.valueOf(Math.round(plane.getY() - terrain));
+        return "Strike #" + plane.getId() + " spawned at "
+            + Math.round(plane.getX()) + ", " + Math.round(plane.getY()) + ", " + Math.round(plane.getZ())
+            + " (" + agl + " above ground), inbound to " + target.toShortString()
+            + " - " + distance + " blocks, bearing " + Math.round(bearing) + ".";
     }
 
     /**

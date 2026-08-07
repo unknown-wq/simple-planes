@@ -70,8 +70,7 @@ public class PlaneStrikeToolItem extends Item {
             AutopilotFeedback.warn(player, "Could not create the aircraft.");
             return InteractionResult.CONSUME;
         }
-        AutopilotFeedback.success(player, "Strike launched: plane #" + plane.getId()
-            + " inbound to " + target.toShortString() + " from " + distance + " blocks.");
+        AutopilotFeedback.success(player, AutopilotSpawner.describeLaunch(plane, target, distance, bearing));
         return InteractionResult.CONSUME;
     }
 
