@@ -9,10 +9,8 @@
     "item.simpleplanes.floaty_bedding": "Надувная подушка",
     "item.simpleplanes.healing": "Набор экспресс-ремонта",
     "item.simpleplanes.wrench": "Гаечный ключ",
-
     "block.simpleplanes.charger_block": "Станция загрузки FE",
     "block.simpleplanes.fueling_block": "Аэротопливозаправочная станция",
-
     "name.simpleplanes.furnace_engine": "Печной двигатель",
     "name.simpleplanes.electric_engine": "Электродвигатель",
     "name.simpleplanes.propeller": "Винтовой двигатель",
@@ -28,22 +26,17 @@
     "name.simpleplanes.banner": "Флаг",
     "name.simpleplanes.tnt": "Динами",
     "name.simpleplanes.armor": "Обшивка самолёта",
-
     "itemGroup.simpleplanes": "Simple Planes",
-
     "simpleplanes.container.plane_workbench": "Аэроверстак",
     "death.attack.plane_crash": "%1$s умер в авиакатастрофе.",
     "plane.onboard": "Нажми %2$s — ускориться | Нажми %1$s — спешиться.",
     "helicopter.onboard": "Нажми %2$s — взлететь | Нажми %1$s — спешиться.",
-
     "key.simpleplanes.category": "Simple Planes",
     "key.plane_boost.desc": "Клавиша ускорение самолёта",
     "key.plane_engine_open.desc": "Открыть экран двигателя самолёта",
-
     "item.simpleplanes.plane": "Самолёт",
     "item.simpleplanes.large_plane": "Большой самолёт",
     "item.simpleplanes.helicopter": "Вертолёт",
-
     "text.autoconfig.simpleplanes.title": "Simple planes",
     "text.autoconfig.simpleplanes.category.default": "Разное",
     "text.autoconfig.simpleplanes.category.coal": "Уголь",
@@ -65,9 +58,7 @@
     "text.autoconfig.simpleplanes.option.MANA_COST.@Tooltip": "Количество маны, используемое при выходе.",
     "text.autoconfig.simpleplanes.option.FLY_TICKS_PER_MANA": "Тиков полётов за ману",
     "text.autoconfig.simpleplanes.option.FLY_TICKS_PER_MANA.@Tooltip": "Количество тиков полёза за использование маны.",
-
     "simpleplanes.material": "Материал — ",
-
     "simpleplanes.furnace_engine_container": "Печной двигатель",
     "simpleplanes.electric_engine_container": "Электродвигатель",
     "simpleplanes.remove_upgrades": "Удалено улучшений:",
@@ -79,10 +70,17 @@
     "simpleplanes:tnt": "Динами",
     "simpleplanes:banner": "Знамя",
     "simpleplanes:chest": "Сундук",
-
     "entity.simpleplanes.plane": "Самолёт",
     "entity.simpleplanes.large_plane": "Большой самолёт",
     "entity.simpleplanes.helicopter": "Вертолёт",
-
-    "simpleplanes.gui.energy": "Энергия: %s FE"
+    "simpleplanes.gui.energy": "Энергия: %s FE",
+    "item.simpleplanes.plane_strike_tool": "Инструмент тарана",
+    "item.simpleplanes.route_wand": "Жезл маршрутов",
+    "item.simpleplanes.runway_tool": "Инструмент разметки ВПП",
+    "simpleplanes.strike_tool_desc": "ПКМ по блоку — направить самолёт на таран",
+    "simpleplanes.strike_tool_distance": "Дальность спавна: %s блоков",
+    "simpleplanes.route_wand_desc": "ПКМ по блокам — точки маршрута, Shift+ПКМ — запуск",
+    "simpleplanes.route_wand_waypoints": "Отмечено точек: %s",
+    "simpleplanes.runway_tool_desc": "ПКМ по обоим торцам ВПП — снять характеристики",
+    "simpleplanes.runway_tool_anchor": "Первый порог: %s"
 }

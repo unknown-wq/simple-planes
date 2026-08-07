@@ -1,6 +1,5 @@
 package xyz.przemyk.simpleplanes.entities;
 
-import com.mojang.math.Axis;
 import net.fabricmc.fabric.api.menu.v1.ExtendedMenuProvider;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -48,6 +47,7 @@ import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
 import org.joml.Vector3f;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot; // autopilot:
 import xyz.przemyk.simpleplanes.container.ModifyUpgradesContainer;
 import xyz.przemyk.simpleplanes.container.PlaneInventoryContainer;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
@@ -84,6 +84,8 @@ public class PlaneEntity extends Entity {
     public Quaternionf Q_Prev = new Quaternionf();
 
     private int onGroundTicks;
+    /** Impact-detection state; the whole collision tract lives in {@link PlaneCollisions}. */
+    public final PlaneCollisions.State collisionState = new PlaneCollisions.State();
     public final HashMap<Identifier, Upgrade> upgrades = new HashMap<>();
     public EngineUpgrade engineUpgrade = null;
 
@@ -121,6 +123,48 @@ public class PlaneEntity extends Entity {
 
     /** Scratch quaternion reused by {@link #transformPos(Vector3f)}; must not be {@link #tickQScratch}, transformPos runs inside tick(). */
     private final Quaternionf transformQScratch = new Quaternionf();
+
+    /**
+     * Euler/quaternion scratch buffers for the hot path. Each one belongs to exactly one method, so
+     * they never overlap: {@link #transformPos(Vector3f)} runs inside {@link #tick()} (via
+     * {@code getTickPush} and {@code positionRider}) while {@code tickAngles} is still live.
+     */
+    private final EulerAngles tickAngles = new EulerAngles();
+    private final EulerAngles deltaRotationAngles = new EulerAngles();
+    private final EulerAngles transformAngles = new EulerAngles();
+    private final Quaternionf transformRotScratch = new Quaternionf();
+    /** Shared with {@code HelicopterEntity#getTickPush}, which builds a vertical thrust vector instead. */
+    protected final Vector3f pushScratch = new Vector3f();
+
+    /** Last rotation actually pushed to the server, so an idle plane stops spamming RotationPacket. */
+    private final Quaternionf lastSentQ = new Quaternionf();
+
+    // autopilot: server-side flight director. When present it supplies the same four control inputs
+    // a player would (throttle / pitch / yaw / roll) instead of the plane being flown by a passenger.
+    // All of the logic lives in xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot.
+    private @Nullable PlaneAutopilot autopilot;
+
+    // autopilot: accessors for the flight director.
+    public @Nullable PlaneAutopilot getAutopilot() {
+        return autopilot;
+    }
+
+    // autopilot:
+    public void setAutopilot(@Nullable PlaneAutopilot autopilot) {
+        this.autopilot = autopilot;
+    }
+
+    // autopilot: true when the flight director is flying this plane, i.e. control inputs come from
+    // the autopilot rather than from a controlling passenger.
+    public boolean isAutopilotEngaged() {
+        return autopilot != null && autopilot.isActive();
+    }
+
+    // autopilot: exposes the protected rotation-rate multiplier so the controllers can size their
+    // braking correctly on the larger airframes, which turn more slowly.
+    public float autopilotRotationSpeedMultiplier() {
+        return getRotationSpeedMultiplier();
+    }
 
     public PlaneEntity(EntityType<? extends PlaneEntity> entityTypeIn, Level worldIn) {
         this(entityTypeIn, worldIn, Blocks.OAK_PLANKS);
@@ -244,7 +288,9 @@ public class PlaneEntity extends Entity {
     public static final TagKey<DimensionType> BLACKLISTED_DIMENSIONS_TAG = TagKey.create(Registries.DIMENSION_TYPE, Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "blacklisted_dimensions"));
 
     public boolean isPowered() {
-        return isAlive() && !level().dimensionTypeRegistration().is(BLACKLISTED_DIMENSIONS_TAG) && (isCreative() || (engineUpgrade != null && engineUpgrade.isPowered()));
+        // autopilot: aircraft conjured by the autopilot tools run on autopilot fuel; a plane the
+        // player built still needs a working engine (PlaneAutopilot#providesPower).
+        return isAlive() && !level().dimensionTypeRegistration().is(BLACKLISTED_DIMENSIONS_TAG) && (isCreative() || (autopilot != null && autopilot.providesPower()) || (engineUpgrade != null && engineUpgrade.isPowered()));
     }
 
     @Override
@@ -488,6 +534,12 @@ public class PlaneEntity extends Entity {
         }
         markHurt(); //TODO: this might be the cause of high network usage
 
+        // autopilot: the flight director runs before the control inputs are read below, so the
+        // throttle/pitch/yaw it sets this tick are the ones the physics acts on. Server only.
+        if (!level().isClientSide() && autopilot != null) {
+            autopilot.tick(this);
+        }
+
         TempMotionVars tempMotionVars = getMotionVars();
         if (isNoGravity()) {
             tempMotionVars.gravity = 0;
@@ -499,6 +551,11 @@ public class PlaneEntity extends Entity {
         if (controllingPassenger instanceof Player playerEntity) {
             tempMotionVars.moveForward = getMoveForward(playerEntity);
             tempMotionVars.moveStrafing = playerEntity.xxa;
+        } else if (isAutopilotEngaged()) {
+            // autopilot: with nobody aboard, the roll/strafe input comes from the flight director.
+            tempMotionVars.moveForward = autopilot.getMoveForward();
+            tempMotionVars.moveStrafing = autopilot.getMoveStrafing();
+            setSprinting(false);
         } else {
             tempMotionVars.moveForward = 0;
             tempMotionVars.moveStrafing = 0;
@@ -519,7 +576,9 @@ public class PlaneEntity extends Entity {
             q = getQ(tickQScratch);
         }
 
-        EulerAngles anglesOld = toEulerAngles(q).copy();
+        // toEulerAngles(q).copy() allocated twice per tick; tickAngles belongs to this method alone
+        // and stays live until the "back to q" block at the end of the tick.
+        EulerAngles anglesOld = toEulerAngles(q, tickAngles);
 
         Vec3 oldMotion = getDeltaMovement();
 
@@ -559,36 +618,32 @@ public class PlaneEntity extends Entity {
         reapplyPosition();
 
         if (!onGround() || getDeltaMovement().horizontalDistanceSqr() > (double) 1.0E-5F || (tickCount + getId()) % 4 == 0) {
-            double speedBefore = Math.sqrt(getDeltaMovement().horizontalDistanceSqr());
             boolean onGroundOld = onGround();
             Vec3 motion = getDeltaMovement();
             if (motion.lengthSqr() > 0.25 || getPitchUp() != 0) {
                 setOnGround(true);
             }
+            Vec3 posBeforeMove = position();
             move(MoverType.SELF, motion);
             setOnGround(((motion.y()) == 0.0) ? onGroundOld : onGround());
-            if (horizontalCollision && !level().isClientSide() && onGroundTicks <= 0) {
-                if (getHealth() <= 0) {
-                    crash(16);
-                } else {
-                    double speedAfter = Math.sqrt(getDeltaMovement().horizontalDistanceSqr());
-                    double speedDiff = speedBefore - speedAfter;
-                    float f2 = (float) (speedDiff * 10.0D - 5.0D);
-                    if (f2 > 5.0F) {
-                        crash(f2);
-                    }
-                }
-            }
+            // Impact detection: the old speedBefore/speedAfter test is a constant -5.0 on 26.2
+            // (Entity.move() skips the collision velocity response for client-authoritative
+            // vehicles), so the measurement is done from positions + getKnownMovement() instead.
+            PlaneCollisions.afterMove(this, motion, posBeforeMove);
         }
+        PlaneCollisions.tickEntityCollisions(this);
 
         if (getHealth() <= 0 && onGround() && !isRemoved()) {
             crash(16);
         }
 
         //back to q
-        q.mul(Axis.ZP.rotationDegrees((float) (rotationRoll - anglesOld.roll)));
-        q.mul(Axis.XN.rotationDegrees((float) (getXRot() - anglesOld.pitch)));
-        q.mul(Axis.YP.rotationDegrees((float) (getYRot() - anglesOld.yaw)));
+        // Axis.ZP/XN/YP.rotationDegrees() each allocate a Quaternionf (see com.mojang.math.Axis:
+        // ZP == new Quaternionf().rotationZ(a), XN == rotationX(-a)) and q.mul() post-multiplies —
+        // which is exactly what JOML's in-place rotateZ/rotateX/rotateY do, allocation-free.
+        q.rotateZ((float) Math.toRadians(rotationRoll - anglesOld.roll));
+        q.rotateX((float) Math.toRadians(anglesOld.pitch - getXRot()));
+        q.rotateY((float) Math.toRadians(getYRot() - anglesOld.yaw));
 
         q = normalizeQuaternionf(q);
 
@@ -599,7 +654,14 @@ public class PlaneEntity extends Entity {
         if (level().isClientSide() && isLocalInstanceAuthoritative()) {
             setQ_Client(q);
 
-            SimplePlanesClientNetworking.sendRotation(getQ());
+            // This packet used to go out every single tick from every locally controlled plane, even
+            // one parked on a runway with the engine off. The server keeps whatever rotation it last
+            // received, so skipping bit-identical resends is free; the epsilon is small enough
+            // (1e-5 per component, ~0.001 degrees) that no perceptible motion is ever dropped.
+            if (!q.equals(lastSentQ, 1.0E-5f)) {
+                lastSentQ.set(q);
+                SimplePlanesClientNetworking.sendRotation(getQ());
+            }
         } else {
             ServerPlayer player = getPlayer() instanceof ServerPlayer serverPlayer ? serverPlayer : null;
             if (player != null) {
@@ -636,17 +698,25 @@ public class PlaneEntity extends Entity {
         return player.zza;
     }
 
+    /** Lazily allocated: upgrades are removed rarely, but tickUpgrades() runs every tick for every plane. */
+    private List<Identifier> upgradesToRemove;
+
     public void tickUpgrades() {
-        List<Identifier> upgradesToRemove = new ArrayList<>();
         upgrades.forEach((rl, upgrade) -> {
             upgrade.tick();
             if (upgrade.removed) {
+                if (upgradesToRemove == null) {
+                    upgradesToRemove = new ArrayList<>();
+                }
                 upgradesToRemove.add(rl);
             }
         });
 
-        for (Identifier name : upgradesToRemove) {
-            upgrades.remove(name);
+        if (upgradesToRemove != null) {
+            for (Identifier name : upgradesToRemove) {
+                upgrades.remove(name);
+            }
+            upgradesToRemove = null;
         }
 
         if (!level().isClientSide()) {
@@ -673,7 +743,7 @@ public class PlaneEntity extends Entity {
     }
 
     protected void tickDeltaRotation(Quaternionf q) {
-        EulerAngles angles = toEulerAngles(q);
+        EulerAngles angles = toEulerAngles(q, deltaRotationAngles);
         setXRot((float) angles.pitch);
         setYRot((float) angles.yaw);
         rotationRoll = (float) angles.roll;
@@ -717,7 +787,10 @@ public class PlaneEntity extends Entity {
                     pitchSpeed -= 0.5f * getRotationSpeedMultiplier();
                 }
             }
-            pitchSpeed = Mth.clamp(pitchSpeed, -5.0f * getRotationSpeedMultiplier(), 5.0f * getRotationSpeedMultiplier());
+            // Airspeed-limited elevator authority: see getPitchAuthority(). Above the take-off speed
+            // this factor is 1 and the clamp is identical to the original.
+            float maxPitchSpeed = 5.0f * getRotationSpeedMultiplier() * getPitchAuthority(tempMotionVars);
+            pitchSpeed = Mth.clamp(pitchSpeed, -maxPitchSpeed, maxPitchSpeed);
             pitch = pitchSpeed;
         }
         setXRot(getXRot() + pitch);
@@ -760,6 +833,14 @@ public class PlaneEntity extends Entity {
 
         if (getOnGround() || isOnWater()) {
             turn = tempMotionVars.moveStrafing > 0 ? 3 : tempMotionVars.moveStrafing == 0 ? 0 : -3;
+            // Nose-wheel / rudder authority scales with ground speed. A parked plane used to be able
+            // to pirouette on the spot at 3 deg/tick (60 deg/s) with no airflow and no wheel motion,
+            // which also made the take-off run wander. Full authority is restored at take-off speed,
+            // so nothing changes for a plane that is actually rolling fast.
+            if (turn != 0 && tempMotionVars.takeOffSpeed > 0) {
+                turn *= Mth.clamp(getDeltaMovement().length() / tempMotionVars.takeOffSpeed,
+                    tempMotionVars.minGroundSteering, 1.0);
+            }
             rotationRoll = lerpAngle(0.1f, rotationRoll, 0);
 
         } else {
@@ -817,7 +898,9 @@ public class PlaneEntity extends Entity {
     }
 
     protected Vector3f getTickPush(TempMotionVars tempMotionVars) {
-        return transformPos(new Vector3f(0, 0, tempMotionVars.push));
+        // transformPos() mutates and returns its argument, so the scratch can be reused; the result
+        // is immediately copied into a Vec3 by tickMotion() and never stored.
+        return transformPos(pushScratch.set(0, 0, tempMotionVars.push));
     }
 
     protected boolean tickOnGround(TempMotionVars tempMotionVars) {
@@ -845,6 +928,13 @@ public class PlaneEntity extends Entity {
         }
         setXRot(lerpAngle(0.1f, getXRot(), pitch));
 
+        // Static rolling resistance while breaking away from a stop. Deliberately left exactly as
+        // upstream wrote it: an earlier revision of this audit claimed the flat /5 made the small
+        // plane unable to ever reach take-off speed, but that was an arithmetic error (the push was
+        // divided by 5 twice by hand). Simulating the real tick shows the ground roll is fine —
+        // at throttle 5 the plane reaches 0.3 b/t in 38 ticks (1.9 s), throttle 4 in 56, throttle 3
+        // in 126. Only throttle 1 and 2 stall out below the 0.1 b/t threshold, which is defensible
+        // as "idle taxi". See PHYSICS-AUDIT.md, issue B2, for the corrected numbers.
         if (degreesDifferenceAbs(getXRot(), 0) > 1 && getDeltaMovement().length() < 0.1) {
             tempMotionVars.push /= 5; //runs while the plane is taking off
         }
@@ -861,17 +951,85 @@ public class PlaneEntity extends Entity {
         if (!isPowered()) {
             tempMotionVars.push = 0;
         }
-        float f;
-        // Mth.floor, not (int): a truncating cast rounds towards zero and samples the wrong block at
-        // negative coordinates (x = -0.5 would give 0 instead of -1).
-        BlockPos pos = new BlockPos(Mth.floor(getX()), Mth.floor(getY() - 1.0D), Mth.floor(getZ()));
-        f = level().getBlockState(pos).getBlock().getFriction();
-        tempMotionVars.dragMul *= 20 * (3 - f);
+        // Rolling resistance only applies while something is actually being rolled/floated on.
+        // getOnGround() stays true for up to four ticks after the wheels leave the runway
+        // (the onGroundTicks coyote timer), and applying the full 48x ground drag during that window
+        // put a deceleration spike right at the moment of lift-off — the jolt on the ground -> air
+        // transition. It also sampled the friction of whatever air block happened to be below.
+        if (onGround() || isOnWater()) {
+            // Mth.floor, not (int): a truncating cast rounds towards zero and samples the wrong block at
+            // negative coordinates (x = -0.5 would give 0 instead of -1).
+            BlockPos pos = new BlockPos(Mth.floor(getX()), Mth.floor(getY() - 1.0D), Mth.floor(getZ()));
+            // Block.getFriction() is what vanilla vehicles use too (AbstractBoat#getGroundFriction).
+            // NeoForge's per-BlockState BlockState#getFriction(level, pos, entity) has no equivalent
+            // in 26.2, so modded per-state friction is lost; vanilla blocks are unaffected.
+            float f = level().getBlockState(pos).getBlock().getFriction();
+            tempMotionVars.dragMul *= 20 * (3 - f);
+        }
         return speedingUp;
     }
 
     protected float getGroundPitch() {
         return 5;
+    }
+
+    /**
+     * Normalised wing lift, in [0, 1], as a function of airspeed.
+     *
+     * <p>Real lift is {@code 0.5 * rho * v^2 * S * Cl}, i.e. quadratic in airspeed with a hard floor
+     * at the stall speed. The original model used {@code min(speed * 10, maxLift)}, which saturated
+     * at {@code speed = 0.2} — a third below the 0.3 b/t take-off speed — so the wings were already
+     * at full authority long before the plane was supposed to be able to fly. That is what let a
+     * plane "take off at zero speed": pull the nose up at 0.2 b/t and the velocity vector was
+     * dragged along with full lift behind it.
+     *
+     * <p>Now: zero below {@code takeOffSpeed * stallSpeedFactor} (0.165 b/t), rising with v^2, and
+     * saturating at {@code takeOffSpeed * liftSaturationFactor} (0.39 b/t). Cruise flight, which
+     * happens well above 0.4 b/t, is numerically unchanged; only the region around and below the
+     * take-off speed behaves differently, which is exactly the region this is meant to fix.
+     */
+    protected double getLiftRatio(TempMotionVars tempMotionVars, double speed) {
+        double stall = tempMotionVars.takeOffSpeed * tempMotionVars.stallSpeedFactor;
+        if (speed <= stall) {
+            return 0;
+        }
+        double saturation = tempMotionVars.takeOffSpeed * tempMotionVars.liftSaturationFactor;
+        double span = saturation * saturation - stall * stall;
+        if (span <= 1.0E-9) {
+            return 1;
+        }
+        return Math.min((speed * speed - stall * stall) / span, 1.0);
+    }
+
+    /**
+     * Elevator effectiveness, in {@code [minPitchAuthority, 1]}. Control surfaces work on airflow,
+     * so a plane that has not reached its take-off speed cannot rotate at the full 5 deg/tick — the
+     * old model could, which is why the nose used to snap skyward the instant the ground roll
+     * reached 0.3 b/t. At and above the take-off speed this returns 1 and nothing changes.
+     */
+    protected float getPitchAuthority(TempMotionVars tempMotionVars) {
+        if (tempMotionVars.takeOffSpeed <= 0) {
+            return 1.0f;
+        }
+        return Mth.clamp((float) (getDeltaMovement().length() / tempMotionVars.takeOffSpeed),
+            tempMotionVars.minPitchAuthority, 1.0f);
+    }
+
+    /**
+     * Vanilla {@code Entity.maxUpStep()} is 0 for everything that is not a {@code LivingEntity}, and
+     * {@code Entity.collide()} only considers its step-up branch when {@code maxUpStep() > 0}. A
+     * plane rolling for take-off was therefore stopped dead by a slab, a dirt path edge or a
+     * farmland block — and {@code horizontalCollision} then fires the crash check. Buying half a
+     * block of step height is what the {@code setOnGround(true)} call in front of {@code move()}
+     * has always been trying to do; without this override that call does nothing at all.
+     *
+     * <p>Deliberately restricted to taxi speeds (horizontal speed below 0.5 b/t, i.e. below the
+     * whole ground-roll range) so that flying into terrain still collides — and still crashes —
+     * exactly as before.
+     */
+    @Override
+    public float maxUpStep() {
+        return getDeltaMovement().horizontalDistanceSqr() < 0.25 ? 0.6F : 0.0F;
     }
 
     protected Quaternionf tickRotateMotion(TempMotionVars tempMotionVars, Quaternionf q, Vec3 motion) {
@@ -892,7 +1050,7 @@ public class PlaneEntity extends Entity {
         d = 1 - d;
         //            speed = getMotion().length()*(d);
         double speed = getDeltaMovement().length();
-        double lift = Math.min(speed * tempMotionVars.liftFactor, tempMotionVars.maxLift) * d;
+        double lift = tempMotionVars.maxLift * getLiftRatio(tempMotionVars, speed) * d;
         if (getHealth() <= 0) {
             lift = 0;
         }
@@ -920,11 +1078,10 @@ public class PlaneEntity extends Entity {
     }
 
     public Vector3f transformPos(Vector3f relPos) {
-        // toEulerAngles() only reads its argument, so the scratch buffer never escapes.
-        EulerAngles angles = toEulerAngles(getQ_Client(transformQScratch));
-        angles.yaw = -angles.yaw;
-        angles.roll = -angles.roll;
-        relPos.rotate(toQuaternionf(angles.yaw, angles.pitch, angles.roll));
+        // toEulerAngles() only reads its argument, so the scratch buffer never escapes. Neither the
+        // angles nor the quaternion outlive this call, so both come from per-entity scratch.
+        EulerAngles angles = toEulerAngles(getQ_Client(transformQScratch), transformAngles);
+        relPos.rotate(toQuaternionf(-angles.yaw, angles.pitch, -angles.roll, transformRotScratch));
         return relPos;
     }
 
@@ -952,6 +1109,9 @@ public class PlaneEntity extends Entity {
         input.getString("material").ifPresent(this::setMaterial);
 
         deserializeUpgrades(input);
+
+        // autopilot: restore an in-progress route so a flight survives a restart.
+        PlaneAutopilot.load(this, input);
 
         setQ(MathUtil.toQuaternionf(getYRot(), getXRot(), 0));
     }
@@ -998,6 +1158,22 @@ public class PlaneEntity extends Entity {
         output.putFloat("max_speed", entityData.get(MAX_SPEED));
         output.putString("material", entityData.get(MATERIAL));
         writeUpgrades(output);
+
+        // autopilot: persist an in-progress route (strike flights deliberately write nothing).
+        if (autopilot != null) {
+            autopilot.save(output);
+        }
+    }
+
+    // autopilot: releasing the runway reservation and the traffic slot when the aircraft goes away,
+    // so a destroyed plane never keeps a runway blocked or an autopilot slot allocated.
+    @Override
+    public void remove(RemovalReason reason) {
+        if (autopilot != null && autopilot.isActive()) {
+            autopilot.reportOutcome(this);
+            autopilot.stop(this);
+        }
+        super.remove(reason);
     }
 
     private void writeUpgrades(ValueOutput output) {
@@ -1070,8 +1246,9 @@ public class PlaneEntity extends Entity {
     @Override
     protected void checkFallDamage(double y, boolean onGroundIn, BlockState state, BlockPos pos) {
         if ((onGroundIn || isOnWater())) {
-            final double y1 = transformPos(new Vector3f(0, 1, 0)).y();
-            if (y1 < Math.cos(Math.toRadians(getLandingAngle()))) {
+            // PlaneCollisions.upY(), not transformPos(): transformPos reads Q_Client, which on the
+            // server is only refreshed by RotationPacket and is stale for an unmanned plane.
+            if (PlaneCollisions.upY(this) < Math.cos(Math.toRadians(getLandingAngle()))) {
                 state.getBlock().fallOn(level(), state, pos, this, getDeltaMovement().length() * 5);
             }
             fallDistance = 0.0F;
@@ -1084,10 +1261,7 @@ public class PlaneEntity extends Entity {
 
     @Override
     public boolean causeFallDamage(double fallDistance, float damageMultiplier, DamageSource p_146830_) {
-        if (degreesDifferenceAbs(rotationRoll, 0) > 45) {
-            crash((float) (fallDistance * damageMultiplier));
-        }
-        return false;
+        return PlaneCollisions.causeFallDamage(this, fallDistance, damageMultiplier);
     }
 
     public void crash(float damage) {
@@ -1109,9 +1283,31 @@ public class PlaneEntity extends Entity {
         return onGround() || onGroundTicks > 1;
     }
 
+    private int waterCacheTick = -1;
+    private int waterCacheX;
+    private int waterCacheY;
+    private int waterCacheZ;
+    private boolean waterCacheValue;
+
+    /**
+     * A single {@code tick()} used to call this up to five times (the ground/air test, tickRoll,
+     * twice in tickRotateMotion, plus checkFallDamage during move()), each one allocating a BlockPos
+     * and doing a full chunk lookup for the same block. Memoised per tick <em>and</em> per block
+     * position, so a moving plane still re-samples the moment it crosses a block boundary and a
+     * stationary one still notices water being placed under it within a tick.
+     */
     public boolean isOnWater() {
-        Vec3 pos = position();
-        return level().getBlockState(new BlockPos(Mth.floor(pos.x), Mth.floor(pos.y + 0.4), Mth.floor(pos.z))).getFluidState().is(FluidTags.WATER);
+        int x = Mth.floor(getX());
+        int y = Mth.floor(getY() + 0.4);
+        int z = Mth.floor(getZ());
+        if (waterCacheTick != tickCount || waterCacheX != x || waterCacheY != y || waterCacheZ != z) {
+            waterCacheTick = tickCount;
+            waterCacheX = x;
+            waterCacheY = y;
+            waterCacheZ = z;
+            waterCacheValue = level().getBlockState(new BlockPos(x, y, z)).getFluidState().is(FluidTags.WATER);
+        }
+        return waterCacheValue;
     }
 
     public boolean canAddUpgrade(UpgradeType upgradeType) {
@@ -1403,7 +1599,25 @@ public class PlaneEntity extends Entity {
         double maxPushSpeed;
         double takeOffSpeed;
         float maxLift;
+        /**
+         * @deprecated superseded by {@link #stallSpeedFactor} / {@link #liftSaturationFactor}.
+         * The old lift law was {@code min(speed * liftFactor, maxLift)}, which saturated at
+         * {@code speed = 0.2} — below the take-off speed — so a plane crawling at 0.2 b/t got
+         * exactly the same lift as one at cruise. Kept so third-party subclasses still compile.
+         */
+        @Deprecated
         double liftFactor;
+        /**
+         * Airspeed at which the wings stop working, as a fraction of {@link #takeOffSpeed}.
+         * Below it lift is zero and the plane mushes down instead of flying.
+         */
+        double stallSpeedFactor;
+        /** Airspeed at which lift reaches {@link #maxLift}, as a fraction of {@link #takeOffSpeed}. */
+        double liftSaturationFactor;
+        /** Floor on elevator authority when the plane is far below its take-off speed. */
+        float minPitchAuthority;
+        /** Floor on nose-wheel / rudder authority when the plane is standing still. */
+        double minGroundSteering;
         double gravity;
         double drag;
         double dragMul;
@@ -1427,6 +1641,10 @@ public class PlaneEntity extends Entity {
             takeOffSpeed = 0.3;
             maxLift = 2;
             liftFactor = 10;
+            stallSpeedFactor = 0.55;
+            liftSaturationFactor = 1.3;
+            minPitchAuthority = 0.35f;
+            minGroundSteering = 0.2;
             gravity = -0.03;
             drag = 0.001;
             dragMul = 0.0005;

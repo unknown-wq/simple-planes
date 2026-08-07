@@ -1,0 +1,60 @@
+package xyz.przemyk.simpleplanes.autopilot;
+
+import com.mojang.serialization.Codec;
+
+/**
+ * Flight-director state machine states.
+ *
+ * <pre>
+ * IDLE ──► TAKEOFF ──► CLIMB ──► CRUISE ──► DESCENT ──► APPROACH ──► FINAL ──► FLARE ──► ROLLOUT ──► IDLE
+ *                                  │            ▲          │  ▲                 │
+ *                                  │            └── HOLD ◄──┘  └──── GO_AROUND ◄─┘
+ *                                  └──► STRIKE (one-way attack run, no landing)
+ * </pre>
+ */
+public enum AutopilotMode {
+    IDLE("idle"),
+    TAKEOFF("takeoff"),
+    CLIMB("climb"),
+    CRUISE("cruise"),
+    DESCENT("descent"),
+    APPROACH("approach"),
+    FINAL("final"),
+    FLARE("flare"),
+    ROLLOUT("rollout"),
+    HOLD("hold"),
+    GO_AROUND("go_around"),
+    STRIKE("strike");
+
+    private static final AutopilotMode[] BY_ID = values();
+    public static final Codec<AutopilotMode> CODEC = Codec.STRING.xmap(AutopilotMode::byName, AutopilotMode::getName);
+
+    private final String name;
+
+    AutopilotMode(String name) {
+        this.name = name;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public static AutopilotMode byName(String name) {
+        for (AutopilotMode mode : BY_ID) {
+            if (mode.name.equals(name)) {
+                return mode;
+            }
+        }
+        return IDLE;
+    }
+
+    /** Modes in which the aircraft is committed to a runway and must hold the reservation. */
+    public boolean usesRunway() {
+        return this == APPROACH || this == FINAL || this == FLARE || this == ROLLOUT || this == TAKEOFF;
+    }
+
+    /** Modes where the wings must stay level (ground roll, touchdown). */
+    public boolean requiresWingsLevel() {
+        return this == FINAL || this == FLARE || this == ROLLOUT || this == TAKEOFF;
+    }
+}
