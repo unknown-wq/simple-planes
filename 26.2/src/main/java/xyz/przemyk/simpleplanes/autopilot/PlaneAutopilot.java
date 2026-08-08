@@ -11,6 +11,7 @@ import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
+import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
 import java.util.Optional;
 
@@ -56,11 +57,15 @@ public class PlaneAutopilot {
     private final TerrainScanner scanner = new TerrainScanner();
     private @Nullable Airfield landingAirfield;
     private @Nullable RunwayEnd landingEnd;
+    /** Runway this sortie departs from, resolved once at launch; null for an airborne launch. */
+    private @Nullable RunwayEnd departureEnd;
     private @Nullable Vec3 holdFix;
     private double holdAngle;
 
     private int ticks;
     private int modeTicks;
+    /** Consecutive ticks spent on the ground in a mode that is meant to be airborne. */
+    private int groundedTicks;
 
     /** Only used for messages; never persisted, so a reloaded flight simply flies silently. */
     private @Nullable Player owner;
@@ -85,6 +90,12 @@ public class PlaneAutopilot {
     private boolean cmdTerrainFollow;
     private double cmdMaxClimbAngle;
     private double cmdMaxDescentAngle;
+    /** Lowest throttle this mode tolerates while airborne; 0 only where idling is the point. */
+    private int cmdMinThrottle;
+    /** Highest throttle this mode may command. Raised for a boosted strike, lowered for a taxi. */
+    private int cmdMaxThrottle;
+    /** Hold the elevator at neutral rather than tracking an attitude. Ground manoeuvring only. */
+    private boolean cmdNeutralPitch;
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -98,19 +109,34 @@ public class PlaneAutopilot {
         this.gatesDisabled = false;
         this.landingAirfield = null;
         this.landingEnd = null;
+        this.departureEnd = null;
         this.holdFix = null;
         this.anglesInitialised = false;
-        if (!active) {
-            active = true;
-            RunwayOccupancy.onAutopilotActivated();
-        }
+        this.outcomeReported = false;
+        active = true;
+        AutopilotRegistry.register(plane);
+
         if (flightPlan.kind() == FlightPlan.Kind.STRIKE) {
             setMode(plane, AutopilotMode.STRIKE);
+            return;
+        }
+        departureEnd = resolveDeparture(plane, flightPlan);
+        if (departureEnd != null) {
+            setMode(plane, AutopilotMode.TAXI);
         } else if (plane.getOnGround()) {
             setMode(plane, AutopilotMode.TAKEOFF);
         } else {
             setMode(plane, AutopilotMode.CLIMB);
         }
+    }
+
+    /** The runway a ground departure rolls from, or null when the flight starts in the air. */
+    private static @Nullable RunwayEnd resolveDeparture(PlaneEntity plane, FlightPlan plan) {
+        if (plan.departureAirfield() == null || !(plane.level() instanceof ServerLevel serverLevel)) {
+            return null;
+        }
+        Airfield airfield = AutopilotSavedData.get(serverLevel).get(plan.departureAirfield());
+        return airfield == null ? null : Airfield.departureEnd(serverLevel, airfield);
     }
 
     /**
@@ -141,10 +167,8 @@ public class PlaneAutopilot {
     }
 
     public void stop(PlaneEntity plane) {
-        if (active) {
-            active = false;
-            RunwayOccupancy.onAutopilotDeactivated();
-        }
+        active = false;
+        AutopilotRegistry.unregister(plane);
         RunwayOccupancy.releaseAll(plane);
         mode = AutopilotMode.IDLE;
         moveStrafing = 0;
@@ -229,8 +253,12 @@ public class PlaneAutopilot {
         cmdTerrainFollow = true;
         cmdMaxClimbAngle = AutopilotConfig.MAX_CLIMB_ANGLE;
         cmdMaxDescentAngle = AutopilotConfig.MAX_DESCENT_ANGLE;
+        cmdMinThrottle = AutopilotConfig.MIN_AIRBORNE_THROTTLE;
+        cmdMaxThrottle = PlaneEntity.MAX_THROTTLE;
+        cmdNeutralPitch = false;
 
         switch (mode) {
+            case TAXI -> tickTaxi(plane);
             case TAKEOFF -> tickTakeoff(plane);
             case CLIMB -> tickClimb(plane);
             case CRUISE -> tickCruise(plane);
@@ -249,8 +277,39 @@ public class PlaneAutopilot {
             return;
         }
 
+        if (checkGrounded(plane)) {
+            return;
+        }
+
         applyTerrainFollowing(plane);
         applyControls(plane);
+    }
+
+    /**
+     * Ends a flight that has quietly arrived on the ground in a mode that is supposed to be in the
+     * air.
+     *
+     * <p>An aircraft that mushes into a field does not stop: the flight director keeps commanding a
+     * cruise altitude it can no longer reach, the aircraft trundles along the surface at taxi speed,
+     * and {@code /autopilot status} goes on reporting {@code cruise} indefinitely. That is both
+     * useless to watch and impossible to assert on, so it is called what it is.
+     *
+     * @return true when the flight has been terminated and nothing else should run this tick
+     */
+    private boolean checkGrounded(PlaneEntity plane) {
+        if (mode.isGroundPhase() || mode == AutopilotMode.FLARE || !plane.getOnGround()) {
+            groundedTicks = 0;
+            return false;
+        }
+        if (++groundedTicks < AutopilotConfig.GROUNDED_TIMEOUT) {
+            return false;
+        }
+        outcomeReported = true;
+        AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " came down at "
+            + Math.round(plane.getX()) + ", " + Math.round(plane.getY()) + ", " + Math.round(plane.getZ())
+            + " in " + mode.getName() + ".");
+        stop(plane);
+        return true;
     }
 
     /**
@@ -275,9 +334,64 @@ public class PlaneAutopilot {
 
     // ------------------------------------------------------------------ modes
 
+    /**
+     * Ground manoeuvring from the parking spot to the departure threshold.
+     *
+     * <p>The only phase that steers the aircraft on the ground without trying to fly it. It is
+     * deliberately two-stage: track to a lineup point on the extended centreline behind the
+     * threshold, then stop tracking a point and simply hold the runway heading, because chasing a
+     * point the aircraft is nearly on top of makes the nosewheel hunt. The take-off is released only
+     * once the aircraft is genuinely straight, which is what makes the departure roll usable.
+     *
+     * <p>Nothing here moves the aircraft: it is throttle, the same nosewheel steering the roll-out
+     * uses, and the elevator held at neutral.
+     */
+    private void tickTaxi(PlaneEntity plane) {
+        if (departureEnd == null) {
+            setMode(plane, AutopilotMode.TAKEOFF);
+            return;
+        }
+        cmdGroundSteer = true;
+        cmdBankLimit = 0;
+        cmdTerrainFollow = false;
+        cmdSpeed = AutopilotConfig.TAXI_SPEED;
+        cmdMinThrottle = 0;
+        cmdMaxThrottle = AutopilotConfig.TAXI_MAX_THROTTLE;
+        // Elevator strictly neutral, and this is not cosmetic. A parked plane rests at
+        // PlaneEntity#getGroundPitch (5 degrees nose-up), so commanding a level attitude leaves the
+        // pitch controller permanently holding nose-down — and PlaneEntity#tickOnGround reads a
+        // negative pitch input as reverse thrust (push = -groundPush). The aircraft taxied smoothly
+        // backwards away from the runway at 0.13 blocks/tick, facing the right way the whole time.
+        cmdNeutralPitch = true;
+
+        double runwayHeading = departureEnd.landingHeading();
+        Vec3 lineup = departureEnd.threshold();
+        double distance = AutopilotMath.horizontalDistance(plane.position(), lineup);
+
+        if (distance > AutopilotConfig.TAXI_LINEUP_RADIUS) {
+            cmdHeading = AutopilotMath.headingTo(plane.position(), lineup);
+            return;
+        }
+
+        // On the threshold: stop chasing the point, line up on the runway and wait until straight.
+        cmdHeading = runwayHeading;
+        double headingError = Math.abs(AutopilotMath.angleDelta(plane.getYRot(), runwayHeading));
+        if (headingError <= AutopilotConfig.TAXI_ALIGNED_ERROR) {
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " lined up on "
+                + departureEnd.airfield().name() + "/" + departureEnd.designator() + ", departing.");
+            setMode(plane, AutopilotMode.TAKEOFF);
+        } else if (modeTicks > AutopilotConfig.TAXI_TIMEOUT) {
+            // Never leave an aircraft creeping round a threshold forever; take the runway as it is.
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId()
+                + " could not line up cleanly, departing anyway.");
+            setMode(plane, AutopilotMode.TAKEOFF);
+        }
+    }
+
     private void tickTakeoff(PlaneEntity plane) {
-        double heading = landingEnd != null ? landingEnd.landingHeading() : plane.getYRot();
-        if (landingEnd == null && plan != null && plan.hasWaypoints()) {
+        RunwayEnd runway = departureEnd != null ? departureEnd : landingEnd;
+        double heading = runway != null ? runway.landingHeading() : plane.getYRot();
+        if (runway == null && plan != null && plan.hasWaypoints()) {
             Vec3 waypoint = plan.currentWaypoint();
             if (waypoint != null) {
                 heading = AutopilotMath.headingTo(plane.position(), waypoint);
@@ -289,9 +403,21 @@ public class PlaneAutopilot {
         cmdSpeed = AutopilotConfig.STRIKE_SPEED;
         cmdTerrainFollow = false;
 
-        double speed = plane.getDeltaMovement().length();
-        // Hold the nose down until the aircraft is actually flying, then rotate.
-        cmdPitchOverride = speed >= AutopilotConfig.ROTATE_SPEED ? 12.0 : 0.0;
+        // Elevator aft for the whole roll, exactly as a real departure is flown, and not only for
+        // looks. PlaneEntity#tickOnGround reads the pitch input three ways: a positive input levels
+        // the aircraft on its wheels (which removes the static-friction penalty that divides the
+        // thrust by five while the nose sits at the 5-degree resting attitude) and guarantees at
+        // least groundPush, while a negative input is reverse thrust.
+        //
+        // The previous "hold the nose down until flying speed, then rotate" did the opposite of what
+        // it says: the resting ground attitude is +5 degrees, so commanding 0 held the elevator
+        // permanently forward and the take-off roll never accelerated past 0.13 blocks/tick against
+        // a 0.35 rotate speed. Nothing caught it because nothing had ever departed from a standstill
+        // before — routes and strikes are both launched in the air.
+        //
+        // Holding it aft cannot rotate the aircraft early: tickOnGround returns speedingUp = false
+        // below takeOffSpeed, and PlaneEntity#tick only runs tickPitch when it is true.
+        cmdPitchOverride = 12.0;
 
         double agl = plane.position().y - groundBelow(plane);
         if (!plane.getOnGround() && agl > AutopilotConfig.TAKEOFF_CLEAR_HEIGHT) {
@@ -349,6 +475,10 @@ public class PlaneAutopilot {
         Vec3 position = plane.position();
         cmdHeading = AutopilotMath.headingTo(position, target);
         cmdSpeed = AutopilotConfig.STRIKE_SPEED;
+        // A strike aircraft carries a booster, which raises the throttle ceiling from 5 to 10. The
+        // throttle loop clamps to this, so without it the loop would quietly pull the lever back to
+        // 5 and the run would arrive slow.
+        cmdMaxThrottle = BoosterUpgrade.MAX_THROTTLE;
 
         double distance = AutopilotMath.horizontalDistance(position, target);
 
@@ -428,6 +558,11 @@ public class PlaneAutopilot {
         cmdHeading = AutopilotMath.headingTo(plane.position(), initialFix);
         cmdTargetAltitude = initialFix.y;
         cmdSpeed = AutopilotConfig.APPROACH_SPEED;
+        // Idle is allowed from here to the ground: throttle 0 puts brakesMul = 5 on the drag
+        // polynomial, and that airbrake is the only way to slow down on an 8-degree slope. It is
+        // safe now that the throttle loop regulates horizontal speed rather than total speed, so a
+        // sink rate can no longer masquerade as airspeed and latch the lever shut.
+        cmdMinThrottle = 0;
 
         if (AutopilotMath.horizontalDistance(plane.position(), initialFix) < 50) {
             if (RunwayOccupancy.tryOccupy(plane.level(), landingAirfield.name(), plane)) {
@@ -470,12 +605,16 @@ public class PlaneAutopilot {
         cmdBankLimit = isFinal ? 8 : 18;
         cmdTerrainFollow = false;
         cmdMaxDescentAngle = AutopilotConfig.GLIDE_SLOPE_DEGREES * 2.0;
+        // As in DESCENT: the approach needs to be able to close the throttle, or it arrives fast,
+        // floats down the whole strip and goes around. Measured before this: 0.94 blocks/tick on
+        // short final against a commanded 0.40, three go-arounds, no landing.
+        cmdMinThrottle = 0;
 
         double agl = position.y - groundBelow(plane);
 
         // Flew past the threshold without getting down: go around.
         if (distanceToThreshold < -5) {
-            goAround(plane);
+            goAround(plane, "crossed the threshold still airborne");
             return;
         }
 
@@ -484,8 +623,7 @@ public class PlaneAutopilot {
         if (!gatesDisabled && agl > 15 && ticks % 20 == 0) {
             Vec3 aim = landingEnd.aimPoint();
             if (!TerrainScanner.pathClear(plane.level(), plane, position, new Vec3(aim.x, aim.y + 2, aim.z))) {
-                AutopilotFeedback.overlay(owner, "Plane #" + plane.getId() + ": terrain on approach, going around");
-                goAround(plane);
+                goAround(plane, "terrain in the approach corridor");
                 return;
             }
         }
@@ -497,9 +635,12 @@ public class PlaneAutopilot {
             return;
         }
 
-        if (!gatesDisabled && !gatesSatisfied(plane, lateral, agl)) {
-            goAround(plane);
-            return;
+        if (!gatesDisabled) {
+            String failure = gateFailure(plane, lateral, agl);
+            if (failure != null) {
+                goAround(plane, failure);
+                return;
+            }
         }
         if (agl <= AutopilotConfig.FLARE_HEIGHT || plane.getOnGround()) {
             setMode(plane, AutopilotMode.FLARE);
@@ -511,22 +652,27 @@ public class PlaneAutopilot {
      * to mean anything. Any failure sends it around rather than letting it touch down skewed —
      * which {@code PlaneEntity#causeFallDamage} would turn into an explosion anyway.
      */
-    private boolean gatesSatisfied(PlaneEntity plane, double lateral, double agl) {
+    private @Nullable String gateFailure(PlaneEntity plane, double lateral, double agl) {
         if (agl > AutopilotConfig.GATE_CHECK_HEIGHT) {
-            return true;
+            return null;
         }
         double headingError = Math.abs(AutopilotMath.angleDelta(plane.getYRot(), landingEnd.landingHeading()));
         if (headingError > AutopilotConfig.GATE_HEADING_ERROR) {
-            return false;
+            return String.format("heading %.0f deg off the runway", headingError);
         }
         double allowedLateral = Math.max(AutopilotConfig.GATE_LATERAL_OFFSET, landingAirfield.width());
         if (Math.abs(lateral) > allowedLateral) {
-            return false;
+            return String.format("%.0f blocks off the centreline", Math.abs(lateral));
         }
-        if (Math.abs(Mth.wrapDegrees(plane.rotationRoll)) > AutopilotConfig.GATE_BANK) {
-            return false;
+        double bank = Math.abs(Mth.wrapDegrees(plane.rotationRoll));
+        if (bank > AutopilotConfig.GATE_BANK) {
+            return String.format("banked %.0f deg", bank);
         }
-        return -plane.getDeltaMovement().y <= AutopilotConfig.GATE_SINK_RATE;
+        double sink = -plane.getDeltaMovement().y;
+        if (sink > AutopilotConfig.GATE_SINK_RATE) {
+            return String.format("sinking %.2f blocks/tick", sink);
+        }
+        return null;
     }
 
     private void tickFlare(PlaneEntity plane) {
@@ -539,6 +685,10 @@ public class PlaneAutopilot {
         cmdBankLimit = 0;
         cmdSpeed = 0;
         cmdTerrainFollow = false;
+        // The flare is the one place a closed throttle is wanted: the aircraft is a few blocks up,
+        // over the runway, and meant to stop flying.
+        cmdMinThrottle = 0;
+        cmdMaxThrottle = 0;
         plane.setThrottle(0);
 
         if (plane.getOnGround()) {
@@ -563,10 +713,21 @@ public class PlaneAutopilot {
         cmdSpeed = 0;
         cmdPitchOverride = 0.0;
         cmdTerrainFollow = false;
+        cmdMinThrottle = 0;
+        cmdMaxThrottle = 0;
         plane.setThrottle(0);
 
         if (plane.getDeltaMovement().length() < AutopilotConfig.ROLLOUT_STOP_SPEED && plane.getOnGround()) {
-            AutopilotFeedback.overlay(owner, "Plane #" + plane.getId() + ": landed at " + landingAirfield.name());
+            // report(), not overlay(): a sortie flown from the console has no owning player, and
+            // overlay() no-ops when there is none — which is why a headless landing used to end in
+            // silence with no way to tell it from an aircraft that simply vanished.
+            outcomeReported = true;
+            long down = Math.round(Math.abs(AutopilotMath.alongTrack(
+                landingEnd.threshold(), landingEnd.landingHeading(), plane.position())));
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " landed at "
+                + landingAirfield.name() + "/" + landingEnd.designator() + ", "
+                + Math.round(plane.getX()) + ", " + Math.round(plane.getY()) + ", " + Math.round(plane.getZ())
+                + " (" + down + (down == 1 ? " block" : " blocks") + " down the runway).");
             stop(plane);
         }
     }
@@ -602,19 +763,23 @@ public class PlaneAutopilot {
         }
     }
 
-    private void goAround(PlaneEntity plane) {
+    private void goAround(PlaneEntity plane, String reason) {
         goArounds++;
+        // report(), not overlay(): a headless sortie has no owning player, and a landing that never
+        // happens is exactly the thing that needs to say why.
+        AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " going around ("
+            + goArounds + "/" + AutopilotConfig.MAX_GO_AROUNDS + "): " + reason + ".");
         if (landingAirfield != null) {
             RunwayOccupancy.release(plane.level(), landingAirfield.name(), plane);
         }
         if (goArounds == AutopilotConfig.MAX_GO_AROUNDS && landingEnd != null) {
             // Try the other direction once before giving up on a clean approach.
             landingEnd = landingEnd.opposite();
-            AutopilotFeedback.overlay(owner, "Plane #" + plane.getId() + ": switching to runway " + landingEnd.designator());
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " switching to runway " + landingEnd.designator() + ".");
         } else if (goArounds > AutopilotConfig.MAX_GO_AROUNDS) {
             // Out of patience: commit to the next approach even if it is untidy.
             gatesDisabled = true;
-            AutopilotFeedback.overlay(owner, "Plane #" + plane.getId() + ": committing to landing");
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " committing to the landing.");
         }
         setMode(plane, AutopilotMode.GO_AROUND);
     }
@@ -647,6 +812,13 @@ public class PlaneAutopilot {
         plane.setYawRight(AutopilotMath.bangBang(headingError, yawRate,
             AutopilotConfig.YAW_ACCEL * rotationMultiplier, AutopilotConfig.YAW_DEADBAND));
 
+        // Flight path angle: the direction the aircraft is actually going, as opposed to the
+        // direction it is pointing. The difference between the two is the angle of attack, and it is
+        // what the whole anti-stall limiter below is about.
+        double flightPathAngle = horizontalSpeed > 0.02
+            ? Math.toDegrees(Math.atan2(velocity.y, horizontalSpeed))
+            : pitch;
+
         // ---- pitch: altitude -> vertical speed -> flight path angle -> attitude
         double desiredPitch;
         if (cmdPitchOverride != null) {
@@ -657,14 +829,37 @@ public class PlaneAutopilot {
                 -AutopilotConfig.MAX_SINK_RATE, AutopilotConfig.MAX_CLIMB_RATE);
             double desiredAngle = Math.toDegrees(Math.atan2(desiredVerticalSpeed, Math.max(horizontalSpeed, 0.05)));
             desiredAngle = Mth.clamp(desiredAngle, -cmdMaxDescentAngle, cmdMaxClimbAngle);
-            double currentAngle = horizontalSpeed > 0.02
-                ? Math.toDegrees(Math.atan2(velocity.y, horizontalSpeed))
-                : pitch;
-            desiredPitch = Mth.clamp(pitch + (desiredAngle - currentAngle) * AutopilotConfig.FPA_TO_PITCH,
+            desiredPitch = Mth.clamp(pitch + (desiredAngle - flightPathAngle) * AutopilotConfig.FPA_TO_PITCH,
                 -AutopilotConfig.MAX_PITCH, AutopilotConfig.MAX_PITCH);
         }
-        plane.setPitchUp(AutopilotMath.bangBang(desiredPitch - pitch, pitchRate,
-            AutopilotConfig.PITCH_ACCEL * rotationMultiplier, AutopilotConfig.PITCH_DEADBAND));
+
+        // ---- angle of attack limiter: the one rule that stops the aircraft falling out of the sky
+        //
+        // The cascade above is written in terms of altitude, and an aircraft that is sinking because
+        // it has stalled looks exactly like an aircraft that is sinking because it is too high — so
+        // the cascade answers both with nose-up. That is a divergence: more nose-up is more angle of
+        // attack, PlaneEntity#tickRotateMotion scales lift by 1 - (aoa/60)^2, the lift goes to zero
+        // at 60 degrees, the sink rate grows, and the cascade asks for more nose-up again. Field
+        // telemetry of the failure: pitch +25 against a flight path of -79 degrees, 104 degrees of
+        // angle of attack, no lift at all, 1.09 blocks/tick of sink, 33 blocks above the ground.
+        //
+        // Referencing the commanded attitude to the *current flight path* instead of to the horizon
+        // makes the same limiter serve as the stall recovery: deep in a stall the flight path is
+        // steeply down, so the clamp forces the nose down with it, the wings start working again,
+        // and the aircraft flies out. Not applied on the ground, where the flight path angle is
+        // meaningless and the take-off rotation legitimately holds the nose off the velocity vector.
+        if (!onGround && velocity.lengthSqr() > 0.01) {
+            desiredPitch = Mth.clamp(desiredPitch,
+                flightPathAngle - AutopilotConfig.MAX_ANGLE_OF_ATTACK,
+                flightPathAngle + AutopilotConfig.MAX_ANGLE_OF_ATTACK);
+        }
+
+        if (cmdNeutralPitch) {
+            plane.setPitchUp((byte) 0);
+        } else {
+            plane.setPitchUp(AutopilotMath.bangBang(desiredPitch - pitch, pitchRate,
+                AutopilotConfig.PITCH_ACCEL * rotationMultiplier, AutopilotConfig.PITCH_DEADBAND));
+        }
 
         // ---- roll in the air, nosewheel steering on the ground
         if (onGround || cmdGroundSteer) {
@@ -672,41 +867,134 @@ public class PlaneAutopilot {
             // while on the ground, so a positive strafe steers left: use the opposite sign.
             moveStrafing = headingError > 1.0 ? -1f : headingError < -1.0 ? 1f : 0f;
         } else {
+            // A banked turn needs 1/cos(bank) times the lift of level flight, and a slow aircraft has
+            // no lift to spare — rolling into a hard turn at low speed is the other way into the
+            // stall above. Give the bank up as the speed decays, and level the wings outright at
+            // stall speed.
+            double bankLimit = cmdBankLimit;
+            if (horizontalSpeed < AutopilotConfig.BANK_LIMIT_SPEED) {
+                bankLimit *= Mth.clamp(
+                    (horizontalSpeed - AutopilotConfig.MIN_FLYING_SPEED)
+                        / (AutopilotConfig.BANK_LIMIT_SPEED - AutopilotConfig.MIN_FLYING_SPEED),
+                    0.0, 1.0);
+            }
             // Positive rotationRoll is a left bank (positive strafe is the player's left input),
             // so a right turn wants a negative roll.
             double desiredRoll = Mth.clamp(-headingError * AutopilotConfig.BANK_PER_HEADING_ERROR,
-                -cmdBankLimit, cmdBankLimit);
+                -bankLimit, bankLimit);
             double rollError = AutopilotMath.angleDelta(roll, desiredRoll);
             moveStrafing = AutopilotMath.bangBang(rollError, rollRate,
                 AutopilotConfig.ROLL_ACCEL, AutopilotConfig.ROLL_DEADBAND);
         }
         moveForward = 0;
 
-        // ---- throttle
-        if (ticks % AutopilotConfig.THROTTLE_INTERVAL == 0) {
-            double speed = velocity.length();
-            int throttle = plane.getThrottle();
-            if (speed < cmdSpeed - AutopilotConfig.SPEED_DEADBAND && throttle < PlaneEntity.MAX_THROTTLE) {
-                plane.setThrottle(throttle + 1);
-            } else if (speed > cmdSpeed + AutopilotConfig.SPEED_DEADBAND && throttle > 0) {
-                plane.setThrottle(throttle - 1);
-            }
-        }
+        applyThrottle(plane, horizontalSpeed, onGround, roll, headingError);
 
         previousYaw = yaw;
         previousPitch = pitch;
         previousRoll = roll;
     }
 
+    /**
+     * The engine lever.
+     *
+     * <p>Three things here are not what the first version did, and each of them was a way to lose an
+     * aircraft.
+     *
+     * <p><b>It is flown on horizontal speed, not on total speed.</b> The loop used to compare
+     * {@code getDeltaMovement().length()} against the commanded speed, which counts the rate of
+     * falling as though it were progress. An aircraft dropping out of a descent at 1.09 blocks/tick
+     * of sink therefore reads as <i>fast</i>, so the controller closes the throttle, so it gets
+     * slower and falls faster, so it reads faster still. That is a latch, not a control loop, and it
+     * was observed sitting in it at throttle 0 with 33 blocks of altitude left. What keeps the wings
+     * working is airspeed along the wing, so that is what is regulated.
+     *
+     * <p><b>Idle is an airbrake, not neutral.</b> {@code PlaneEntity#tickMotion} multiplies the whole
+     * drag polynomial by {@code brakesMul = 5} at throttle 0. Leaving
+     * {@link AutopilotConfig#MIN_AIRBORNE_THROTTLE} in while airborne is the difference between
+     * descending and decelerating; only the flare and the roll-out ask for a real idle.
+     *
+     * <p><b>Stall recovery cannot wait for the next scheduled adjustment.</b> Below
+     * {@link AutopilotConfig#MIN_FLYING_SPEED} the lever goes fully open on the spot rather than one
+     * notch per {@link AutopilotConfig#THROTTLE_INTERVAL} ticks, which would take 25 ticks to reach
+     * full power — longer than the aircraft has.
+     */
+    private void applyThrottle(PlaneEntity plane, double horizontalSpeed, boolean onGround,
+                               double roll, double headingError) {
+        int throttle = plane.getThrottle();
+        int floor = onGround ? 0 : cmdMinThrottle;
+
+        // Stall recovery is armed wherever there is an engine to open — including the descent and
+        // approach phases, which are allowed to idle. Only the flare and the roll-out, which set
+        // cmdMaxThrottle to 0 because stopping is the whole point, opt out.
+        if (!onGround && cmdMaxThrottle > 0 && horizontalSpeed < AutopilotConfig.MIN_FLYING_SPEED) {
+            plane.setThrottle(cmdMaxThrottle);
+            return;
+        }
+
+        // Turning costs energy, so a turn is the last moment to be closing the throttle — and it was
+        // exactly where the throttle was being closed. Measured on a 200-block out-and-back: rolling
+        // into the 180 at the far waypoint briefly pushed the speed above the cruise target (the
+        // nose comes off the velocity vector, which un-fades the thrust in
+        // PlaneEntity#tickMotion), the loop obediently wound the lever back from 5 to 1, and the
+        // aircraft came out of the turn at 0.23 blocks/tick — below flying speed — and mushed 60
+        // blocks into the ground. Hold full power until the wings are level again.
+        if (!onGround && cmdMinThrottle > 0
+            && (Math.abs(Mth.wrapDegrees(roll)) > AutopilotConfig.MANOEUVRE_BANK
+                || Math.abs(headingError) > AutopilotConfig.MANOEUVRE_HEADING_ERROR)) {
+            floor = cmdMaxThrottle;
+        }
+
+        if (ticks % AutopilotConfig.THROTTLE_INTERVAL == 0) {
+            if (horizontalSpeed < cmdSpeed - AutopilotConfig.SPEED_DEADBAND && throttle < cmdMaxThrottle) {
+                throttle++;
+            } else if (horizontalSpeed > cmdSpeed + AutopilotConfig.SPEED_DEADBAND && throttle > floor) {
+                throttle--;
+            }
+        }
+
+        int clamped = Mth.clamp(throttle, floor, cmdMaxThrottle);
+        if (clamped != plane.getThrottle()) {
+            plane.setThrottle(clamped);
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /**
-     * Keeps a 5x5 chunk bubble loaded around an aircraft so it goes on ticking far from any player.
-     * The ticket expires on its own ({@link TicketType#ENDER_PEARL} times out after 40 ticks), so
-     * nothing is leaked if the aircraft is destroyed.
+     * Keeps a chunk bubble loaded around an aircraft so it goes on ticking far from any player, and
+     * a second one on the ground it is about to fly over.
+     *
+     * <p>Two things here are not obvious and were both measured wrong before.
+     *
+     * <p><b>The radius is not the bubble.</b> {@code addTicketWithRadius(type, pos, r)} sets the
+     * centre chunk to level {@code 33 - r} and the level climbs by one per chunk outwards, while
+     * entities only tick at level 31 or below. A ticket of radius {@code r} therefore ticks entities
+     * within {@code r - 2} chunks of the centre — vanilla's ender-pearl radius of 2 ticks exactly
+     * one chunk. That is fine for a pearl, which is re-ticketed by the player, and useless for an
+     * aircraft covering 3 blocks a tick.
+     *
+     * <p><b>The lead ticket is not an optimisation.</b> Without it the aircraft is permanently
+     * flying at the edge of its own loaded area, so {@link TerrainScanner} reads
+     * {@link TerrainScanner#UNKNOWN_HEIGHT} for most of its forward profile and the terrain
+     * following degrades to "hold altitude".
+     *
+     * <p>The ticket still expires on its own ({@link TicketType#ENDER_PEARL} times out after 40
+     * ticks), so nothing is leaked when the aircraft is destroyed. Renewal is driven from
+     * {@link AutopilotRegistry} on the level tick, not from this aircraft's own tick, because an
+     * aircraft that has stopped ticking cannot renew anything.
      */
     static void keepChunksLoaded(ServerLevel level, PlaneEntity plane) {
-        level.getChunkSource().addTicketWithRadius(TicketType.ENDER_PEARL, ChunkPos.containing(plane.blockPosition()), 2);
+        ChunkPos here = ChunkPos.containing(plane.blockPosition());
+        level.getChunkSource().addTicketWithRadius(TicketType.ENDER_PEARL, here,
+            AutopilotConfig.CHUNK_TICKET_RADIUS);
+
+        Vec3 ahead = plane.position().add(plane.getDeltaMovement().scale(AutopilotConfig.CHUNK_TICKET_LEAD_TICKS));
+        ChunkPos next = new ChunkPos(Mth.floor(ahead.x) >> 4, Mth.floor(ahead.z) >> 4);
+        if (!next.equals(here)) {
+            level.getChunkSource().addTicketWithRadius(TicketType.ENDER_PEARL, next,
+                AutopilotConfig.CHUNK_TICKET_RADIUS);
+        }
     }
 
     private double groundBelow(PlaneEntity plane) {
@@ -874,7 +1162,7 @@ public class PlaneAutopilot {
         if (planOptional.isEmpty()) {
             return;
         }
-        if (!RunwayOccupancy.canActivateAnother()) {
+        if (!AutopilotRegistry.canActivateAnother()) {
             return;
         }
         PlaneAutopilot autopilot = new PlaneAutopilot();
@@ -885,7 +1173,12 @@ public class PlaneAutopilot {
         autopilot.autopilotPowered = child.getBooleanOr("powered", true);
         autopilot.persistent = true;
         autopilot.active = true;
-        RunwayOccupancy.onAutopilotActivated();
+        // A reloaded flight resumes in the air; a half-finished taxi is not worth restoring, and
+        // TAXI without a departure runway would sit on the threshold forever.
+        if (autopilot.mode == AutopilotMode.TAXI) {
+            autopilot.mode = AutopilotMode.TAKEOFF;
+        }
         plane.setAutopilot(autopilot);
+        AutopilotRegistry.register(plane);
     }
 }

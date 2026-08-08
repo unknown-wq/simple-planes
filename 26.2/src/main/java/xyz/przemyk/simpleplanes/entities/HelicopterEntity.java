@@ -53,10 +53,13 @@ public class HelicopterEntity extends LargePlaneEntity {
         if (isPowered() && entityData.get(MOVE_UP) && tempMotionVars.moveForward >= 0) {
             tempMotionVars.push += 0.01F * getThrottle();
         }
-        // Rotor thrust is vertical in the helicopter's own frame. Reuses the base class' scratch
-        // vector; transformPos() mutates and returns its argument and the result is copied into a
-        // Vec3 by tickMotion() straight away.
-        return transformPos(pushScratch.set(0, tempMotionVars.push, 0));
+        // Rotor thrust is vertical in the helicopter's own frame. transformPosPhysics(), not
+        // transformPos(), for the same reason as PlaneEntity#getTickPush: transformPos() rotates by
+        // a quaternion that is never refreshed when nobody is aboard, so an unmanned helicopter
+        // would thrust along the axis it was spawned with. Reuses the base class' scratch vector;
+        // the call mutates and returns its argument and the result is copied into a Vec3 by
+        // tickMotion() straight away.
+        return transformPosPhysics(pushScratch.set(0, tempMotionVars.push, 0));
     }
 
     @Override

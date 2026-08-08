@@ -52,8 +52,21 @@ negated to match Minecraft's "negative xRot = nose up", yaw around world Y) — 
 of `MathUtil.toQuaternionf(yaw, pitch, roll)`.
 
 Body → world transforms go through `transformPos(Vector3f)`, which negates yaw and roll (the render
-frame is mirrored relative to the physics frame) and is used for seat positions, thrust direction and
-the landing-attitude test.
+frame is mirrored relative to the physics frame) and is used for seat positions and the
+landing-attitude test.
+
+**Thrust does not go through it, and must not.** `transformPos` rotates by `Q_Client`, which on the
+server is written by nothing except `RotationPacket` — a packet sent by the player flying the plane.
+A plane with nobody aboard keeps the `Q_Client` it was created with for its whole life, while `Q` is
+rewritten from the integrated attitude at the end of every `tick()`. Building the thrust vector from
+`Q_Client`, as `getTickPush` originally did, therefore made an unmanned aircraft push in the
+direction it was **spawned** facing regardless of where its nose actually pointed: straight-line
+flight was perfect and every turn silently destroyed the aircraft's energy. `getTickPush` now uses
+`transformPosPhysics`, which picks `Q` when there is no controlling passenger. A ridden plane is
+unaffected — its `Q_Client` is refreshed every tick by the authoritative client — so this is
+specifically a fix to the server-simulated path. Measured: a 180° turnback that used to leave the
+aircraft pinned at 0.36 blocks/tick at full throttle now holds 0.75 throughout. See
+`AUTOPILOT.md`, "Thrust direction".
 
 ### 1.2 Who is authoritative
 

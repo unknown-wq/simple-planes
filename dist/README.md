@@ -11,7 +11,7 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `e78a282a85f28c77b95a3b971385c3b72a17777a3ec9eac1440ce94ecb6141e5` |
+| sha256 | `674a17c57a68aca3ac729f8e1edfe084039ba7c0a71bcf103b3690102375640f` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
@@ -93,23 +93,117 @@ by five twice. Simulating the real tick shows the original ground roll reaches t
 38 ticks at full throttle. That change has been reverted and the claim retracted; see issue B2
 in the audit.
 
-### Autopilot and route tools (new, partly verified)
+### Aircraft that turned lost all their thrust
 
-A server-side flight director with strike, route and runway-survey tools, plus
-`/autopilot strike|route|survey|airfields|status|stop`. See
+The largest bug in this build, and the cause of three separate reports: aircraft that "gradually
+lose speed", flights that stall out of a 180-degree turn, and landing descents that fall out of
+the sky.
+
+`getTickPush` builds the engine thrust vector by rotating `(0, 0, push)` out of the body frame
+using `Q_Client`. `Q_Client` is a client-side value: on the server the only thing that writes it
+is `RotationPacket`, sent by the player flying the plane. **An aircraft with nobody aboard
+therefore kept the orientation it was spawned with for its entire life and thrusted in that
+fixed direction for ever**, no matter where its nose was actually pointing.
+
+Straight-line flight looked flawless, which is why it went unnoticed: a strike launched pointing
+at its target accelerates 2.15 → 3.14 blocks/tick without a wobble. Anything that turned fell
+apart. Measured on a 200-block out-and-back, the aircraft came out of the turnback at 0.36
+blocks/tick and stayed pinned there at full throttle, descending, until it reached the ground —
+with the engine pushing backwards. The same turn now holds 0.75 → 0.78 → 0.75.
+
+The thrust vector uses the authoritative rotation when there is no controlling passenger. A plane
+with a pilot is unchanged: its `Q_Client` is refreshed every tick by the client that owns it.
+
+Three envelope protections were added on top, each after watching the aircraft leave controlled
+flight. The commanded pitch is clamped to within 20 degrees of the *current flight path* — the
+flight model zeroes wing lift at 60 degrees of angle of attack, and the altitude controller answers
+the resulting sink by asking for more nose-up, which diverges rather than oscillates. The throttle
+loop regulates *horizontal* speed, because comparing total speed counted the rate of falling as
+progress, so a stalling aircraft read as fast and the controller held the throttle shut. And the
+throttle may not be reduced while the aircraft is turning, which is where it most needs the power.
+
+### Hitting water at speed
+
+Water has no collision shape, so `Entity.move()` is never blocked by it and none of the impact
+detection above could fire: **going into the sea at any speed was free, with or without the
+Floaty Bedding upgrade**. The upgrade made it worse rather than causing it — it did
+`y = max(motion.y, 0)` every tick over water at any speed, deleting the descent outright before
+`move()` ever ran.
+
+Fluid entry is now its own rule, triggered by a boundary the aircraft is measured to have crossed
+this tick — the block at the sample point was not water before the move and is water after it —
+and charged at the velocity the aerodynamics produced, sampled before the upgrade could arrest
+it. No inference from speed history. The floats now arrest at most 0.35 blocks/tick of sink per
+tick, so a gentle water landing is exactly as free as before and a dive goes in.
+
+Measured with Floaty Bedding, wings level, out of 10 HP: free up to 0.70 blocks/tick
+(14 blocks/s), 1 HP at 0.75, 2 at 0.85, 5 at 1.00, destroyed from 1.2. Survivors float on the
+surface, so operating off water — the point of the upgrade — is unaffected.
+
+### Aircraft froze in mid-air far from any player
+
+Autopilot aircraft carried a `TicketType.ENDER_PEARL` chunk ticket of radius 2, renewed from the
+aircraft's own tick. Both halves were wrong. A ticket of radius `r` only makes chunks within
+`r - 2` of the centre tick their entities, so radius 2 is a single chunk — which an aircraft at 3
+blocks/tick leaves in five ticks. And renewing from the aircraft's own tick is circular: once it
+stops ticking it can never renew the ticket that would bring it back. Measured: an 800-block
+strike froze permanently the instant it left the force-loaded region, keeping its velocity and
+position to the decimal.
+
+Tickets are now radius 4, renewed from the server tick over a registry of live aircraft (so a
+frozen one is thawed), with a second ticket placed ahead along the flight path. An 800-block
+strike and a 2000-block airfield-to-airfield sortie both complete with no force-loading at all.
+
+`/autopilot strike` and `/autopilot route` also took their coordinates as *loaded* block
+positions, so they refused any destination outside simulation distance with "That position is
+not loaded" — that is, exactly the flights they exist to fly. `/autopilot survey` still requires
+loaded ground, correctly, because it measures real blocks.
+
+The active-aircraft counter was a `static int` that leaked a slot whenever an aircraft went away
+without running its release path — i.e. on every crash. A live server was seen reporting `19/24
+active, 2 in this dimension`, five launches from refusing everything. It is now recounted from
+the live aircraft.
+
+### Autopilot, routes and scripted sorties
+
+A server-side flight director with strike, route, sortie and runway-survey tools, plus
+`/autopilot strike|route|flight|inbound|survey|airfields|status|stop`. See
 [`../26.2/AUTOPILOT.md`](../26.2/AUTOPILOT.md).
+
+**`/autopilot flight <from> <to>` flies a complete scripted sortie between two surveyed
+airfields**: the aircraft is spawned stationary at a parking spot beside the departure runway,
+taxis to the threshold under its own steering, lines up, takes off along the surveyed runway,
+cruises with terrain clearance, and arrives on the instrument approach — glideslope, centreline,
+flare, rollout. No teleports and no synthetic velocities: the director still only moves throttle,
+pitch, yaw and roll. `/autopilot inbound <x y z> <airfield>` flies the arrival half on its own.
+
+Two ground-handling bugs had to be fixed for a departure to be possible at all, neither of which
+had ever been exercised because routes and strikes are both launched in the air. A parked plane
+rests at +5 degrees, so commanding a level attitude held the elevator permanently nose-down — and
+that is reverse thrust on the ground. The aircraft taxied smoothly *backwards* away from the
+runway, and the take-off roll stuck at 0.13 blocks/tick against a 0.35 rotate speed.
+
+Measured end to end on a dedicated server with no force-loading and no player anywhere near
+either field:
+
+```
+Plane #3 parked at airfield-1 (671, -59, 4), sortie to airfield-2 - 2000 blocks.
+Plane #3 lined up on airfield-1/36, departing.
+Plane #3 landed at airfield-2/36, 2655, -58, -6 (2 blocks down the runway).
+```
 
 Verified on a dedicated 26.2 server. A strike is launched with a booster fitted, the throttle
 open and already at attack speed pointed at the target, rather than accelerating from a
 standstill and sagging towards the ground while it does. It goes in **3-6 blocks from the
-aimpoint** 400 blocks away.
+aimpoint** 400 blocks away, and 5 blocks off over 800.
 
 Three things about the attack run changed in this build, all from the same report — the aircraft
 slowed down, hit a tree without breaking, and started down far too early:
 
 - **It no longer loses speed.** The speed ceiling is not a limiter but the point where
   `tickMotion` fades the thrust out, so raising it moves the balance against the drag curve.
-  Measured over a 400-block run the speed now rises monotonically 2.30 → 3.13 blocks/tick.
+  Measured over an 800-block run the speed rises monotonically 2.15 → 2.87 on the run-in and
+  3.14 in the dive, and never falls.
 - **The run-in is flown 100 blocks above the ground**, not 35 above the target. This is what
   actually fixes the aircraft parked in a tree: a glancing hit on a canopy blocks only the small
   vertical part of the motion, so the impact registers as a gentle landing — which is what it
@@ -138,12 +232,10 @@ Strike #248 hit the target at 300, 80, 294 (6 blocks off).
 A runway survey reports length, width, slope, designators, threshold elevations, roughness and
 approach obstacles.
 
-**Route flights are partial.** Route aircraft now launch at flying speed (they used to spawn
-with zero airspeed and fall), and straight cruise legs fly clean, but the 180-degree turnback
-between legs and the improvised-landing descent can still bleed speed into an unrecovered stall
-and pancake in — a real impact, correctly charged by the detector, but a flying-quality bug in
-the flight director. Landings, go-arounds and holding patterns are consequently untested.
-Helicopters are out of scope.
+**Route flights now complete, including the landing.** The 180-degree turnback between legs and
+the landing descent used to bleed speed into an unrecovered stall and pancake in; both fly
+cleanly and end on a runway. See "Aircraft that turned lost all their thrust" below.
+Helicopters remain out of scope.
 
 Details: [`../26.2/PHYSICS-AUDIT.md`](../26.2/PHYSICS-AUDIT.md) and
 [`../26.2/COLLISION-DIAGNOSIS.md`](../26.2/COLLISION-DIAGNOSIS.md).

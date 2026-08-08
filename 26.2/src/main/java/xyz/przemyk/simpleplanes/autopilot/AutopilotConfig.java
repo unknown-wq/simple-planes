@@ -39,6 +39,11 @@ public final class AutopilotConfig {
     public static final double FPA_TO_PITCH = 0.8;
 
     // ---- speed schedule ----
+    /**
+     * Cruise target. The airframe's own equilibrium at full throttle is 0.76 blocks/tick — solve
+     * {@code 0.03125 * (1 - v / 0.8125) = 0.001 v^2 + 0.0005 v + 0.001} — so anything at or above
+     * that simply pins the throttle open, which is what is wanted for a cruise.
+     */
     public static final double CRUISE_SPEED = 0.80;
     public static final double CLIMB_SPEED = 0.70;
     public static final double APPROACH_SPEED = 0.50;
@@ -49,10 +54,120 @@ public final class AutopilotConfig {
     /** Ticks between throttle adjustments, to stop the engine lever from chattering. */
     public static final int THROTTLE_INTERVAL = 5;
 
+    /**
+     * Horizontal speed below which the throttle loop stops being polite and slams the lever open.
+     * <p>
+     * {@code PlaneEntity#getLiftRatio} produces zero lift below
+     * {@code takeOffSpeed * stallSpeedFactor} = 0.165 blocks/tick, so this is the stall speed with a
+     * healthy margin. Recovery has to be immediate rather than one notch per
+     * {@link #THROTTLE_INTERVAL} ticks: at one notch per 5 ticks a stalled aircraft needs 25 ticks
+     * to reach full power, and it is on the ground long before that.
+     */
+    public static final double MIN_FLYING_SPEED = 0.32;
+
+    /**
+     * Throttle never goes below this while airborne.
+     * <p>
+     * Closing the throttle completely is not "no thrust", it is an airbrake:
+     * {@code PlaneEntity#tickMotion} multiplies the whole drag polynomial by
+     * {@code brakesMul = 5} at throttle 0. Leaving one notch in keeps that off, which is the
+     * difference between a descent and a deceleration. Only {@code FLARE} and {@code ROLLOUT} —
+     * where stopping is the point, and the ground is right there — are allowed to close it.
+     */
+    public static final int MIN_AIRBORNE_THROTTLE = 1;
+
+    /**
+     * Largest angle the nose is ever allowed to sit off the velocity vector, in degrees.
+     *
+     * <p>This is the anti-stall limiter, and it is the fix for aircraft pancaking out of a turn or a
+     * landing descent. {@code PlaneEntity#tickRotateMotion} computes an angle-of-attack efficiency
+     * {@code d = 1 - min(1, aoa/60)^2} and multiplies <i>both</i> the wing lift and the rate at
+     * which the velocity vector follows the nose by it. At 60 degrees of angle of attack {@code d}
+     * is exactly zero: the wings stop working, the velocity vector stops following the nose, and the
+     * aircraft falls with the nose up and no way out. The altitude cascade then reads the growing
+     * sink rate as "too low" and commands even more nose-up, which is a divergence, not an
+     * oscillation — measured in the field at 104 degrees of angle of attack, 1.09 blocks/tick of
+     * sink and the nose 188 degrees off the commanded heading.
+     *
+     * <p>20 degrees keeps {@code d} at 0.89 or better, so the wings always work and the flight path
+     * always follows the nose.
+     */
+    public static final double MAX_ANGLE_OF_ATTACK = 20.0;
+
+    /**
+     * Bank is given up when the aircraft is slow: a level turn needs {@code 1/cos(bank)} times the
+     * lift of level flight, and lift is exactly what a slow aircraft has none of. Below
+     * {@link #MIN_FLYING_SPEED} the wings are levelled outright.
+     */
+    public static final double BANK_LIMIT_SPEED = 0.55;
+
+    /**
+     * Bank angle, in degrees, past which the aircraft is treated as manoeuvring and the throttle
+     * loop stops being allowed to reduce power. See {@code PlaneAutopilot#applyThrottle}.
+     */
+    public static final double MANOEUVRE_BANK = 8.0;
+    /** Heading error, in degrees, that likewise counts as manoeuvring. */
+    public static final double MANOEUVRE_HEADING_ERROR = 15.0;
+
+    /**
+     * Ticks an aircraft may sit on the ground in a mode that is supposed to be flying before the
+     * flight is declared over. Without this a sortie that mushes into a field simply trundles along
+     * the surface at taxi speed for the rest of the session, reporting {@code cruise}, and never
+     * produces an outcome line for anyone to assert on.
+     */
+    public static final int GROUNDED_TIMEOUT = 60;
+
     // ---- ground / takeoff ----
     public static final double ROTATE_SPEED = 0.35;
     public static final double TAKEOFF_CLEAR_HEIGHT = 10.0;
     public static final double ROLLOUT_STOP_SPEED = 0.04;
+
+    // ---- taxi ----
+    /**
+     * Ground speed held while taxiing, in blocks/tick (~4 blocks/s). Comfortably under
+     * {@code takeOffSpeed} (0.3) so the aircraft cannot fly itself off the taxiway, and above the
+     * 0.1 threshold at which {@code PlaneEntity#tickOnGround} applies its static-friction penalty.
+     */
+    public static final double TAXI_SPEED = 0.20;
+    /** Throttle ceiling while taxiing, so the aircraft creeps rather than charging off. */
+    public static final int TAXI_MAX_THROTTLE = 3;
+    /** Distance from the lineup point at which the aircraft stops steering to it and aligns. */
+    public static final double TAXI_LINEUP_RADIUS = 6.0;
+    /** Heading error the aircraft must be inside, lined up on the threshold, before it may go. */
+    public static final double TAXI_ALIGNED_ERROR = 8.0;
+    /**
+     * How far the parking spot sits to the side of the runway centreline, beyond the measured runway
+     * half-width. Far enough to be off the strip, close enough that the taxi is a short one.
+     */
+    public static final double PARKING_LATERAL_OFFSET = 4.0;
+    /** How far back from the threshold the parking spot sits, along the runway. */
+    public static final double PARKING_BEHIND_THRESHOLD = 12.0;
+    /** Ticks a taxi may take before the aircraft gives up and departs from where it stands. */
+    public static final int TAXI_TIMEOUT = 900;
+
+    // ---- chunk loading ----
+    /**
+     * Radius, in chunks, of the ticket the autopilot keeps around each aircraft.
+     *
+     * <p>Not a cosmetic number. {@code TicketStorage#addTicketWithRadius} gives the centre chunk
+     * level {@code 33 - radius} and the level rises by one per chunk outwards, while
+     * {@code ChunkLevel#isEntityTicking} needs level 31 or lower. So a ticket of radius {@code r}
+     * only makes chunks within {@code r - 2} of the centre tick their entities: vanilla's ender
+     * pearl radius of 2, which this used to copy, produces an entity-ticking area of exactly one
+     * chunk. An aircraft at 3 blocks/tick leaves that chunk in five ticks and stops ticking.
+     *
+     * <p>4 gives an entity-ticking area two chunks (32 blocks) in every direction, which at
+     * {@link #CHUNK_TICKET_INTERVAL} is several renewals' worth of travel.
+     */
+    public static final int CHUNK_TICKET_RADIUS = 4;
+    /** Ticks between chunk-ticket renewals. Well inside the 40-tick ticket timeout. */
+    public static final int CHUNK_TICKET_INTERVAL = 5;
+    /**
+     * How far ahead of the aircraft a second ticket is placed, in ticks of travel. Loading the
+     * ground it is about to fly over both keeps it ticking and gives the terrain scanner real
+     * heightmaps to read instead of the "unknown, hold altitude" fallback.
+     */
+    public static final int CHUNK_TICKET_LEAD_TICKS = 20;
 
     // ---- terrain safety ----
     /** Minimum clearance kept above the highest terrain ahead. */

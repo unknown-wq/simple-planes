@@ -36,7 +36,8 @@ public class FlightPlan {
         Codec.INT.optionalFieldOf("cruise_altitude", (int) AutopilotConfig.DEFAULT_CRUISE_ALTITUDE)
             .forGetter(plan -> plan.cruiseAltitude),
         Codec.STRING.optionalFieldOf("airfield").forGetter(plan -> Optional.ofNullable(plan.airfieldName)),
-        BlockPos.CODEC.optionalFieldOf("strike_target").forGetter(plan -> Optional.ofNullable(plan.strikeTarget))
+        BlockPos.CODEC.optionalFieldOf("strike_target").forGetter(plan -> Optional.ofNullable(plan.strikeTarget)),
+        Codec.STRING.optionalFieldOf("departure").forGetter(plan -> Optional.ofNullable(plan.departureAirfield))
     ).apply(instance, FlightPlan::new));
 
     private final Kind kind;
@@ -48,9 +49,11 @@ public class FlightPlan {
     private final int cruiseAltitude;
     private String airfieldName;
     private final BlockPos strikeTarget;
+    private final String departureAirfield;
 
     public FlightPlan(Kind kind, List<BlockPos> waypoints, int index, int direction, int legsFlown, int maxLegs,
-                      int cruiseAltitude, Optional<String> airfieldName, Optional<BlockPos> strikeTarget) {
+                      int cruiseAltitude, Optional<String> airfieldName, Optional<BlockPos> strikeTarget,
+                      Optional<String> departureAirfield) {
         this.kind = kind;
         this.waypoints = List.copyOf(waypoints);
         this.index = index;
@@ -60,16 +63,42 @@ public class FlightPlan {
         this.cruiseAltitude = cruiseAltitude;
         this.airfieldName = airfieldName.orElse(null);
         this.strikeTarget = strikeTarget.orElse(null);
+        this.departureAirfield = departureAirfield.orElse(null);
     }
 
     public static FlightPlan strike(BlockPos target) {
         return new FlightPlan(Kind.STRIKE, List.of(), 0, 1, 0, 0,
-            (int) AutopilotConfig.DEFAULT_CRUISE_ALTITUDE, Optional.empty(), Optional.of(target));
+            (int) AutopilotConfig.DEFAULT_CRUISE_ALTITUDE, Optional.empty(), Optional.of(target),
+            Optional.empty());
     }
 
     public static FlightPlan route(List<BlockPos> waypoints, int cruiseAltitude, int maxLegs, String airfieldName) {
         return new FlightPlan(Kind.ROUTE, waypoints, 0, 1, 0, maxLegs, cruiseAltitude,
-            Optional.ofNullable(airfieldName), Optional.empty());
+            Optional.ofNullable(airfieldName), Optional.empty(), Optional.empty());
+    }
+
+    /**
+     * A one-way sortie: fly the single waypoint, then land at the named airfield.
+     *
+     * <p>This is what {@code route} could not express. A route is always out-and-back — it bounces
+     * off the end of its waypoint list and returns — and it picks the landing field by proximity to
+     * where it <em>departed</em>, which only makes sense for a round trip. An aircraft starting a
+     * long way from its destination therefore always ended in an improvised field landing rather
+     * than an approach to the runway it was sent to. Here the destination is named outright, and
+     * {@code maxLegs = 1} means arriving at the waypoint completes the flight.
+     *
+     * @param departureAirfield airfield to taxi out from, or null to launch from where it stands
+     */
+    public static FlightPlan sortie(BlockPos destination, int cruiseAltitude,
+                                    String destinationAirfield, String departureAirfield) {
+        return new FlightPlan(Kind.ROUTE, List.of(destination), 0, 1, 0, 1, cruiseAltitude,
+            Optional.ofNullable(destinationAirfield), Optional.empty(),
+            Optional.ofNullable(departureAirfield));
+    }
+
+    /** Airfield this flight taxied out from, or null when it did not start on a runway. */
+    public String departureAirfield() {
+        return departureAirfield;
     }
 
     public Kind kind() {
@@ -175,7 +204,8 @@ public class FlightPlan {
         for (BlockPos pos : waypoints) {
             parts.add(pos.toShortString());
         }
-        return "route [" + String.join(" -> ", parts) + "] alt " + cruiseAltitude
+        return (departureAirfield == null ? "route [" : "sortie from " + departureAirfield + " [")
+            + String.join(" -> ", parts) + "] alt " + cruiseAltitude
             + (airfieldName == null ? ", improvised landing" : ", landing at " + airfieldName);
     }
 }

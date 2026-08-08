@@ -69,23 +69,20 @@ public final class RunwayOccupancy {
         return holder == null || holder == asker || !stillHolding(holder, airfield);
     }
 
-    /** Number of live autopilots, used to enforce {@link AutopilotConfig#MAX_ACTIVE_AUTOPILOTS}. */
-    private static int activeCount;
-
-    public static void onAutopilotActivated() {
-        activeCount++;
-    }
-
-    public static void onAutopilotDeactivated() {
-        activeCount = Math.max(0, activeCount - 1);
-    }
-
+    /**
+     * Number of live autopilots, used to enforce {@link AutopilotConfig#MAX_ACTIVE_AUTOPILOTS}.
+     *
+     * <p>Derived from {@link AutopilotRegistry}, which recounts the live aircraft on every call.
+     * This used to be a {@code static int} incremented on activation and decremented on release, and
+     * it leaked a slot for every aircraft that went away without running its release path — which is
+     * what happens on every crash. See {@link AutopilotRegistry} for the measured failure.
+     */
     public static int activeCount() {
-        return activeCount;
+        return AutopilotRegistry.activeCount();
     }
 
     public static boolean canActivateAnother() {
-        return activeCount < AutopilotConfig.MAX_ACTIVE_AUTOPILOTS;
+        return AutopilotRegistry.canActivateAnother();
     }
 
     /** Drops reservations whose holder has gone away; called occasionally, not every tick. */
