@@ -6,6 +6,7 @@ import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.Items;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
+import xyz.przemyk.simpleplanes.autopilot.AutopilotRegistry;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesBlocks;
@@ -41,8 +42,10 @@ public class SimplePlanesMod implements ModInitializer {
         SimplePlanesNetworking.register();
         CommonEventHandler.register();
 
-        // autopilot feature: data components for the tools + the /autopilot debug command.
+        // autopilot feature: data components for the tools + the /autopilot debug command, plus the
+        // registry whose server-tick heartbeat keeps chunks loaded around aircraft in flight.
         AutopilotComponents.init();
+        AutopilotRegistry.init();
         AutopilotCommand.register();
 
         registerUpgradeItems();

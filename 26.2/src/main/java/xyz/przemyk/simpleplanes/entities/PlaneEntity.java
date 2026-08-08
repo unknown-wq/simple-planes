@@ -609,6 +609,11 @@ public class PlaneEntity extends Entity {
 
         tickRoll(tempMotionVars);
 
+        // Impact detection: the velocity the aerodynamics produced, before the upgrades get to
+        // rewrite it. FloatingUpgrade runs inside tickUpgrades() and arrests a descent over water
+        // before move() ever happens, so this is the only place the real water-entry speed exists.
+        collisionState.preUpgradeMotion = getDeltaMovement();
+
         tickUpgrades();
 
         //made so plane fully stops when moves slow, removing the slipperiness effect
@@ -898,9 +903,13 @@ public class PlaneEntity extends Entity {
     }
 
     protected Vector3f getTickPush(TempMotionVars tempMotionVars) {
-        // transformPos() mutates and returns its argument, so the scratch can be reused; the result
-        // is immediately copied into a Vec3 by tickMotion() and never stored.
-        return transformPos(pushScratch.set(0, 0, tempMotionVars.push));
+        // transformPosPhysics(), not transformPos(): the thrust must point where the nose actually
+        // is, and transformPos() reads a quaternion that is never refreshed for a plane with nobody
+        // aboard. See transformPosPhysics for the measurements.
+        //
+        // transformPosPhysics() mutates and returns its argument, so the scratch can be reused; the
+        // result is immediately copied into a Vec3 by tickMotion() and never stored.
+        return transformPosPhysics(pushScratch.set(0, 0, tempMotionVars.push));
     }
 
     protected boolean tickOnGround(TempMotionVars tempMotionVars) {
@@ -1081,6 +1090,41 @@ public class PlaneEntity extends Entity {
         // toEulerAngles() only reads its argument, so the scratch buffer never escapes. Neither the
         // angles nor the quaternion outlive this call, so both come from per-entity scratch.
         EulerAngles angles = toEulerAngles(getQ_Client(transformQScratch), transformAngles);
+        relPos.rotate(toQuaternionf(-angles.yaw, angles.pitch, -angles.roll, transformRotScratch));
+        return relPos;
+    }
+
+    /**
+     * Body-frame to world-frame for the <em>physics</em>, as opposed to for rendering and rider
+     * placement.
+     *
+     * <p>{@link #transformPos(Vector3f)} rotates by {@code Q_Client}, and {@code Q_Client} is a
+     * client-side quantity: on the server the only thing that ever writes it is
+     * {@link xyz.przemyk.simpleplanes.network.RotationPacket}, sent by the player flying the plane.
+     * A plane with nobody aboard therefore keeps whatever {@code Q_Client} it was created with, for
+     * its entire life, while {@code Q} — set from the freshly integrated attitude at the end of
+     * every {@link #tick()} — tracks reality.
+     *
+     * <p>That mattered in exactly one place and mattered enormously there: {@link #getTickPush}
+     * builds the engine thrust vector by rotating {@code (0, 0, push)} out of the body frame. An
+     * unmanned aircraft was therefore thrusting in the direction it was <em>spawned</em> facing, for
+     * ever, no matter where the nose was actually pointing. Straight-line flight looked perfect — a
+     * strike run launched at the target accelerated 2.00 to 3.14 blocks/tick without a wobble — and
+     * anything involving a turn quietly fell apart: after a 180 the engine was pushing backwards.
+     * Measured on a 200-block out-and-back, the aircraft came out of the turnback at 0.36
+     * blocks/tick and stayed pinned there at full throttle, descending, until it reached the ground.
+     * That single frozen quaternion is the "spawned aircraft gradually loses speed" report, the
+     * turnback stall and the failed landing descent, all three.
+     *
+     * <p>A plane with a rider is untouched: its {@code Q_Client} is refreshed every tick from the
+     * client that is authoritative for it, so the two quaternions agree and the branch below picks
+     * the same one it always did.
+     */
+    public Vector3f transformPosPhysics(Vector3f relPos) {
+        Quaternionf rotation = getControllingPassenger() == null
+            ? getQ(transformQScratch)
+            : getQ_Client(transformQScratch);
+        EulerAngles angles = toEulerAngles(rotation, transformAngles);
         relPos.rotate(toQuaternionf(-angles.yaw, angles.pitch, -angles.roll, transformRotScratch));
         return relPos;
     }

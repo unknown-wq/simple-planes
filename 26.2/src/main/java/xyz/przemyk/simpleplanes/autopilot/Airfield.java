@@ -93,6 +93,47 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
+     * The runway end a departure should roll <em>from</em>.
+     *
+     * <p>{@link #bestEnd} answers "which way should an aircraft land", i.e. which threshold to cross
+     * on the way in. A departure wants the opposite: it starts at that threshold and rolls away from
+     * it, down the same strip, so it climbs out over the cleaner funnel. Returning
+     * {@code bestEnd} directly is exactly right — a {@link RunwayEnd} is "threshold plus the far end
+     * to run towards", which is the same geometry for a take-off roll as for a roll-out.
+     */
+    public static RunwayEnd departureEnd(Level level, Airfield airfield) {
+        return airfield.bestEnd(level);
+    }
+
+    /**
+     * Where an aircraft is parked before it taxis: beside the runway, clear of the strip, a little
+     * way back from the departure threshold.
+     *
+     * <p>Falls back to the centreline behind the threshold when the ground alongside is not level
+     * with the runway — an apron is only sensible if there is somewhere flat to put it, and the
+     * surveyed strip itself is the one piece of ground known to be flat.
+     */
+    public static Vec3 parkingPosition(Level level, RunwayEnd departure) {
+        double heading = departure.landingHeading();
+        Vec3 threshold = departure.threshold();
+        Vec3 behind = AutopilotMath.pointAlong(threshold, heading + 180.0,
+            AutopilotConfig.PARKING_BEHIND_THRESHOLD);
+
+        double sideways = departure.airfield().width() / 2.0 + AutopilotConfig.PARKING_LATERAL_OFFSET;
+        for (double side : new double[] {90.0, -90.0}) {
+            Vec3 apron = AutopilotMath.pointAlong(behind, heading + side, sideways);
+            int surface = TerrainScanner.surfaceHeight(level, apron.x, apron.z);
+            if (surface != TerrainScanner.UNKNOWN_HEIGHT && Math.abs(surface - threshold.y) <= 2.0) {
+                return new Vec3(apron.x, surface, apron.z);
+            }
+        }
+
+        int surface = TerrainScanner.surfaceHeight(level, behind.x, behind.z);
+        double y = surface == TerrainScanner.UNKNOWN_HEIGHT ? threshold.y : surface;
+        return new Vec3(behind.x, y, behind.z);
+    }
+
+    /**
      * Counts terrain columns that poke above the glide slope in the approach funnel of one end.
      * Uses the heightmap, so it is O(1) per sample and never forces a chunk load.
      */
