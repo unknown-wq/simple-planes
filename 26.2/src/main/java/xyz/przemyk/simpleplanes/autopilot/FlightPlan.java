@@ -19,11 +19,31 @@ public class FlightPlan {
         /** Fly the waypoint list, then land. */
         ROUTE,
         /** One-way run at a fixed point at maximum speed. */
-        STRIKE;
+        STRIKE,
+        /**
+         * Helipad to helipad, flown by {@link HelicopterAutopilot}.
+         *
+         * <p>Its own kind rather than a {@link #ROUTE} with a rotorcraft aboard, because the kind is
+         * what {@code PlaneAutopilot#start} and {@code PlaneAutopilot#load} branch on to decide which
+         * flight director takes the aircraft — and a plan reloaded off disk has no aircraft to look
+         * at yet. Reading the entity type instead would also mean a helicopter a player left lying
+         * about with a fixed-wing route on it silently became a rotorcraft flight.
+         */
+        HELI;
 
+        // Unknown names fall back to ROUTE, which is what every plan written before STRIKE existed
+        // relied on and what keeps this codec able to read a save older than the current build.
         public static final Codec<Kind> CODEC = Codec.STRING.xmap(
-            name -> "strike".equals(name) ? STRIKE : ROUTE,
-            kind -> kind == STRIKE ? "strike" : "route");
+            name -> switch (name) {
+                case "strike" -> STRIKE;
+                case "heli" -> HELI;
+                default -> ROUTE;
+            },
+            kind -> switch (kind) {
+                case STRIKE -> "strike";
+                case HELI -> "heli";
+                default -> "route";
+            });
     }
 
     public static final Codec<FlightPlan> CODEC = RecordCodecBuilder.create(instance -> instance.group(
@@ -93,8 +113,13 @@ public class FlightPlan {
         this.departureAirfield = departureAirfield.orElse(null);
         this.blast = blast == null ? Blast.DEFAULT : blast;
         // Clamped here as well as at the command, so a hand-edited save cannot produce an
-        // aircraft that is commanded a speed the airframe cannot fly.
-        this.cruiseSpeed = AutopilotConfig.clampCruiseSpeed(cruiseSpeed);
+        // aircraft that is commanded a speed the airframe cannot fly. Which range that is depends on
+        // the airframe: a helicopter's useful band starts well below a plane's stall speed and ends
+        // well below its cruise, so putting a rotorcraft plan through the fixed-wing clamp would
+        // quietly raise every slow helicopter flight to 0.40.
+        this.cruiseSpeed = kind == Kind.HELI
+            ? RotorcraftConfig.clampCruiseSpeed(cruiseSpeed)
+            : AutopilotConfig.clampCruiseSpeed(cruiseSpeed);
         this.departureDelayTicks = Math.max(0, departureDelayTicks);
     }
 
@@ -129,6 +154,26 @@ public class FlightPlan {
         return new FlightPlan(Kind.ROUTE, List.of(destination), 0, 1, 0, 1, cruiseAltitude,
             Optional.ofNullable(destinationAirfield), Optional.empty(),
             Optional.ofNullable(departureAirfield), blast, cruiseSpeed, departureDelayTicks);
+    }
+
+    /**
+     * A helicopter sortie between two registered helipads.
+     *
+     * <p>The two pad names go in the same two fields a fixed-wing sortie's airfield names go in, and
+     * that is not laziness: they are both "the named place this flight is leaving" and "the named
+     * place it is going to", they are looked up in the same {@link AutopilotSavedData}, and giving
+     * them their own codec fields would mean two more optional keys that no plan ever sets at the
+     * same time as the first two. What tells them apart is {@link Kind#HELI}, which is the only
+     * thing that decides which registry the names are looked up in.
+     *
+     * @param departurePad the pad to lift off from, or null for a flight that starts in the air
+     */
+    public static FlightPlan heliSortie(BlockPos destination, int cruiseAltitude,
+                                        String destinationPad, String departurePad,
+                                        double cruiseSpeed, int departureDelayTicks) {
+        return new FlightPlan(Kind.HELI, List.of(destination), 0, 1, 0, 1, cruiseAltitude,
+            Optional.ofNullable(destinationPad), Optional.empty(), Optional.ofNullable(departurePad),
+            Blast.DEFAULT, cruiseSpeed, departureDelayTicks);
     }
 
     /** Ticks to wait on the parking spot before asking for the runway; 0 for an immediate departure. */
@@ -261,6 +306,12 @@ public class FlightPlan {
         if (kind == Kind.STRIKE) {
             return "strike -> " + (strikeTarget == null ? "?" : strikeTarget.toShortString())
                 + ", blast " + blast.describe();
+        }
+        if (kind == Kind.HELI) {
+            return (departureAirfield == null ? "inbound" : "helipad " + departureAirfield)
+                + " -> " + (airfieldName == null ? "?" : airfieldName)
+                + " alt " + cruiseAltitude + String.format(", cruise %.2f", cruiseSpeed)
+                + (departureDelayTicks > 0 ? ", delay " + departureDelayTicks / 20 + "s" : "");
         }
         List<String> parts = new ArrayList<>();
         for (BlockPos pos : waypoints) {

@@ -14,10 +14,16 @@ import java.util.function.Supplier;
 /**
  * Which airframe an autopilot sortie flies.
  *
- * <p>Helicopters are deliberately absent, and not by oversight: {@code HelicopterEntity} overrides
- * {@code tickPitch}, {@code tickRoll}, {@code tickRotateMotion} and {@code getTickPush}, so none of
- * the control laws in {@link PlaneAutopilot} describe it. Dispatching one would not fly it badly —
- * it would fly something the flight director has no model of at all. See {@code AUTOPILOT.md} §9.
+ * <p><b>Helicopters are here now, and they are not interchangeable with the other three.</b> The
+ * original exclusion was right about the diagnosis and is now solved differently: {@code
+ * HelicopterEntity} overrides {@code tickPitch}, {@code tickRoll}, {@code tickRotateMotion} and
+ * {@code getTickPush}, so none of the control laws in {@link PlaneAutopilot} describe it — and so it
+ * is not flown by {@link PlaneAutopilot} at all, but by {@link HelicopterAutopilot}, between
+ * {@link Helipad}s rather than between {@link Airfield}s. What that means for this enum is that
+ * {@link #HELICOPTER} is a value {@link #of} can return and {@link #tag} can print, so a status line
+ * and a tower board can name the thing they are looking at — and that it is <em>not</em> in
+ * {@link #FLYABLE}, so {@code random} never draws one and {@code /autopilot flight … type
+ * helicopter} is refused rather than producing a rotorcraft on a runway.
  *
  * <p>The three fixed-wing airframes are not interchangeable. {@code getRotationSpeedMultiplier}
  * scales both the pitch and the yaw ramp, so a large plane turns at half the rate of the starter
@@ -53,10 +59,21 @@ public enum AircraftType implements StringRepresentable {
     PLANE("plane"),
     LARGE("large"),
     CARGO("cargo"),
-    /** Chosen when the aircraft is created, from the three above, never a helicopter. */
+    /**
+     * A rotorcraft. Selectable on the helicopter commands and refused on the fixed-wing ones — see
+     * {@link #isRotorcraft()}.
+     */
+    HELICOPTER("helicopter"),
+    /** Chosen when the aircraft is created, from the three fixed-wing airframes only. */
     RANDOM("random");
 
-    /** The three real airframes, in the order {@link #RANDOM} draws from. */
+    /**
+     * The three fixed-wing airframes, in the order {@link #RANDOM} draws from.
+     *
+     * <p>{@link #HELICOPTER} is deliberately not in this list. It is what {@link #of} matches
+     * against, so putting a rotorcraft in it would make {@code random} occasionally dispatch one
+     * onto a runway; it is matched separately below instead.
+     */
     private static final AircraftType[] FLYABLE = {PLANE, LARGE, CARGO};
 
     public static final Codec<AircraftType> CODEC = StringRepresentable.fromEnum(AircraftType::values);
@@ -94,9 +111,15 @@ public enum AircraftType implements StringRepresentable {
         return switch (this) {
             case LARGE -> SimplePlanesEntities.LARGE_PLANE;
             case CARGO -> SimplePlanesEntities.CARGO_PLANE;
+            case HELICOPTER -> SimplePlanesEntities.HELICOPTER;
             // RANDOM only reaches here if resolve() was skipped; the starter plane is the safe answer.
             default -> SimplePlanesEntities.PLANE;
         };
+    }
+
+    /** True for the one airframe the fixed-wing commands refuse and the helicopter commands require. */
+    public boolean isRotorcraft() {
+        return this == HELICOPTER;
     }
 
     /**
@@ -110,6 +133,13 @@ public enum AircraftType implements StringRepresentable {
      */
     public static @Nullable AircraftType of(PlaneEntity plane) {
         EntityType<?> type = plane.getType();
+        // The helicopter is matched first because HelicopterEntity extends LargePlaneEntity, so a
+        // check written on the class rather than on the entity type would call every rotorcraft a
+        // large plane. It is an EntityType comparison here, so the order is only documentation —
+        // but the trap is real enough to keep the line about it.
+        if (type == HELICOPTER.entityType().get()) {
+            return HELICOPTER;
+        }
         for (AircraftType candidate : FLYABLE) {
             if (type == candidate.entityType().get()) {
                 return candidate;
