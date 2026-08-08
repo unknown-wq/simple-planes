@@ -162,6 +162,14 @@ public final class AutopilotSpawner {
                                                     int cruiseAltitude, int legs,
                                                     @Nullable String airfieldName, @Nullable Player owner,
                                                     double cruiseSpeed, Blast blast) {
+        return launchRoute(level, waypoints, cruiseAltitude, legs, airfieldName, owner, cruiseSpeed,
+            blast, AircraftType.PLANE);
+    }
+
+    public static @Nullable PlaneEntity launchRoute(Level level, List<BlockPos> waypoints,
+                                                    int cruiseAltitude, int legs,
+                                                    @Nullable String airfieldName, @Nullable Player owner,
+                                                    double cruiseSpeed, Blast blast, AircraftType type) {
         if (waypoints.isEmpty()) {
             return null;
         }
@@ -171,7 +179,8 @@ public final class AutopilotSpawner {
             ? new Vec3(waypoints.get(1).getX() + 0.5, cruiseAltitude, waypoints.get(1).getZ() + 0.5)
             : start.add(0, 0, 1);
 
-        PlaneEntity plane = create(level, start.x, start.y, start.z, AutopilotMath.headingTo(start, towards));
+        PlaneEntity plane = create(level, start.x, start.y, start.z,
+            AutopilotMath.headingTo(start, towards), type);
         if (plane == null) {
             return null;
         }
@@ -216,6 +225,13 @@ public final class AutopilotSpawner {
     public static @Nullable PlaneEntity launchSortie(ServerLevel level, Airfield departure, Airfield destination,
                                                      @Nullable Player owner, double cruiseSpeed, Blast blast,
                                                      int departureDelayTicks) {
+        return launchSortie(level, departure, destination, owner, cruiseSpeed, blast, departureDelayTicks,
+            AircraftType.PLANE);
+    }
+
+    public static @Nullable PlaneEntity launchSortie(ServerLevel level, Airfield departure, Airfield destination,
+                                                     @Nullable Player owner, double cruiseSpeed, Blast blast,
+                                                     int departureDelayTicks, AircraftType type) {
         // The runway is usually nowhere near a player, so its chunks have to exist before anything
         // can be measured on them or spawned into them. Both thresholds, not just the centre: a
         // 183-block runway spans a dozen chunks, and the parking spot sits beyond one of its ends —
@@ -233,7 +249,7 @@ public final class AutopilotSpawner {
         // down its own departure path.
         Vec3 position = parking.position();
 
-        PlaneEntity plane = create(level, position.x, position.y + 1.0, position.z, parking.heading());
+        PlaneEntity plane = create(level, position.x, position.y + 1.0, position.z, parking.heading(), type);
         if (plane == null) {
             return null;
         }
@@ -263,6 +279,12 @@ public final class AutopilotSpawner {
      */
     public static @Nullable PlaneEntity launchInbound(ServerLevel level, Vec3 from, Airfield destination,
                                                       @Nullable Player owner, double cruiseSpeed, Blast blast) {
+        return launchInbound(level, from, destination, owner, cruiseSpeed, blast, AircraftType.PLANE);
+    }
+
+    public static @Nullable PlaneEntity launchInbound(ServerLevel level, Vec3 from, Airfield destination,
+                                                      @Nullable Player owner, double cruiseSpeed, Blast blast,
+                                                      AircraftType type) {
         loadAround(level, destination.centre());
 
         int cruiseAltitude = Math.max((int) from.y, sortieCruiseAltitude(level, destination, destination));
@@ -270,7 +292,7 @@ public final class AutopilotSpawner {
         Vec3 towards = destination.centre();
         double heading = AutopilotMath.headingTo(start, towards);
 
-        PlaneEntity plane = create(level, start.x, start.y, start.z, heading);
+        PlaneEntity plane = create(level, start.x, start.y, start.z, heading, type);
         if (plane == null) {
             return null;
         }
@@ -373,7 +395,13 @@ public final class AutopilotSpawner {
     }
 
     private static @Nullable PlaneEntity create(Level level, double x, double y, double z, double heading) {
-        PlaneEntity plane = SimplePlanesEntities.PLANE.get().create(level, EntitySpawnReason.COMMAND);
+        return create(level, x, y, z, heading, AircraftType.PLANE);
+    }
+
+    private static @Nullable PlaneEntity create(Level level, double x, double y, double z, double heading,
+                                                AircraftType type) {
+        PlaneEntity plane = type.resolve(level.getRandom()).entityType().get()
+            .create(level, EntitySpawnReason.COMMAND);
         if (plane == null) {
             return null;
         }

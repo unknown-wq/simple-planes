@@ -388,10 +388,94 @@ public final class AutopilotConfig {
      * raising {@link #PATTERN_HEIGHT}, which is also the holding altitude.
      */
     public static final double GLIDE_SLOPE_DEGREES = 8.0;
-    /** Distance before the threshold at which the aircraft joins the final approach course. */
+    /**
+     * Shortest distance before the threshold at which the aircraft joins the final approach course.
+     * A floor rather than the answer — {@link ArrivalPlan} extends it for an aircraft that arrives
+     * high, and {@code minimumInterceptDistance} raises the floor itself for an airframe that
+     * cannot turn tightly enough to use 300.
+     */
     public static final double FINAL_INTERCEPT_DISTANCE = 300.0;
     /** Circuit height above the runway threshold. */
     public static final double PATTERN_HEIGHT = 45.0;
+
+    /**
+     * Radius of the turn this airframe flies on the approach, in blocks.
+     *
+     * <p>{@code v / omega}, with {@code v} at {@link #APPROACH_SPEED} and {@code omega} the yaw rate
+     * {@code PlaneEntity#tickYaw} clamps to — {@link #MAX_YAW_RATE} scaled by the airframe's own
+     * {@code getRotationSpeedMultiplier}. Evaluated at the approach speed rather than at the
+     * aircraft's current speed for two reasons: it sizes fixed geometry that has to be decided
+     * before the aircraft is anywhere near it, and the approach speed is the one regime where the
+     * nominal yaw rate is measurably the true one (see {@link #TURN_RATE_MARGIN}).
+     *
+     * <table border="1">
+     *   <caption>Measured turn radius at approach speed</caption>
+     *   <tr><th>airframe</th><th>multiplier</th><th>yaw rate</th><th>radius</th></tr>
+     *   <tr><td>plane</td><td>1.0</td><td>2.5 deg/tick</td><td>11.5</td></tr>
+     *   <tr><td>large</td><td>0.5</td><td>1.25 deg/tick</td><td>22.9</td></tr>
+     *   <tr><td>cargo</td><td>0.2</td><td>0.5 deg/tick</td><td>57.3 (measured 56)</td></tr>
+     * </table>
+     */
+    public static double approachTurnRadius(double rotationSpeedMultiplier) {
+        double yawRate = Math.toRadians(MAX_YAW_RATE * Math.max(rotationSpeedMultiplier, 0.05));
+        return APPROACH_SPEED / yawRate;
+    }
+
+    /**
+     * Turn radii of final approach an airframe needs to get itself onto the centreline.
+     *
+     * <p>Every arrival begins with a reversal, and that is structural rather than accidental. The
+     * cruise leg ends over the destination, and the fix sits on the extended centreline on the far
+     * side of it, so an aircraft that flies to the fix arrives pointing roughly the reciprocal of the
+     * final approach course and has to turn most of 180 degrees onto it. Measured on the rig, the
+     * resulting teardrop throws the aircraft <b>2.5 turn radii</b> off the centreline: 30 blocks for
+     * the starter plane, 58 for a large plane, 118 for a cargo plane. One manoeuvre, scaling exactly
+     * as it should.
+     *
+     * <p>What did not scale was the room it was given. The recovery is exponential with a space
+     * constant of about 48 blocks — {@code tickApproach}'s intercept cut is degrees per block of
+     * offset, so the decay is per block of ground covered and is the same for every airframe and
+     * every speed — but it starts from 2.5 radii, while the intercept distance was a constant 300
+     * and {@link #FINAL_HANDOVER_DISTANCE} a constant 150. Every airframe therefore got the same
+     * room, and only the small-radius ones fitted in it. The starter plane fits with about 14 degrees
+     * of error still washing out; a large plane fails one approach in two on it; a cargo plane was
+     * still 65 blocks off the centreline at the capped 40-degree cut when the gates caught it, which
+     * is what {@code going around: heading 39 deg off the runway} was reporting. It was tracking its
+     * commanded heading to the degree the whole time — the command was the problem.
+     *
+     * <p>11 radii covers the excursion (2.5), the run back in at the capped 40-degree cut, the
+     * roll-out, and the lead with which {@code tickDescent} hands over to the approach — which is
+     * itself a turn radius, because an aircraft cannot be required to pass closer to the fix than it
+     * can turn. Measured: at 11 radii a large plane joins the centreline 235 blocks before the gates
+     * arm against the 67 it had, and the go-around it used to fly on every second arrival stops.
+     *
+     * <p>It is added to {@link #FINAL_HANDOVER_DISTANCE} rather than being the whole distance,
+     * because the quantity that has to fit the reversal is not the final itself: it is the room
+     * between joining the centreline and the gates coming alive, and the gates come alive at the
+     * handover. Sizing the sum keeps that room fixed in radii however the handover distance is
+     * later retuned.
+     *
+     * <p>A floor rather than a scaling, so the airframe that already flew a good approach keeps its
+     * geometry exactly: the starter plane wants 276 blocks, under
+     * {@link #FINAL_INTERCEPT_DISTANCE}, so it flies the same 300 it always did and its numbers are
+     * unmoved. A large plane gets 402 and a cargo plane 780, both inside
+     * {@link #MAX_INTERCEPT_DISTANCE} so the extension ladder above still has somewhere to go.
+     *
+     * <p>Lengthening this does not break the rule that the slope, the intercept distance and the
+     * circuit height have to agree. That rule is about not arriving above the slope and having to
+     * dive at it, and {@code tickApproach} commands the slope altitude capped at the intercept
+     * height: further out the slope is higher, the cap binds, and the extra distance is flown level
+     * until the slope descends to meet it. The aircraft captures the same slope at the same place
+     * and simply gets a longer level segment first — which is the room the turn needs. No gate,
+     * tolerance or slope angle was touched to buy the cargo landing.
+     */
+    public static final double APPROACH_RADII_NEEDED = 11.0;
+
+    /** Where this airframe joins the final approach course at the earliest. See {@link #APPROACH_RADII_NEEDED}. */
+    public static double minimumInterceptDistance(double rotationSpeedMultiplier) {
+        return Math.max(FINAL_INTERCEPT_DISTANCE, FINAL_HANDOVER_DISTANCE
+            + APPROACH_RADII_NEEDED * approachTurnRadius(rotationSpeedMultiplier));
+    }
     /**
      * Longest final {@link ArrivalPlan} will extend to, and the step it extends in.
      *
@@ -452,6 +536,32 @@ public final class AutopilotConfig {
      * centreline can absorb; see {@code PlaneAutopilot#speedAtFix}.
      */
     public static final double APPROACH_TURN_SLOW_ANGLE = 30.0;
+    /**
+     * How much of the nominal yaw rate an aircraft actually delivers in a sustained turn at speed.
+     *
+     * <p>{@link #MAX_YAW_RATE} scaled by the airframe multiplier is what {@code PlaneEntity#tickYaw}
+     * clamps the <em>nose</em> rate to, and the flight director has always used it as the turn rate.
+     * It is accurate when the aircraft is slow and optimistic when it is fast, because
+     * {@code tickRotateMotion} only pulls the velocity vector round to follow the nose at a finite
+     * rate. Measured peak sustained rates on the rig, yaw control saturated throughout:
+     *
+     * <table border="1">
+     *   <caption>Sustained turn rate against the nominal clamp</caption>
+     *   <tr><th>airframe</th><th>speed</th><th>nominal</th><th>measured</th><th>radius</th></tr>
+     *   <tr><td>plane</td><td>1.16</td><td>2.5</td><td>2.065</td><td>32</td></tr>
+     *   <tr><td>large</td><td>1.34</td><td>1.25</td><td>1.025</td><td>75</td></tr>
+     *   <tr><td>cargo</td><td>0.50</td><td>0.5</td><td>0.507</td><td>56</td></tr>
+     *   <tr><td>cargo</td><td>1.56</td><td>0.5</td><td>0.503</td><td>178</td></tr>
+     *   <tr><td>cargo</td><td>1.98</td><td>0.5</td><td><b>0.296</b></td><td>380</td></tr>
+     * </table>
+     *
+     * <p>0.6 covers the worst of those. It is used only by
+     * {@code PlaneAutopilot#turnLimitedSpeed}, which is a speed cap: applying it there makes the
+     * aircraft slow down sooner, and slowing down is what makes the nominal figure true again.
+     * Deliberately not applied to {@link #approachTurnRadius}, which is evaluated at
+     * {@link #APPROACH_SPEED} where the measurements say the nominal rate is exactly right.
+     */
+    public static final double TURN_RATE_MARGIN = 0.6;
     public static final double FLARE_HEIGHT = 4.0;
     public static final double FLARE_PITCH = 4.0;
 
