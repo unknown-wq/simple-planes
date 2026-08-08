@@ -127,8 +127,25 @@ public final class AutopilotMath {
      * with the coefficients below and brakesMul = 5, which is what throttle 0 gives — idle is an
      * airbrake in this flight model, not neutral. Integrating that forward from a speed until it
      * reaches the target speed gives both the distance needed and, read backwards, the speed the
-     * aircraft is allowed to be doing at a given distance out. Measured against the table: 2.80 b/t
-     * down to 0.50 b/t takes 158 blocks and 124 ticks.
+     * aircraft is allowed to be doing at a given distance out. 2.80 b/t down to 0.50 b/t is 158
+     * blocks and 124 ticks, which a straight tick-loop simulation of PlaneEntity#tickMotion agrees
+     * with exactly.
+     *
+     * Two things this model deliberately does not include, both of which the caller has to cover:
+     *
+     *  - It assumes the throttle is already shut. The lever moves one notch per THROTTLE_INTERVAL
+     *    ticks, so from a cruise at throttle 10 it needs 50 ticks to get there and the aircraft
+     *    spends them barely slowing. Measured on the rig, that turned the 158 blocks into 270 and
+     *    left the aircraft doing 1.4 b/t at the waypoint it was braking for. Hence
+     *    AutopilotConfig#THROTTLE_CUT_EXCESS, which shuts the lever in one step when the deficit is
+     *    that large.
+     *  - It assumes level flight. The real bleed is flown while giving up cruise altitude, and that
+     *    descent puts energy back in. Hence AutopilotConfig#DECELERATION_MARGIN.
+     *
+     * It also assumes throttle 0 rather than MIN_AIRBORNE_THROTTLE, and that is not a small
+     * difference: at throttle 1 the boosted airframe's thrust balances the drag curve at about
+     * 1.0 b/t, so the deceleration does not merely take longer, it stops there and never reaches
+     * APPROACH_SPEED at all.
      */
 
     /** {@code TempMotionVars} drag coefficients, copied from {@code PlaneEntity.TempMotionVars}. */

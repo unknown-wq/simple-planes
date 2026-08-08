@@ -105,12 +105,17 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 | Command | Use |
 |---|---|
 | `strike <x y z> [distance] [bearing]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test |
-| `route <from> <to>` | point-to-point cruise — the "does it explode for no reason" test |
-| `flight <from> <to>` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
-| `inbound <x y z> <airfield>` | one-way arrival into a named airfield — the landing test, without the departure |
-| `survey <t1> <t2>` / `airfields` | register and list runways |
+| `route <from> <to> [speed]` | point-to-point cruise — the "does it explode for no reason" test, and the speed-regulation test |
+| `flight <from> <to> [speed]` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
+| `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
+| `survey <t1> <t2>` | register a runway |
+| `airfields [info\|show\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
 | `status` | live list of autopilot aircraft with a status line each |
 | `stop` | stop all of them |
+
+`speed` is the cruise speed in blocks per tick, clamped to 0.40–2.80. Omitted, it is the default
+2.60. It is the single most useful argument on this rig: the same flight at 0.40 and at 2.80
+exercises completely different parts of the controller.
 
 ### Recipe: a complete airfield-to-airfield sortie
 
@@ -129,9 +134,10 @@ sleep 8
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
 ```
 
-Airfields persist in `SavedData`, so the survey only has to be done once per world. The sortie takes
-about four minutes of wall clock; poll `./cmd.sh "autopilot status"` to watch it, and assert on the
-final line:
+Airfields persist in `SavedData`, so the survey only has to be done once per world. A 2000-block
+sortie takes about **two minutes** of wall clock at the 2.60 default (it was nearer four at the old
+0.80, and adding `0.80` as a trailing argument still gets you that); poll
+`./cmd.sh "autopilot status"` to watch it, and assert on the final line:
 
 ```
 Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).
@@ -162,6 +168,77 @@ destroyed from 1.2. See `COLLISION-DIAGNOSIS.md`, section Р3.
 
 Both flights print a terminal line (`hit the target at …`, `flew into terrain at …`, …), which is
 what makes them assertable from a shell.
+
+### Recipe: is the throttle loop actually regulating
+
+The one-line version of the whole speed system. Fly a long straight leg at a commanded speed and
+compare `spd=` against `want[... spd=]` in `status`, and the position deltas against the clock.
+
+```sh
+./cmd.sh "autopilot route 0 -60 0 2000 -60 0 0.50"
+for i in $(seq 1 8); do ./cmd.sh "autopilot status"; sleep 8; done
+grep -E "^\[.*\]:   #" console.log | tail -8
+```
+
+The position delta divided by the elapsed ticks is the real speed, and it must agree with `spd=`
+and with what was ordered. Measured on the current build, straight and level:
+
+| commanded | holds at | lever |
+|---|---|---|
+| 0.40 | 0.43 | dithering 0/1 |
+| 0.50 | 0.52 | dithering 0/1 |
+| 1.20 | 1.23 | 1 |
+| 2.60 | 2.58–2.61 | dithering 8/9 |
+| 2.80 | 2.78–2.83 | pinned at 10 |
+
+A lever pinned at its floor or its ceiling while the speed sits somewhere else is the failure to
+look for; that is what "commanded 0.80, flew 0.93 at throttle 1" looked like.
+
+### Recipe: measuring a deceleration
+
+Fly straight at the runway so the whole bleed is flown in a straight line, and poll every second so
+the samples are 20 ticks apart:
+
+```sh
+./cmd.sh 'autopilot inbound 2655 -1 2000 "airfield-2" 2.80'
+for i in $(seq 1 60); do ./cmd.sh "autopilot status"; sleep 1; done
+```
+
+Sum the chord lengths between consecutive `pos=` samples for the distance; the speeds come from
+`spd=`. Do not use the straight-line distance between the first and last sample — the aircraft turns
+onto the approach partway through and the chord sum is already an underestimate of the path.
+
+### Recipe: a short runway, and refusing one
+
+`MIN_USABLE_RUNWAY_LENGTH` is 30 blocks, so a 24-block strip is the test case for the refusal and a
+66-block one is the test case for a landing that has to be tidy:
+
+```sh
+./cmd.sh "autopilot survey 660 -60 40 660 -60 64"     # 24 blocks -> registers with a warning
+./cmd.sh 'autopilot flight "airfield-1" "airfield-3"' # -> refused, with the numbers
+./cmd.sh 'autopilot airfields'                        # -> the row is marked TOO SHORT
+```
+
+### Recipe: marked parking
+
+`park` needs loaded ground for the same reason `survey` does — it measures the spot and the whole
+line from it to the threshold:
+
+```sh
+./cmd.sh "forceload add 640 -200 690 70"
+sleep 6
+./cmd.sh 'autopilot airfields park "airfield-1" 670 -60 10'
+./cmd.sh 'autopilot airfields park "airfield-1" 638 -60 3'
+./cmd.sh 'autopilot airfields info "airfield-1"'
+
+# two sorties a second apart must park on different spots, not on top of each other
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+```
+
+The refusals are worth exercising too, and each has its own message: a spot more than 64 blocks from
+the threshold, one raised or sunk more than 2 blocks (`fill` a 4-block plinth next to the runway),
+one within 5 blocks of an existing spot, and one on unloaded ground.
 
 ### The one thing this rig cannot see
 

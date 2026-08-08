@@ -129,11 +129,6 @@ public class FlightPlan {
         return cruiseSpeed;
     }
 
-    /** True when the cruise is fast enough that the arrival needs planning rather than just slowing. */
-    public boolean isFastCruise() {
-        return cruiseSpeed > AutopilotConfig.CRUISE_SPEED + 1.0E-3;
-    }
-
     /** Airfield this flight taxied out from, or null when it did not start on a runway. */
     public String departureAirfield() {
         return departureAirfield;

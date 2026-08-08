@@ -114,7 +114,8 @@ public final class AutopilotSpawner {
      * throttle ceiling from 5 to 10 and {@code setMaxSpeed} moves the point the thrust fades out at
      * — neither is a limiter, so this only gives the airframe the capability to fly fast. What it
      * actually flies is whatever the flight director commands, which for a route is the plan's
-     * cruise speed and defaults to the same {@link AutopilotConfig#CRUISE_SPEED} as before.
+     * cruise speed: the {@code speed} argument on the command, or {@link AutopilotConfig#CRUISE_SPEED}
+     * when none was given.
      */
     private static void fitBooster(PlaneEntity plane, float maxSpeed) {
         plane.addUpgradeUsingWrench(SimplePlanesItems.BOOSTER.get().getDefaultInstance(),

@@ -50,6 +50,19 @@ public class AutopilotComponents {
             .networkSynchronized(BlockPos.STREAM_CODEC)
             .build());
 
+    /**
+     * Whether the survey tool is marking parking spots rather than runway thresholds.
+     *
+     * <p>A mode on the existing tool rather than a fourth item in the creative tab: an apron only
+     * means anything relative to a runway that has already been surveyed, so it is a second step of
+     * the same job, done with the same tool, in the same place.
+     */
+    public static final DataComponentType<Boolean> PARKING_MODE = register("autopilot_parking_mode",
+        DataComponentType.<Boolean>builder()
+            .persistent(Codec.BOOL)
+            .networkSynchronized(ByteBufCodecs.BOOL)
+            .build());
+
     /** Spawn distance configured on the strike tool. */
     public static final DataComponentType<Integer> STRIKE_DISTANCE = register("autopilot_strike_distance",
         DataComponentType.<Integer>builder()
