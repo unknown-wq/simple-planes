@@ -1213,25 +1213,164 @@ fixed-wing airframes; **helicopters are excluded deliberately**, because `Helico
 so dispatching one would not fly it badly, it would fly something the flight director has no model of.
 
 A keyword branch for the same reason `delay` is one, and accepted after it, so the two read in the
-order a person says them. Omitted, the airframe is the starter plane, exactly as before.
+order a person says them (`… delay 30 type cargo`). Omitted, the airframe is the starter plane,
+exactly as before.
 
 The three are not interchangeable. `getRotationSpeedMultiplier` scales both the pitch and the yaw
-ramp:
+ramp, and the turn radius that falls out of it is what the whole arrival has to be sized around:
 
-| airframe | multiplier | max yaw | max pitch | measured |
+| airframe | multiplier | max yaw | max pitch | turn radius at approach speed |
 |---|---|---|---|---|
-| `plane` | 1.0 | 2.5 deg/tick | 5.0 deg/tick | departs and lands |
-| `large` | 0.5 | 1.25 deg/tick | 2.5 deg/tick | `landed at airfield-2/36, 2655, -60, -9 (1 block down the runway)` |
-| `cargo` | 0.2 | 0.5 deg/tick | 1.0 deg/tick | **cruises, cannot fly the approach turn** |
+| `plane` | 1.0 | 2.5 deg/tick | 5.0 deg/tick | 11.5 blocks (measured 11) |
+| `large` | 0.5 | 1.25 deg/tick | 2.5 deg/tick | 22.9 blocks (measured 23) |
+| `cargo` | 0.2 | 0.5 deg/tick | 1.0 deg/tick | 57.3 blocks (measured 56) |
 
-**The cargo plane does not yet complete an arrival**, and that is measured rather than suspected. It
-departs correctly and holds 2.59 b/t over a 2000-block cruise, then on the approach it cannot close
-the turn onto the centreline: `want[hdg=320]` against an actual `hdg=056`, 96 degrees of error that
-never reduces, ending in `going around (1/3): heading 39 deg off the runway`. At 0.5 deg/tick and
-0.5 b/t its turn radius is about 57 blocks, so what has to become airframe-aware is the approach
-geometry — the fix distance, the 40-degree intercept cut, the bank limits — not the airframe. It is
-offered anyway because the cruise is genuinely useful and the failure is loud rather than silent, but
-it is not finished. Do not send one on a sortie you need to arrive.
+All three now fly a complete sortie — park, taxi, depart, cruise, approach, land — at every commanded
+speed, into both a 183-block and an 80-block runway. Getting there needed two changes, and neither of
+them touches a landing gate, a tolerance or the glide slope.
+
+#### The nominal yaw rate is a lie above about 1.5 blocks/tick
+
+`MAX_YAW_RATE * getRotationSpeedMultiplier()` is what `tickYaw` clamps the **nose** rate to, and the
+flight director had always used it as the turn rate. It is accurate when the aircraft is slow and
+optimistic when it is fast, because `tickRotateMotion` only pulls the velocity vector round to follow
+the nose at a finite rate. Peak sustained rates with the yaw control saturated throughout, measured
+by flying a 180-degree turnback at a commanded speed:
+
+| airframe | speed | nominal | measured | radius |
+|---|---|---|---|---|
+| `plane` | 1.16 | 2.5 | 2.065 | 32 |
+| `large` | 1.34 | 1.25 | 1.025 | 75 |
+| `cargo` | 0.50 | 0.5 | **0.507** | 56 |
+| `cargo` | 1.56 | 0.5 | 0.503 | 178 |
+| `cargo` | 1.98 | 0.5 | **0.296** | 380 |
+
+At approach speed the nominal figure is exactly right, which is why `approachTurnRadius` is evaluated
+there and carries no margin. `TURN_RATE_MARGIN` (0.6) exists only for the speed cap below, where the
+aircraft is fast and the model is not.
+
+#### The descent could latch, and did
+
+The failure that mattered was not a bad landing. It was a flight that never ended.
+
+`tickDescent` commands the bearing to the approach fix and brakes on a schedule keyed to the distance
+to it. The cruise leg ends over the destination and the fix sits on the extended centreline on the
+far side of it, so the fix is routinely 300–400 blocks away and abeam or behind. A cargo plane
+leaving cruise turns at 0.30 deg/tick at 1.98 blocks/tick — a **380-block radius** — so it could not
+turn tightly enough to reach the fix; the distance to the fix therefore never fell; the schedule
+therefore never braked it; and it flew a circle around the fix at a steady 24 degrees of bank with a
+heading error pinned between 73 and 101 degrees. Measured: **24 000 ticks and still going** — no
+landing, no go-around, no outcome line at all. Speed was both the cause and the thing the loop
+refused to give up.
+
+`PlaneAutopilot#turnLimitedSpeed` closes it. An arc that leaves the current heading and passes
+through a point `d` away, `θ` off the nose, has radius `d / (2 sin θ)`, so the aircraft can make the
+point only while `v ≤ ω·d / (2 sin θ)`. The descent flies the lower of that and the existing
+schedule. It is self-correcting rather than permanently conservative: the cap slows the aircraft, and
+slowing down is exactly what makes the nominal turn rate true again, so the cap stops binding.
+
+#### Every arrival begins with a reversal, and it scales with turn radius
+
+This is structural, not accidental, and it is the same manoeuvre for all three airframes. Flying to a
+fix that lies beyond the runway means arriving on roughly the reciprocal of the final approach course
+and turning most of 180 degrees onto it. The resulting teardrop throws the aircraft **2.5 turn radii**
+off the centreline:
+
+| airframe | turn radius | peak lateral excursion | ratio |
+|---|---|---|---|
+| `plane` | 11.5 | 30 blocks | 2.6 |
+| `large` | 22.9 | 58 blocks | 2.5 |
+| `cargo` | 57.3 | 118 blocks | 2.1 |
+
+**What did not scale was the room it was given.** The recovery from that excursion is exponential
+with a space constant of about **48 blocks, and that constant is independent of airframe and of
+speed** — the intercept cut in `tickApproach` is degrees per block of offset, so the decay is per
+block of ground covered rather than per tick. But it starts from 2.5 radii, while the intercept
+distance was a constant 300 and `FINAL_HANDOVER_DISTANCE` a constant 150. Every airframe got the same
+room and only the small-radius ones fitted in it. That is worth knowing before anyone makes the cut
+gain airframe-aware: it does not need to be, and the measurement is why.
+
+`AutopilotConfig#minimumInterceptDistance` raises the floor of `ArrivalPlan`'s existing extension
+ladder to `FINAL_HANDOVER_DISTANCE + 11 × turn radius`. A floor rather than a scaling, so the starter
+plane — which wants 276, and is the regression baseline — keeps exactly the 300 it always flew and its
+numbers are unmoved. A large plane gets 402 and a cargo plane 780, both inside
+`MAX_INTERCEPT_DISTANCE` so the ladder above still has somewhere to go.
+
+Lengthening the intercept does **not** break the rule that the slope, the fix distance and the circuit
+height have to agree. That rule is about not arriving above the slope and having to dive at it, and
+`tickApproach` commands the slope altitude capped at the intercept height: further out the slope is
+higher, the cap binds, and the extra distance is flown level until the slope descends to meet it. The
+aircraft captures the same slope in the same place and gets a longer level segment first, which is
+precisely the room the turn needs.
+
+#### Measured, before and after
+
+Whole sorties between two 183×25 fields 2000 blocks apart, livestock off, runways repaired between
+runs, under `/tick sprint`:
+
+| airframe | speed | before | after |
+|---|---|---|---|
+| `plane` | 0.60 | landed, 39 down | landed, 41 down |
+| `plane` | 1.60 | landed, 40 down | landed, 40 down |
+| `plane` | 2.60 | landed, 42 down | landed, 40 down |
+| `plane` | 2.80 | landed, 40 down | landed, 40 down |
+| `large` | 0.60 | **go-around**, then landed | landed, 42 down |
+| `large` | 1.60 | **go-around**, then landed | landed, 41 down |
+| `large` | 2.60 | **go-around**, then landed | landed, 41 down |
+| `large` | 2.80 | **go-around**, then landed | landed, 40 down |
+| `cargo` | 0.60 | 4 go-arounds, end switch, **landed only with the gates disabled** | landed, 39 down |
+| `cargo` | 1.60 | **never terminated** | landed, 38 down |
+| `cargo` | 2.60 | **never terminated** | landed, 37 down |
+| `cargo` | 2.80 | **never terminated** | landed, 38 down |
+
+The starter plane is unmoved: 39–42 blocks down before, 40–41 after, inside the run-to-run spread it
+has always had. The large plane went around on **every** approach before this and on none after — that
+go-around was `heading 11–14 deg off the runway`, the same thin margin the starter plane was quietly
+living with, and widening the room for the cargo plane fixed it for free.
+
+Into an 80-block runway (`airfield-3`), at 0.60 and 2.60: all three land, 8–19 blocks down, 10–24% of
+the strip used. `inbound` and `route` carry the keyword too, and all three airframes complete both.
+
+`random` was flown 15 times: 5 `plane`, 3 `large`, 7 `cargo` — **15 landings, no go-arounds**. Every
+airframe the draw can produce completes a flight, which is the bar. A random draw that sometimes
+produced an aircraft that could not land would be worse than having no random at all.
+
+#### A cow aboard is a real scenario, and it flies
+
+`LargePlaneEntity` and `CargoPlaneEntity` mount any nearby non-player `LivingEntity` from their own
+`tick()`, so livestock on the parking spot really does board. Measured with four cows summoned onto
+the spot: **two boarded and flew**, and both airframes completed the sortie anyway — cargo landed 37
+blocks down, large 41. The old failure this used to cause is already fixed and stays fixed: the thrust
+vector picks `Q` over `Q_Client` on `getPlayer() == null` rather than `getControllingPassenger() ==
+null`, so a mob as passenger 0 no longer freezes the thrust direction. See
+[Thrust direction](#thrust-direction).
+
+The mount uses `getBoundingBox().inflate(0.2)`, so a mob has to be *touching* the aircraft. Livestock
+two blocks away is simply ignored — a test that places it there proves nothing, and the first version
+of this one did exactly that.
+
+#### The type is on the readouts
+
+`/autopilot status` and the tower board both print the airframe, because mixed traffic that all reads
+`#12 approach` cannot be followed and the three fly quite different circuits:
+
+```
+  #1654 cargo descent pos=2478,13,-189 … rwy=airfield-2/18 plan[straight in]
+  #1656 large cruise  pos=1977,1,-151  … plan[direct]
+  #1657 cruise        pos=1052,-1,-129 … plan[direct]
+
+airfield-2  36/18  OCCUPIED  #1758 arrival 36, flare, 0:38, 53 blocks out [straight in]
+  holding (no sequence: the first to poll a free runway takes it):
+    #1723 cargo arrival 36, hold, 0:38, 823 blocks out [holding, runway busy]
+    #1725 large arrival 36, hold, 0:38, 422 blocks out [holding, runway busy]
+```
+
+**The starter plane prints nothing**, so a readout with no mixed traffic in it is byte-identical to
+what it printed before airframes existed — which matters, because the assertions in `TESTING.md` are
+written against it. The board is translated (`simpleplanes.autopilot.airframe.*`, in both `en_us` and
+`ru_ru`); the status line is not, like the rest of that fixed-format telemetry dump. Both read the
+airframe off the entity rather than off the flight plan, because a plan ordered as `random` records
+`random`, and a plan from an older save records nothing at all.
 
 ### The warhead
 

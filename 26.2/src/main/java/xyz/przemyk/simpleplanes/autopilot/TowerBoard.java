@@ -224,7 +224,13 @@ public final class TowerBoard {
         // taxi, and printing a landing designator beside it would read as a clearance it does not
         // have.
         String end = departure || autopilot == null ? null : autopilot.landingDesignator();
-        MutableComponent line = Component.literal("#" + plane.getId() + " ")
+        // The airframe, for the same reason the mode is here: a board of mixed traffic that reads
+        // "#12 arrival 18, approach" three times over cannot be followed, and the three airframes
+        // hold quite different circuits. Empty for the starter plane, so a single-type board is
+        // unchanged.
+        MutableComponent line = Component.literal("#" + plane.getId())
+            .append(AircraftType.tagText(plane))
+            .append(Component.literal(" "))
             .append(departure ? text("departure", "departure") : text("arrival", "arrival"))
             .append(Component.literal((end == null ? "" : " " + end)
                 + ", " + (autopilot == null ? "?" : autopilot.getMode().getName())));

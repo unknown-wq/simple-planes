@@ -884,16 +884,24 @@ public class PlaneAutopilot {
             return;
         }
         boolean free = RunwayOccupancy.isFree(plane.level(), landingAirfield.name(), plane);
-        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, plane.position(), free);
+        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, plane.position(), free,
+            plane.autopilotRotationSpeedMultiplier());
         announceArrival(plane, planned);
 
         Vec3 initialFix = planned.interceptFix();
         cmdHeading = AutopilotMath.headingTo(plane.position(), initialFix);
         cmdTargetAltitude = initialFix.y;
         double toFix = AutopilotMath.horizontalDistance(plane.position(), initialFix);
-        cmdSpeed = AutopilotMath.speedSchedule(cruiseSpeed(),
-            speedAtFix(cmdHeading, landingEnd.landingHeading()),
-            toFix / AutopilotConfig.DECELERATION_MARGIN);
+        // Two separate limits, and the aircraft flies the lower. The schedule says how fast it may
+        // still be going by the time it reaches the fix; the turn limit says how fast it may be
+        // going *now* and still be able to point at the fix at all. Without the second one a
+        // slow-turning airframe never arrives, so the distance never closes, so the schedule never
+        // brakes it — see turnLimitedSpeed.
+        cmdSpeed = Math.min(
+            AutopilotMath.speedSchedule(cruiseSpeed(),
+                speedAtFix(cmdHeading, landingEnd.landingHeading()),
+                toFix / AutopilotConfig.DECELERATION_MARGIN),
+            turnLimitedSpeed(plane, cmdHeading, toFix));
         // Idle is allowed from here to the ground: throttle 0 puts brakesMul = 5 on the drag
         // polynomial, and that airbrake is the only way to slow down on an 8-degree slope. It is
         // safe now that the throttle loop regulates horizontal speed rather than total speed, so a
@@ -957,6 +965,58 @@ public class PlaneAutopilot {
         return turn > AutopilotConfig.APPROACH_TURN_SLOW_ANGLE
             ? AutopilotConfig.APPROACH_SPEED
             : AutopilotConfig.APPROACH_TRANSIT_SPEED;
+    }
+
+    /**
+     * Fastest the aircraft may fly and still be able to turn onto a point {@code distance} away that
+     * currently sits {@code headingToPoint} off the nose.
+     *
+     * <p>{@link #speedAtFix} answers how fast the aircraft may <em>arrive</em>; this answers how fast
+     * it may be going on the way, and without it a slow-turning airframe never arrives at all.
+     *
+     * <p><b>The latch.</b> The descent commands the bearing to the fix and brakes on a schedule keyed
+     * to the distance to it. A cargo plane leaving cruise turns at 0.30 deg/tick at 1.98 blocks/tick
+     * — a 380-block radius — and the fix is typically 300-400 blocks away and often abeam or behind,
+     * because the cruise leg ends over the field and the fix is on the far side of it. So the
+     * aircraft could not turn tightly enough to reach the fix; the distance to the fix therefore
+     * never fell; the schedule therefore never braked it; and it flew a circle around the fix at a
+     * steady 24 degrees of bank with a heading error pinned between 73 and 101 degrees. Measured on
+     * the rig, this ran for 24000 ticks and would have run for ever: no landing, no go-around, no
+     * outcome line at all — the flight simply never ended. Speed was both the cause and the thing
+     * the loop refused to give up.
+     *
+     * <p><b>The geometry.</b> An arc that leaves the current heading and passes through a point at
+     * distance {@code d}, {@code theta} off the nose, has radius {@code d / (2 sin theta)} — the
+     * inscribed-angle relation between a chord and its tangent. The aircraft's own radius is
+     * {@code v / omega}, so it can make the point only while
+     * {@code v <= omega * d / (2 sin theta)}. Past 90 degrees the turn is more than a half circle and
+     * {@code sin} starts falling again, which would read as an easier turn, so the angle is clamped
+     * there — beyond it the binding constraint is simply {@code r <= d / 2}.
+     *
+     * <p><b>Why the margin.</b> {@code omega} here is the nominal clamp from
+     * {@code PlaneEntity#tickYaw}, and that is optimistic at speed. Measured peak sustained turn
+     * rates against nominal: cargo 0.507 against 0.5 at 0.50 blocks/tick, but 0.296 against 0.5 at
+     * 1.98 — the velocity vector follows the nose more slowly the faster the aircraft is going, so
+     * the realised radius at cruise is nearly double the model's. {@link
+     * AutopilotConfig#TURN_RATE_MARGIN} is that shortfall. It matters only while the aircraft is
+     * fast, which is exactly where the latch lives; as the cap brings the speed down the model
+     * becomes accurate again and the cap stops binding, so the loop is self-correcting rather than
+     * permanently conservative.
+     *
+     * <p>Floored at {@link AutopilotConfig#APPROACH_SPEED}, because the descent has no business
+     * commanding anything slower than the speed it is trying to arrive at, and an aircraft nearly on
+     * top of a fix it is pointing away from would otherwise be told to fly at a stall.
+     */
+    private static double turnLimitedSpeed(PlaneEntity plane, double headingToPoint, double distance) {
+        double turn = Math.abs(AutopilotMath.angleDelta(plane.getYRot(), headingToPoint));
+        if (turn < 1.0) {
+            return Double.MAX_VALUE;
+        }
+        double yawRate = Math.toRadians(AutopilotConfig.MAX_YAW_RATE
+            * Math.max(plane.autopilotRotationSpeedMultiplier(), 0.05)
+            * AutopilotConfig.TURN_RATE_MARGIN);
+        double turnable = yawRate * distance / (2.0 * Math.sin(Math.toRadians(Math.min(turn, 90.0))));
+        return Math.max(AutopilotConfig.APPROACH_SPEED, turnable);
     }
 
     /**
@@ -1293,7 +1353,8 @@ public class PlaneAutopilot {
         }
         // Free runway. Rejoin as soon as some final — extended if need be — can absorb whatever
         // height is left, which for an aircraft that only ever held for traffic is immediately.
-        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, plane.position(), true);
+        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, plane.position(), true,
+            plane.autopilotRotationSpeedMultiplier());
         if (!planned.entry().circling()) {
             announceArrival(plane, planned);
             setMode(plane, AutopilotMode.DESCENT);
@@ -1707,6 +1768,10 @@ public class PlaneAutopilot {
         Vec3 velocity = plane.getDeltaMovement();
         StringBuilder builder = new StringBuilder();
         builder.append('#').append(plane.getId())
+            // Empty for the starter plane, so a status line with no mixed traffic in it reads
+            // exactly as it always did; "large"/"cargo" otherwise, because three airframes that all
+            // print as "#12 approach" cannot be told apart and they fly quite differently.
+            .append(AircraftType.tag(plane))
             .append(' ').append(mode.getName())
             .append(String.format(" pos=%.0f,%.0f,%.0f", position.x, position.y, position.z))
             .append(String.format(" agl=%.0f", position.y - groundBelow(plane)))

@@ -86,11 +86,17 @@ public record ArrivalPlan(RunwayEnd end, Entry entry, double interceptDistance, 
      *                   {@link Entry#TRAFFIC}, because no amount of geometry beats another aircraft
      *                   already on the strip
      */
-    public static ArrivalPlan decide(RunwayEnd end, Vec3 position, boolean runwayFree) {
+    public static ArrivalPlan decide(RunwayEnd end, Vec3 position, boolean runwayFree,
+                                     double rotationSpeedMultiplier) {
+        // The shortest final this airframe can fly, not the shortest final there is: a cargo plane
+        // turns at a fifth of the starter plane's rate, so the 180-degree join at the fix throws it
+        // five times as far off the centreline and it needs the room back. See
+        // AutopilotConfig#APPROACH_RADII_NEEDED — for plane and large this is exactly 300 and
+        // nothing below changes at all.
+        double standard = AutopilotConfig.minimumInterceptDistance(rotationSpeedMultiplier);
         if (!runwayFree) {
-            return new ArrivalPlan(end, Entry.TRAFFIC, AutopilotConfig.FINAL_INTERCEPT_DISTANCE, 0);
+            return new ArrivalPlan(end, Entry.TRAFFIC, standard, 0);
         }
-        double standard = AutopilotConfig.FINAL_INTERCEPT_DISTANCE;
         if (reachable(end, position, standard)) {
             return new ArrivalPlan(end, Entry.STRAIGHT_IN, standard, 0);
         }
