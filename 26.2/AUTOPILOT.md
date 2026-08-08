@@ -402,7 +402,8 @@ fields, plus 60.
 chosen by `Airfield#bestEnd` (approach obstacles, ties to uphill).
 
 **Report.** Every phase change that matters prints to the console, and the flight ends with one
-assertable line — `Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).`
+assertable line — `Plane #7 landed at airfield-2/36, 2655, -60, -21 (18 blocks down a 66-block
+runway, 28% used).`
 
 ### Departure delay and the runway gate
 
@@ -521,7 +522,7 @@ at a circuit height of 45 blocks above the threshold (`tan(8°) × 300 ≈ 42`).
 disagree, the aircraft arrives at the approach fix far above the slope and has to dive at it — so if
 you retune one, retune all three.
 
-**The landing gates.** Below 30 blocks above the threshold, the approach must satisfy *all* of:
+**The landing gates.** Below 30 blocks above the touchdown point, the approach must satisfy *all* of:
 
 * heading within 10° of the runway heading — this is the "no landing at an angle" rule
 * lateral offset within the runway width (minimum 10 blocks)
@@ -537,6 +538,109 @@ beyond that it commits to the landing rather than orbiting forever.
 2. On approach, a genuine voxel raycast (`Level.clip`) down the corridor from the aircraft to the
    runway aiming point, once a second above 15 blocks AGL. Unlike the heightmap this also catches
    overhangs. A blocked corridor triggers a go-around.
+
+### Where on the runway it touches down
+
+The user's complaint was that a 183-block strip was being used from the very edge — "садятся
+буквально на границе, 10-20 блоков используют". They were right, and the cause was that the aim
+point was fiction. `TOUCHDOWN_AIM_OFFSET` was 12 blocks and **only the corridor raycast ever read
+it**: `RunwayEnd#glideSlopeAltitude` put the bottom of the slope on the *threshold*, and the flare
+fired on height above the *threshold*. So the aircraft was aimed at the threshold, floated 17 blocks
+past it in the flare and stopped there, whatever the constant said.
+
+Measured on the rig before the change, a 183×25 field, four commanded speeds — the numbers are the
+same to within a block at 0.40 and at 2.80, because none of this is speed-dependent:
+
+| commanded | crosses the threshold at | touches down | stops | runway used |
+|---|---|---|---|---|
+| 0.40 | **+0.89** | 3.4 | 4.6 | 3 % |
+| 1.20 | **+0.92** | 4.0 | 5.2 | 3 % |
+| 2.60 | **+0.28** | 1.4 | 2.6 | 1 % |
+| 2.80 | **+0.36** | 1.5 | 2.8 | 2 % |
+
+The touchdown figures are the cosmetic half. The threshold crossing height is the real problem: less
+than a block. For the last 15 blocks before the threshold the aircraft was in ground effect over
+ground the survey never measured, and **all of the error margin was on the side that destroys
+aircraft**. Undershoot by five blocks and the aircraft is in whatever lies before the threshold;
+overshoot on a 183-block strip costs nothing at all.
+
+**The fix is one line of geometry: the glide slope ends on the aim point, not on the threshold.**
+Everything else follows, because moving the endpoint `A` blocks down the runway moves the whole
+approach `A` blocks down the runway and lifts it by `tan(8°) × A`. The flare still fires at
+`FLARE_HEIGHT` above the touchdown datum and the float is still 17 blocks, so the touchdown moves by
+exactly `A` and the roll-out is untouched.
+
+**How far in.** `AutopilotConfig.touchdownAimOffset(length)` is a fifth of the runway, floored at 6
+blocks, capped at 40, and never closer than `LANDING_STOP_RESERVE` (12) to the far end. A fifth
+because the trade it settles is undershoot margin against overrun margin, and only a long runway has
+both to spend: the near fifth buys terrain clearance short of the threshold, the far four fifths are
+the overrun. The 40-block cap exists because the benefit saturates — and because the corridor raycast
+is aimed at this point, so putting it far down the strip makes it a weaker test of the ground short
+of the threshold.
+
+After, same field, same four speeds:
+
+| commanded | crosses the threshold at | touches down | stops | runway used |
+|---|---|---|---|---|
+| 0.40 | **+7.07** | 40.1 | 41.3 | 23 % |
+| 1.20 | **+7.07** | 37.9 | 39.1 | 21 % |
+| 2.60 | **+6.92** | 41.8 | 43.0 | 23 % |
+| 2.80 | **+6.93** | 39.9 | 41.0 | 22 % |
+
+And across lengths, all at the 2.60 default. `aim` is what the rule produces, `past aim` is
+everything that happens after the aircraft reaches it — the float, the touchdown and the roll-out
+together, which is what `LANDING_STOP_RESERVE` has to cover:
+
+| length | aim | crosses at | touches | stops | past aim | used |
+|---|---|---|---|---|---|---|
+| 18 | 6.0 | +2.52 | 10.1 | 11.4 | 5.4 | 63 % |
+| 24 | 6.0 | +2.17 | 8.6 | 9.8 | 3.8 | 41 % |
+| 30 | 6.0 | +1.90 | 7.4 | 8.7 | 2.7 | 29 % |
+| 34 | 6.8 | +2.76 | 11.8 | 13.1 | 6.3 | 38 % |
+| 40 | 8.0 | +2.42 | 8.8 | 10.0 | 2.0 | 25 % |
+| 66 | 13.2 | +3.72 | 17.2 | 18.4 | 5.2 | 28 % |
+| 183 | 36.6 | +6.92 | 41.8 | 43.0 | 6.4 | 23 % |
+| 300 | 40.0 | +7.57 | 43.3 | 44.5 | 4.5 | 15 % |
+
+Worst case past the aim point over thirteen arrivals: **6.4 blocks**. The roll-out itself was
+**1.1–1.3 blocks every single time** — the brakes are not the variable, the float is, which is why
+the reserve is sized on the float and not on the braking distance.
+
+**The whole chain now shares one datum**, which it did not before, and that disagreement is exactly
+what produced "lands 1 block down the runway" on one field and a go-around on another:
+
+| | before | after |
+|---|---|---|
+| glide slope ends on | the threshold | the aim point |
+| flare fires relative to | the threshold | the aim point |
+| corridor raycast aimed at | a point 12 blocks in | the aim point |
+| "still airborne" go-around | 5 blocks past the threshold | 5 blocks past the aim point |
+| `MIN_USABLE_RUNWAY_LENGTH` derived from | a 12 that nothing flew to | the floor of the aim rule plus a measured reserve |
+
+That last go-around gate is the one that *had* to move with the rest. Left on the threshold it would
+have sent every approach around 32 blocks before it flared, on any runway long enough to earn a real
+aim offset. Its message changed with it: `crossed the touchdown point still airborne`.
+
+The datum is `RunwayEnd#touchdownElevation()`, the runway surface interpolated at the aim point,
+rather than the threshold elevation. On a level strip the two are the same number and every rig
+measurement above was flown on one. They differ by `aimOffset × tan(slope)` on a surveyed runway that
+slopes, which at the 40-block cap and the 5° the survey starts warning about is 3.5 blocks — most of
+the `FLARE_HEIGHT` the flare is triggered on, so it is not a difference that could be left alone.
+
+**Aiming further in is also worth several blocks of water.** The previous section's measurement was
+that the flare fired 15 blocks *before* the threshold, leaving 1.2 blocks of margin over a shoreline
+that stopped at the threshold. The flare now fires 21.8 blocks *past* the threshold on the same
+field, so the same runway tolerates a sea standing **20 blocks onto the strip** and lands
+identically — verified by flooding progressively: 8 blocks in, 20 blocks in, both `43.0`, the same
+number as dry. At 26 blocks in `landableBelow` simply defers the flare until there is runway under
+the aircraft (`agl=3.29` at 26.5 blocks down) and it still lands. Flood the whole strip and both
+funnels and it goes around four times and reports `came to rest in the water` — the give-up path,
+unchanged and still honest.
+
+**What is not bought by weakening a gate.** Nothing in `gateFailure` moved: heading, lateral, bank
+and sink rate are the values they were. Re-verified on the rig with a 13-block wall in the 36
+approach funnel of a 66-block field — three go-arounds for `terrain in the approach corridor`, a
+switch to 18, and a landing 17 blocks down the other end.
 
 ### Water is not ground
 
@@ -568,7 +672,7 @@ ground with the sea lapping eight blocks past its threshold:
 | `FLARE` entered | 15 blocks **before** the threshold, `agl=3.98` over the waterline | never — no landable surface |
 | water contact | 6 blocks past the threshold, still descending | none, `water=false` throughout |
 | came to rest | `y = -63`, three blocks under the surface, `water=true` | went around, switched ends, landed on 18 |
-| reported | `Plane #5 landed at airfield-1/36, 0, -63, -6 (7 blocks down the runway).` | `going around (1/3): crossed the threshold still airborne` |
+| reported | `Plane #5 landed at airfield-1/36, 0, -63, -6 (7 blocks down the runway).` | `going around (1/3): crossed the touchdown point still airborne` |
 
 Three changes, and they are all "reference the runway, not the ground":
 
@@ -590,11 +694,16 @@ Three changes, and they are all "reference the runway, not the ground":
    slope is as good a reason to go around as a hillside, and it is the one obstacle the heightmap
    check cannot see, because it reports the waterline as ground.
 
-**What the fix does not do** is make a flooded runway landable. Standing water above the threshold
-elevation is held back by something, and whatever holds it back stands above a glide slope that is
-aimed at the threshold — such an approach is unflyable in principle, and the correct outcome is the
-go-around it now gets. What the fix converts is the class where the runway *is* dry and the water is
-only on the way in.
+**What the fix does not do** is make a flooded runway landable. Standing water above the runway
+elevation is held back by something, and whatever holds it back stands above a glide slope that ends
+on the runway — such an approach is unflyable in principle, and the correct outcome is the go-around
+it now gets. What the fix converts is the class where the runway *is* dry and the water is only on
+the way in.
+
+The margin on that class is much larger since the glide slope was re-aimed at the touchdown point
+(see "Where on the runway it touches down"): the flare used to fire 15 blocks *before* the threshold
+and now fires 21.8 blocks *past* it on a 183-block field, so the shoreline may stand 20 blocks onto
+the strip instead of having to stop 1.2 blocks short of the threshold.
 
 **Other surfaces that are not ground.** Three bands laid across a cruise track on the rig, read
 straight off the per-tick trace at 100 blocks up (`gnd` is the AGL reference, `landable` the new
@@ -641,9 +750,15 @@ one line or the other:
 * and not in water, which is checked first because it is the one that was being missed
 
 ```
-Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).
+Plane #7 landed at airfield-2/36, 2655, -60, -21 (18 blocks down the 66-block runway, 28% used).
 Plane #5 did not land at airfield-1/36: came to rest in the water, at 0, -63, -6.
 ```
+
+**The length and the percentage are there because a distance on its own says nothing.** "3 blocks
+down the runway" is a tidy arrival on a short field and an aircraft parked on the very lip of a
+183-block one, and the line read the same either way — which is how the aim point stayed broken
+without anyone reading a report that looked wrong. The user spotted it by eye out of the window; the
+percentage is the same observation, in the output, where it can be asserted on.
 
 Both paths go through `stop()`, so the runway reservation is released either way — a runway held for
 ever by an aircraft on the sea floor was the second thing the false report hid. `checkGrounded` gained
@@ -721,21 +836,38 @@ English compiled in beside the key.
 
 ### How much runway an aircraft actually needs
 
-`MIN_USABLE_RUNWAY_LENGTH` is **30 blocks**, and take-off is not what sets it. Simulating
+`MIN_USABLE_RUNWAY_LENGTH` is **18 blocks**, and take-off is not what sets it. Simulating
 `tickOnGround` from a standstill to `ROTATE_SPEED`, where `dragMul` is multiplied by
 `20 × (3 − blockFriction)` — 48x on grass — gives a ground roll of 3.8 blocks at throttle 5 and
-**1.9 at the booster's throttle 10**, and the roll-out from touchdown speed is 2.1. The landing is
-the constraint, and within the landing it is the *aiming*, not the braking: the aircraft flies at a
-point `TOUCHDOWN_AIM_OFFSET` (12) blocks down the strip and may float past it in the flare. Hence
-`(12 + 3) × 2`, the doubling covering a committed go-around that lands long.
+**1.9 at the booster's throttle 10**. The landing is the constraint, and within the landing it is
+the *aiming*, not the braking: the roll-out from touchdown speed measures 1.1–1.3 blocks and does
+not vary. So the number is the shortest aim offset the rule will ever produce (`TOUCHDOWN_AIM_MIN`,
+6) plus everything that has to fit behind it (`LANDING_STOP_RESERVE`, 12).
+
+**It used to be 30, and 30 was not honest.** It came out of `(TOUCHDOWN_AIM_OFFSET + 3) × 2` with an
+aim offset that nothing in the flight director ever flew to — the aircraft aimed at the threshold
+and stopped 3 blocks in, so 30 blocks of runway were being demanded for something that fitted in 5.
+Now that the aim point is real the arithmetic can be done properly, and it comes out smaller.
+
+Verified by landing on it. A strip of exactly 18 blocks, arrivals at the 0.40 minimum, the 2.60
+default and the 2.80 maximum: touchdown at 7.8 / 10.1 / 8.6, stopped at 8.9 / 11.4 / 9.8, so between
+6.6 and 9.1 blocks of runway left over in every case. A full `flight` sortie also *departs* an
+18-block strip — park, taxi, line up, roll, rotate — and lands on a 24-block one. A 16-block strip is
+still refused, with the numbers: `airfield-8 is 16 blocks long; an aircraft needs 18 to land on it.`
+
+> **Behaviour change on existing worlds.** Nothing persisted is reinterpreted — an `Airfield` stores
+> its two thresholds and derives the length from them, so no saved number changes meaning — but a
+> surveyed 24-block strip that used to be marked `TOO SHORT` and refused at the command is usable
+> after this update, without being re-surveyed. That is a change in what a world will let you do, and
+> it is worth knowing before it surprises someone.
 
 A field shorter than that is marked `TOO SHORT` in the list, warned about by the survey, and
 **refused at the command** rather than discovered by an aircraft in the air — `flight` checks both
 ends, `inbound` checks the destination.
 
-Verified on the user's case, a 66×25 field alongside a 183×21: a full sortie at the 2.60 default
-landed on the 66-block runway **1 block down**, and one flown at the 2.80 maximum landed 3 blocks
-down. 66 is not marginal; it is more than twice what is needed.
+`airfields info` also prints where an arrival will actually put its wheels, because the aim point is
+derived from the length rather than fixed and there is otherwise no way to find out:
+`touchdown aim 37 blocks in, stopping by about 49 of 183`.
 
 ### Management
 
@@ -1159,8 +1291,18 @@ world cannot double-count either.
   flight path. The *magnitude* does matter, though: a banked aircraft yawing hard couples into pitch
   through the quaternion, which is why bank is surrendered at low speed.
 * **Improvised landings are rough** by nature. Survey a runway for anything reliable.
-* **A runway cannot be reached across standing water that is higher than it.** The glide slope is
-  aimed at the threshold, so anything holding water above the threshold elevation also stands above
+* **The touchdown aim point is derived from the runway's length and nothing else.** Not from the
+  approach speed, which the arrival does not inherit anyway; not from the surface, which changes the
+  roll-out by less than the block-to-block scatter of the float; and not from what stands past the
+  far end, which nothing measures. A fifth of the strip is a rule of thumb applied to a number the
+  survey knows, and it is deliberately not a landing-performance calculation. The one input that
+  would genuinely change it is wind, and there is no wind.
+* **An improvised runway gets an aim offset it has not earned.** `Airfield.improvise` fabricates an
+  80-block strip out of the flattest heading it can find, so the rule aims 16 blocks down it — a
+  number derived from a length nobody measured. It is not worse than aiming at the near edge of the
+  same guess, but it is not the surveyed case and should not be read as one.
+* **A runway cannot be reached across standing water that is higher than it.** The glide slope ends
+  on a point on the runway, so anything holding water above the runway elevation also stands above
   the slope near it: that approach is unflyable and the aircraft goes around rather than ditching.
   Nothing picks the drier end for you either — `bestEnd` ranks the two funnels on the obstacle counts
   the survey recorded, and a sea at or below the runway elevation is not an obstacle to *clearance*,

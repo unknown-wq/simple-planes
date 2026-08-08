@@ -104,6 +104,7 @@
     "simpleplanes.autopilot.detail.size": "  длина %s, ширина %s, уклон %s град., неровность %s",
     "simpleplanes.autopilot.detail.threshold": "  порог %s: высота %s, курс %s град., препятствий на подходе %s из %s",
     "simpleplanes.autopilot.detail.preferred": "  предпочтительное направление посадки %s",
+    "simpleplanes.autopilot.detail.touchdown": "  точка приземления в %s блоках от порога, остановка примерно к %s из %s",
     "simpleplanes.autopilot.detail.usable": "  пригодна: нужно %s блоков, есть %s",
     "simpleplanes.autopilot.detail.unusable": "  СЛИШКОМ КОРОТКАЯ: нужно %s блоков, есть %s — вылеты сюда отклоняются",
     "simpleplanes.autopilot.detail.free": "  полоса свободна",
