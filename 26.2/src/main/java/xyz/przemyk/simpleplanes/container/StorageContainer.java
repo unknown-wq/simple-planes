@@ -12,7 +12,7 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import xyz.przemyk.simpleplanes.entities.CargoPlaneEntity;
-import xyz.przemyk.simpleplanes.entities.LargePlaneEntity;
+import xyz.przemyk.simpleplanes.entities.LargeAirframeEntity;
 import xyz.przemyk.simpleplanes.misc.ChestTypes;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesContainers;
 
@@ -49,7 +49,7 @@ public class StorageContainer extends AbstractContainerMenu implements Cycleable
     @Override
     public boolean stillValid(Player playerIn) {
         Entity entity = playerIn.getVehicle();
-        if (entity instanceof LargePlaneEntity largePlaneEntity && entity.isAlive()) {
+        if (entity instanceof LargeAirframeEntity largePlaneEntity && entity.isAlive()) {
             return largePlaneEntity.hasStorageUpgrade();
         } else if (entity instanceof CargoPlaneEntity) {
             return entity.isAlive();

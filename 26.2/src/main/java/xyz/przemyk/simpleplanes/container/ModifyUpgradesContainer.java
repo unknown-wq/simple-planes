@@ -14,7 +14,7 @@ import xyz.przemyk.simpleplanes.container.slots.PlaneUpgradeSlot;
 import xyz.przemyk.simpleplanes.datapack.PayloadEntry;
 import xyz.przemyk.simpleplanes.datapack.PlanePayloadReloadListener;
 import xyz.przemyk.simpleplanes.entities.CargoPlaneEntity;
-import xyz.przemyk.simpleplanes.entities.LargePlaneEntity;
+import xyz.przemyk.simpleplanes.entities.LargeAirframeEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.misc.ItemStackHandler;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesContainers;
@@ -190,7 +190,7 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
         Item item = newStack.getItem();
         UpgradeType upgradeType = SimplePlanesUpgrades.ITEM_UPGRADE_MAP.get(item);
         PayloadEntry payloadEntry = null;
-        if (upgradeType == null && planeEntity instanceof LargePlaneEntity largePlaneEntity && !largePlaneEntity.hasLargeUpgrade) {
+        if (upgradeType == null && planeEntity instanceof LargeAirframeEntity largePlaneEntity && !largePlaneEntity.hasLargeUpgrade) {
             upgradeType = SimplePlanesUpgrades.LARGE_ITEM_UPGRADE_MAP.get(item);
             if (upgradeType == null) {
                 payloadEntry = PlanePayloadReloadListener.payloadEntries.get(item);
