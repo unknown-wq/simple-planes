@@ -321,6 +321,27 @@ public final class AutopilotConfig {
     public static final double FLARE_HEIGHT = 4.0;
     public static final double FLARE_PITCH = 4.0;
 
+    // ---- what counts as having landed ----
+    /*
+     * The roll-out has to decide whether the aircraft is standing on the runway it was cleared for
+     * or somewhere else entirely, and it is the only thing that ever does: nothing earlier in the
+     * arrival re-checks the position once the flare is committed. Both tolerances are therefore
+     * sized to accept an untidy but real landing and refuse anything that is not one, rather than to
+     * be generous.
+     */
+    /**
+     * How far outside the surveyed strip, along it or across it, an aircraft may come to rest and
+     * still be reported as landed on it. One plane length, so a touchdown that stops just short of
+     * the threshold still counts and one that stops a hundred blocks out to sea does not.
+     */
+    public static final double LANDING_POSITION_TOLERANCE = 5.0;
+    /**
+     * How far the resting elevation may differ from the runway surface underneath. A parked aircraft
+     * sits within a block of the surveyed elevation, so this only has to absorb a sloping strip and
+     * the block the aircraft settles into; anything larger means it is not on the runway at all.
+     */
+    public static final double LANDING_ELEVATION_TOLERANCE = 3.0;
+
     // ---- landing gates: violated on short final means go around ----
     public static final double GATE_HEADING_ERROR = 10.0;
     public static final double GATE_LATERAL_OFFSET = 10.0;

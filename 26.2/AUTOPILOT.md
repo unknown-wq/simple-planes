@@ -446,6 +446,122 @@ beyond that it commits to the landing rather than orbiting forever.
    runway aiming point, once a second above 15 blocks AGL. Unlike the heightmap this also catches
    overhangs. A blocked corridor triggers a go-around.
 
+### Water is not ground
+
+The heightmap cannot tell a sea from a field, and for a long time neither could the approach.
+
+`TerrainScanner.surfaceHeight` reads `Heightmap.Types.MOTION_BLOCKING`, whose predicate is
+`blocksMotion() || !getFluidState().isEmpty()`. A column of ocean therefore reports its **waterline**
+as the surface, at the same O(1) cost and with the same shape of answer as a column of grass. Every
+number derived from it inherits that: the survey's approach obstacle counts, the terrain profile, and
+`agl` in `/autopilot status`. Filling the approach corridor of a test runway with water changed
+nothing whatsoever in the survey — `160x25, roughness 0.00, approach obstacles 36 -> 0, 18 -> 0`
+before and after.
+
+That is the *right* answer for "how low may I fly here" and the wrong one for "may I put the wheels
+down here", and the flare asked the second question using the first answer:
+
+* **The flare is a commitment, not a manoeuvre.** `tickFlare` forces the throttle to 0 and holds it
+  there. Whatever is under the aircraft when it fires is what the aircraft is going to come down on.
+* **`getOnGround()` is true in water.** `PlaneEntity#tickOnGround` runs on `getOnGround() ||
+  isOnWater()` and sets the `onGroundTicks` coyote timer from inside it, so an aircraft floating in
+  the sea reports itself as on the ground — with the same 48x rolling drag.
+
+Put together, an approach that crossed the shoreline four blocks up entered `FLARE` over open water,
+stopped flying, sank, and the roll-out announced a landing. Measured on the rig, a runway on flat
+ground with the sea lapping eight blocks past its threshold:
+
+| | before | after |
+|---|---|---|
+| `FLARE` entered | 15 blocks **before** the threshold, `agl=3.98` over the waterline | never — no landable surface |
+| water contact | 6 blocks past the threshold, still descending | none, `water=false` throughout |
+| came to rest | `y = -63`, three blocks under the surface, `water=true` | went around, switched ends, landed on 18 |
+| reported | `Plane #5 landed at airfield-1/36, 0, -63, -6 (7 blocks down the runway).` | `going around (1/3): crossed the threshold still airborne` |
+
+Three changes, and they are all "reference the runway, not the ground":
+
+1. **`TerrainScanner.isLandable`** compares `MOTION_BLOCKING` against `OCEAN_FLOOR` — the same
+   predicate without the fluid clause, and `Usage.LIVE_WORLD`, so a running server maintains it. The
+   two differ by exactly the fluid standing on the terrain, so one extra heightmap lookup answers
+   "is this ground" with no block reads at all. An **unloaded** column answers *false*: everything
+   that consults it is deciding whether to commit, and "not loaded" must never be the answer that
+   lets the commitment be made.
+2. **The flare needs a landable surface *and* the runway's own elevation.** `agl <= FLARE_HEIGHT`
+   alone also fires over ground that rises under the approach — a beach or a ridge brings AGL to four
+   blocks while the aircraft is nine above the runway and fifty short of it. Both numbers agree over
+   the runway, which is the only place a flare belongs.
+3. **The gates and the corridor raycast are flown on height above the threshold**, not AGL. The
+   documentation always said "below 30 blocks above the threshold"; the code said "below 30 blocks
+   above whatever is underneath". Identical on a flat field, and on a coastal or valley approach the
+   ground reading starts the gates late over low ground and early over high. The corridor raycast is
+   also now traced with `ClipContext.Fluid.ANY` instead of `NONE`: a sea standing above the glide
+   slope is as good a reason to go around as a hillside, and it is the one obstacle the heightmap
+   check cannot see, because it reports the waterline as ground.
+
+**What the fix does not do** is make a flooded runway landable. Standing water above the threshold
+elevation is held back by something, and whatever holds it back stands above a glide slope that is
+aimed at the threshold — such an approach is unflyable in principle, and the correct outcome is the
+go-around it now gets. What the fix converts is the class where the runway *is* dry and the water is
+only on the way in.
+
+**Other surfaces that are not ground.** Three bands laid across a cruise track on the rig, read
+straight off the per-tick trace at 100 blocks up (`gnd` is the AGL reference, `landable` the new
+test):
+
+| under the aircraft | `gnd` | `landable` | |
+|---|---|---|---|
+| plain grass, the superflat | −60 | true | the baseline |
+| **lava**, 3 deep, replacing −63…−61 | −60, its own surface | **false** | fluid: in `MOTION_BLOCKING`, not in `OCEAN_FLOOR` |
+| **oak leaves**, a 3-block canopy on −60…−58 | −57, the canopy | true | leaves block motion, so both heightmaps agree |
+| **powder snow**, 3 deep on −60…−58 | −60, the ground *under* it | true | in neither heightmap |
+
+So lava is fixed by the same test with no lava-specific code — it is a fluid, and the false flare
+fired over it for exactly the reason it fired over the sea.
+
+Powder snow needed nothing: `Blocks.POWDER_SNOW` is registered with `dynamicShape()`, so
+`BlockBehaviour#calculateSolid` has no collision-shape cache to consult and returns false, and the
+block is therefore absent from *both* heightmaps. An aircraft is measured against the real ground
+underneath the snow — which is also where it ends up, since powder snow has no collision for it. The
+altitude was never wrong; the aircraft simply arrives already buried, which is the correct outcome
+for landing in a snowdrift.
+
+A forest canopy is a genuine surface and reads as one. An aircraft that settles into the treetops
+really has come to rest on them — that was never a false altitude, only a false *report*, and it is
+the next section that fixes it. What did change for a forest is the flare: a canopy rising under the
+approach used to bring AGL to four blocks while the aircraft was still well above the runway, and the
+height-above-threshold term now refuses that.
+
+### A landing report has to be true
+
+`tickRollout` used to announce a landing on `speed < ROLLOUT_STOP_SPEED && getOnGround()` and nothing
+else. Both are satisfied by an aircraft resting on a sea floor a hundred blocks short of the field,
+and the distance it printed — `|alongTrack|` — stays a small, plausible-looking number whether the
+aircraft is on the strip, short of it, or far out to one side. That is how a drowning came to be
+reported as `landed at airfield-2/19 … (58 blocks down the runway)`.
+
+`landingProblem` now asks the three questions the claim actually rests on, and the roll-out prints
+one line or the other:
+
+* along the strip, between the thresholds within `LANDING_POSITION_TOLERANCE` (5 blocks)
+* across it, inside `max(width/2, 5)` of the centreline
+* at the runway surface underneath, within `LANDING_ELEVATION_TOLERANCE` (3 blocks) — interpolated
+  along the strip, because a surveyed runway is allowed to slope
+* and not in water, which is checked first because it is the one that was being missed
+
+```
+Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).
+Plane #5 did not land at airfield-1/36: came to rest in the water, at 0, -63, -6.
+```
+
+Both paths go through `stop()`, so the runway reservation is released either way — a runway held for
+ever by an aircraft on the sea floor was the second thing the false report hid. `checkGrounded` gained
+the same distinction one level up: an aircraft that stops flying in a mode that is meant to be
+airborne now **ditched in water at** rather than **came down at** when it is floating.
+
+All of these go through `AutopilotFeedback.report`, which logs when there is no owning player, so a
+console-issued sortie prints every one of them — verified on the rig, where every line quoted above
+was read out of `console.log` with no player connected.
+
 **Holding.** `RunwayOccupancy` is a small reservation registry keyed by dimension and airfield name.
 An aircraft reserves the runway when it commits to the approach and releases it on landing, on a
 go-around, or when it is destroyed. A second aircraft arriving at a busy field enters `HOLD` and
@@ -760,6 +876,14 @@ flight director is *commanding*. Comparing the two is how you tell a controller 
 from one that is saturated or fighting itself — and a `pos` that does not change between two polls
 means the aircraft is not ticking at all (see chunk loading below).
 
+A `solid=` field appears beside `agl` only when the two disagree, which is exactly when the aircraft
+is over something it cannot land on: `agl=4 solid=7` is four blocks above a waterline and seven above
+the sea floor under it. Without it a ditching and an approach over a field read identically here.
+
+`-Dsimpleplanes.autopilot.trace=true` on the server JVM adds a per-tick line per aircraft to the log
+with the same quantities plus `landable`, `og`, `water` and the distance along and across the runway.
+It is what the water bug was found with; `status` polls too slowly to see a flare fire.
+
 ### The tower board
 
 `status` answers "what is aircraft #42 doing". `tower` answers the other question — "what is this
@@ -876,6 +1000,13 @@ world cannot double-count either.
   flight path. The *magnitude* does matter, though: a banked aircraft yawing hard couples into pitch
   through the quaternion, which is why bank is surrendered at low speed.
 * **Improvised landings are rough** by nature. Survey a runway for anything reliable.
+* **A runway cannot be reached across standing water that is higher than it.** The glide slope is
+  aimed at the threshold, so anything holding water above the threshold elevation also stands above
+  the slope near it: that approach is unflyable and the aircraft goes around rather than ditching.
+  Nothing picks the drier end for you either — `bestEnd` ranks the two funnels on the obstacle counts
+  the survey recorded, and a sea at or below the runway elevation is not an obstacle to *clearance*,
+  which is all that count measures. It is only after the three go-arounds that the other end is
+  tried.
 * **Terrain in ungenerated chunks reads as unknown** and is skipped, so an aircraft flying into
   never-visited terrain holds altitude rather than reacting to ground it cannot see. The chunk
   ticket keeps a bubble loaded around the aircraft itself, which covers the normal case.
