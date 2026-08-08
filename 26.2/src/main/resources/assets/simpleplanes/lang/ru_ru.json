@@ -114,7 +114,7 @@
     "simpleplanes.autopilot.detail.parking_occupied": "  занята",
     "simpleplanes.autopilot.detail.parking_free": "  свободна",
     "simpleplanes.autopilot.detail.parking_on_strip": "  на самой полосе",
-    "simpleplanes.autopilot.manage.busy": "%s сейчас занят заходящим на посадку бортом; повторите после посадки.",
+    "simpleplanes.autopilot.manage.busy": "%s сейчас занят бортом; повторите, когда полоса освободится.",
     "simpleplanes.autopilot.manage.removed": "Аэродром %s удалён.",
     "simpleplanes.autopilot.manage.blank_name": "Имя аэродрома не может быть пустым.",
     "simpleplanes.autopilot.manage.name_taken": "Аэродром с именем %s уже есть.",
@@ -125,7 +125,7 @@
     "simpleplanes.autopilot.manage.unpark_none": "У аэродрома %s нет стоянки рядом с %s.",
     "simpleplanes.autopilot.manage.unparked": "Стоянка в %s удалена (осталось %s).",
     "simpleplanes.autopilot.detail.threshold_unsurveyed": " (измерено сейчас, не по разметке)",
-    "simpleplanes.tower.summary": "ВПП в этом измерении: %s, занято: %s, в зоне ожидания: %s.",
+    "simpleplanes.tower.summary": "ВПП в этом измерении: %s, занято: %s, в зоне ожидания: %s, ждут вылета: %s.",
     "simpleplanes.tower.empty": "В этом измерении нет ни зарегистрированных аэродромов, ни самолётов, ожидающих полосу.",
     "simpleplanes.tower.no_traffic": "движения нет",
     "simpleplanes.tower.holding_only": "в зоне ожидания %s, на полосу никто не выпущен",
@@ -137,5 +137,10 @@
     "simpleplanes.tower.threshold": "%s  курс %s  порог %s",
     "simpleplanes.tower.not_registered": "(не зарегистрирован)",
     "simpleplanes.tower.unregistered_note": "в этом измерении не зарегистрирован - самолёты летят на полосу, которую разметили сами, или на удалённую из списка",
-    "simpleplanes.tower.unknown": "Аэродром %s не найден, и к нему ничего не летит. Список: /autopilot airfields."
+    "simpleplanes.tower.unknown": "Аэродром %s не найден, и к нему ничего не летит. Список: /autopilot airfields.",
+    "simpleplanes.tower.departure": "на вылет",
+    "simpleplanes.tower.waiting_only": "ждут вылета: %s, на полосу никто не выпущен",
+    "simpleplanes.tower.waiting_header": "ждут вылета (очереди нет: полосу займёт тот, кто первым её опросит):",
+    "simpleplanes.tower.wait_clock": "по таймеру ещё %s",
+    "simpleplanes.tower.wait_runway": "ждёт освобождения полосы"
 }

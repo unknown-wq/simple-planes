@@ -61,6 +61,10 @@ public class PlaneAutopilot {
     private @Nullable RunwayEnd landingEnd;
     /** Runway this sortie departs from, resolved once at launch; null for an airborne launch. */
     private @Nullable RunwayEnd departureEnd;
+    /** Ticks still to sit on the parking spot before the runway is asked for. */
+    private int departureHoldTicks;
+    /** Set once "waiting for the runway" has been reported, so a long wait says it exactly once. */
+    private boolean departureBlockedReported;
     private @Nullable Vec3 holdFix;
     private double holdAngle;
 
@@ -112,6 +116,8 @@ public class PlaneAutopilot {
         this.landingAirfield = null;
         this.landingEnd = null;
         this.departureEnd = null;
+        this.departureHoldTicks = 0;
+        this.departureBlockedReported = false;
         this.holdFix = null;
         this.anglesInitialised = false;
         this.outcomeReported = false;
@@ -124,7 +130,10 @@ public class PlaneAutopilot {
         }
         departureEnd = resolveDeparture(plane, flightPlan);
         if (departureEnd != null) {
-            setMode(plane, AutopilotMode.TAXI);
+            // Always through PARKED, even with no delay ordered: this is where the runway is asked
+            // for, and a zero delay simply means the first tick asks for it.
+            departureHoldTicks = flightPlan.departureDelayTicks();
+            setMode(plane, AutopilotMode.PARKED);
         } else if (plane.getOnGround()) {
             setMode(plane, AutopilotMode.TAKEOFF);
         } else {
@@ -196,9 +205,50 @@ public class PlaneAutopilot {
         this.owner = owner;
     }
 
-    /** True while this aircraft is entitled to keep a runway reservation. */
+    /**
+     * True while this aircraft is entitled to keep a runway reservation.
+     *
+     * <p>Two ways to be entitled to one, and they are at opposite ends of the flight. An arrival
+     * holds the field it is landing at from the moment it commits to the approach; a departure holds
+     * the field it is leaving from the moment it starts to roll until it is airborne and clear.
+     * {@link RunwayOccupancy} validates every reservation against this method rather than trusting
+     * its map, so a departure that is destroyed, despawned or switched off on the taxiway stops
+     * holding the runway without anything having to notice.
+     */
     public boolean holdsRunway(String airfieldName) {
-        return active && landingAirfield != null && landingAirfield.name().equals(airfieldName) && mode.usesRunway();
+        if (!active) {
+            return false;
+        }
+        if (departureEnd != null && mode.holdsDepartureRunway()
+            && departureEnd.airfield().name().equals(airfieldName)) {
+            return true;
+        }
+        return landingAirfield != null && landingAirfield.name().equals(airfieldName) && mode.usesRunway();
+    }
+
+    /**
+     * The field this aircraft is still on the ground at, or null once it is airborne and clear of it.
+     *
+     * <p>The tower board's way of telling a departure from an arrival: while this is non-null the
+     * aircraft's business is with the runway it is leaving, not with the one it is going to.
+     */
+    public @Nullable String departureAirfieldName() {
+        if (!active || departureEnd == null
+            || !(mode == AutopilotMode.PARKED || mode.holdsDepartureRunway())) {
+            return null;
+        }
+        return departureEnd.airfield().name();
+    }
+
+    /**
+     * Ticks left on the departure clock while parked: positive when the aircraft is waiting for the
+     * clock, 0 when it is parked waiting for the runway, and -1 when it is not parked at all.
+     *
+     * <p>Three states rather than two because "waiting" that cannot say <em>what for</em> is
+     * indistinguishable from a hang, which is the whole reason this is exposed.
+     */
+    public int departureHoldTicks() {
+        return mode == AutopilotMode.PARKED ? departureHoldTicks : -1;
     }
 
     /**
@@ -260,6 +310,7 @@ public class PlaneAutopilot {
         cmdNeutralPitch = false;
 
         switch (mode) {
+            case PARKED -> tickParked(plane);
             case TAXI -> tickTaxi(plane);
             case TAKEOFF -> tickTakeoff(plane);
             case CLIMB -> tickClimb(plane);
@@ -335,6 +386,67 @@ public class PlaneAutopilot {
     }
 
     // ------------------------------------------------------------------ modes
+
+    /**
+     * Standing on the parking spot, waiting for the departure clock and then for the runway.
+     *
+     * <p>Two gates, in that order, and they are not the same kind of wait. The clock is what the
+     * launch command asked for and runs down whatever else is happening. The runway is a fact about
+     * the world at the moment the aircraft wants to move, so it is asked for only once the clock has
+     * run out — asking earlier would reserve a strip for an aircraft that is not going to use it for
+     * another five minutes, which is worse than not reserving one at all.
+     *
+     * <p>Nothing is commanded here. Throttle 0, no steering, elevator neutral — the same neutral the
+     * taxi needs and for the same reason ({@code tickOnGround} reads a negative pitch input as
+     * reverse thrust, see {@link #tickTaxi}), except that here it is the difference between an
+     * aircraft that stands still and one that slowly reverses off its spot over five minutes of
+     * waiting.
+     *
+     * <p>The reservation is taken <em>before</em> the mode changes, so the aircraft is never in
+     * {@code TAXI} without holding the runway. {@link RunwayOccupancy#tryOccupy} is idempotent for
+     * the aircraft that already owns the strip, so the poll is safe to repeat.
+     */
+    private void tickParked(PlaneEntity plane) {
+        if (departureEnd == null) {
+            setMode(plane, AutopilotMode.TAKEOFF);
+            return;
+        }
+        cmdGroundSteer = true;
+        cmdBankLimit = 0;
+        cmdTerrainFollow = false;
+        cmdSpeed = 0;
+        cmdMinThrottle = 0;
+        cmdMaxThrottle = 0;
+        cmdNeutralPitch = true;
+        plane.setThrottle(0);
+
+        if (departureHoldTicks > 0) {
+            departureHoldTicks--;
+            return;
+        }
+
+        // Polled on the autopilot's own tick counter, exactly as tickHold polls for an arrival, so
+        // aircraft launched at different moments are out of phase with each other and a departure
+        // cannot poll a holding arrival out of the runway simply by asking more often.
+        if (ticks % AutopilotConfig.DEPARTURE_POLL_INTERVAL != 0) {
+            return;
+        }
+        String airfield = departureEnd.airfield().name();
+        if (!RunwayOccupancy.tryOccupy(plane.level(), airfield, plane)) {
+            if (!departureBlockedReported) {
+                departureBlockedReported = true;
+                PlaneEntity holder = RunwayOccupancy.holder(plane.level(), airfield);
+                AutopilotFeedback.report(owner, "Plane #" + plane.getId()
+                    + " holding on the parking spot at " + airfield + ": runway occupied"
+                    + (holder == null ? "" : " by #" + holder.getId()) + ".");
+            }
+            return;
+        }
+        AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " cleared to taxi at "
+            + airfield + "/" + departureEnd.designator() + " after " + modeTicks / 20
+            + "s on the parking spot.");
+        setMode(plane, AutopilotMode.TAXI);
+    }
 
     /**
      * Ground manoeuvring from the parking spot to the departure threshold.
@@ -1184,6 +1296,13 @@ public class PlaneAutopilot {
         if (landingAirfield != null && !next.usesRunway()) {
             RunwayOccupancy.release(plane.level(), landingAirfield.name(), plane);
         }
+        // The departure's mirror image: the strip is given back the moment the aircraft leaves the
+        // phases that need it, which is the CLIMB entry at TAKEOFF_CLEAR_HEIGHT. Releasing eagerly
+        // here rather than waiting for the flight to end is what lets the next sortie out of the
+        // same field while this one is still on its way to the destination.
+        if (departureEnd != null && !next.holdsDepartureRunway()) {
+            RunwayOccupancy.release(plane.level(), departureEnd.airfield().name(), plane);
+        }
         AutopilotFeedback.mode(owner, plane, next);
     }
 
@@ -1212,6 +1331,18 @@ public class PlaneAutopilot {
         if (target != null) {
             builder.append(String.format(" tgt=%.0f,%.0f,%.0f dist=%.0f",
                 target.x, target.y, target.z, AutopilotMath.horizontalDistance(position, target)));
+        }
+        if (departureAirfieldName() != null) {
+            builder.append(" dep=").append(departureAirfieldName())
+                .append('/').append(departureEnd.designator());
+        }
+        // A wait nobody can see is indistinguishable from a hang, so it says which of the two gates
+        // it is sitting behind and, for the clock, how much of it is left.
+        int held = departureHoldTicks();
+        if (held > 0) {
+            builder.append(" wait=clock ").append(TowerWatch.clock(held));
+        } else if (held == 0) {
+            builder.append(" wait=runway");
         }
         if (landingEnd != null) {
             builder.append(" rwy=").append(landingAirfield == null ? "?" : landingAirfield.name())
@@ -1306,8 +1437,12 @@ public class PlaneAutopilot {
         autopilot.persistent = true;
         autopilot.active = true;
         // A reloaded flight resumes in the air; a half-finished taxi is not worth restoring, and
-        // TAXI without a departure runway would sit on the threshold forever.
-        if (autopilot.mode == AutopilotMode.TAXI) {
+        // TAXI without a departure runway would sit on the threshold forever. PARKED goes the same
+        // way and for the same reason — load() does not re-resolve the departure end, so a restored
+        // PARKED would have no runway to ask for and no way to leave the spot. The cost is that a
+        // restart during a departure delay departs the aircraft immediately instead of finishing the
+        // clock; see AUTOPILOT.md, "Limitations".
+        if (autopilot.mode == AutopilotMode.TAXI || autopilot.mode == AutopilotMode.PARKED) {
             autopilot.mode = AutopilotMode.TAKEOFF;
         }
         plane.setAutopilot(autopilot);

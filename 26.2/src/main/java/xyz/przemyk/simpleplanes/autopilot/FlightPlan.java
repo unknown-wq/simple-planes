@@ -42,7 +42,8 @@ public class FlightPlan {
         // written by an older build loads unchanged rather than failing the codec.
         Blast.CODEC.optionalFieldOf("blast", Blast.DEFAULT).forGetter(plan -> plan.blast),
         Codec.DOUBLE.optionalFieldOf("cruise_speed", AutopilotConfig.CRUISE_SPEED)
-            .forGetter(plan -> plan.cruiseSpeed)
+            .forGetter(plan -> plan.cruiseSpeed),
+        Codec.INT.optionalFieldOf("departure_delay", 0).forGetter(plan -> plan.departureDelayTicks)
     ).apply(instance, FlightPlan::new));
 
     private final Kind kind;
@@ -67,10 +68,19 @@ public class FlightPlan {
      * drag curve actually needs — see {@link AutopilotMath#speedSchedule}.
      */
     private final double cruiseSpeed;
+    /**
+     * Ticks the aircraft waits on its parking spot before it asks for the runway, 0 for none.
+     *
+     * <p>Part of the plan rather than of the flight director because it is an order, not a state:
+     * the number is what the launch command asked for and never changes. How much of it is left is
+     * {@code PlaneAutopilot}'s business.
+     */
+    private final int departureDelayTicks;
 
     public FlightPlan(Kind kind, List<BlockPos> waypoints, int index, int direction, int legsFlown, int maxLegs,
                       int cruiseAltitude, Optional<String> airfieldName, Optional<BlockPos> strikeTarget,
-                      Optional<String> departureAirfield, Blast blast, double cruiseSpeed) {
+                      Optional<String> departureAirfield, Blast blast, double cruiseSpeed,
+                      int departureDelayTicks) {
         this.kind = kind;
         this.waypoints = List.copyOf(waypoints);
         this.index = index;
@@ -85,18 +95,19 @@ public class FlightPlan {
         // Clamped here as well as at the command, so a hand-edited save cannot produce an
         // aircraft that is commanded a speed the airframe cannot fly.
         this.cruiseSpeed = AutopilotConfig.clampCruiseSpeed(cruiseSpeed);
+        this.departureDelayTicks = Math.max(0, departureDelayTicks);
     }
 
     public static FlightPlan strike(BlockPos target, Blast blast) {
         return new FlightPlan(Kind.STRIKE, List.of(), 0, 1, 0, 0,
             (int) AutopilotConfig.DEFAULT_CRUISE_ALTITUDE, Optional.empty(), Optional.of(target),
-            Optional.empty(), blast, AutopilotConfig.CRUISE_SPEED);
+            Optional.empty(), blast, AutopilotConfig.CRUISE_SPEED, 0);
     }
 
     public static FlightPlan route(List<BlockPos> waypoints, int cruiseAltitude, int maxLegs, String airfieldName,
                                    double cruiseSpeed, Blast blast) {
         return new FlightPlan(Kind.ROUTE, waypoints, 0, 1, 0, maxLegs, cruiseAltitude,
-            Optional.ofNullable(airfieldName), Optional.empty(), Optional.empty(), blast, cruiseSpeed);
+            Optional.ofNullable(airfieldName), Optional.empty(), Optional.empty(), blast, cruiseSpeed, 0);
     }
 
     /**
@@ -110,13 +121,19 @@ public class FlightPlan {
      * {@code maxLegs = 1} means arriving at the waypoint completes the flight.
      *
      * @param departureAirfield airfield to taxi out from, or null to launch from where it stands
+     * @param departureDelayTicks how long to sit on the parking spot before asking for the runway
      */
     public static FlightPlan sortie(BlockPos destination, int cruiseAltitude,
                                     String destinationAirfield, String departureAirfield,
-                                    double cruiseSpeed, Blast blast) {
+                                    double cruiseSpeed, Blast blast, int departureDelayTicks) {
         return new FlightPlan(Kind.ROUTE, List.of(destination), 0, 1, 0, 1, cruiseAltitude,
             Optional.ofNullable(destinationAirfield), Optional.empty(),
-            Optional.ofNullable(departureAirfield), blast, cruiseSpeed);
+            Optional.ofNullable(departureAirfield), blast, cruiseSpeed, departureDelayTicks);
+    }
+
+    /** Ticks to wait on the parking spot before asking for the runway; 0 for an immediate departure. */
+    public int departureDelayTicks() {
+        return departureDelayTicks;
     }
 
     /** How hard this aircraft goes off when it stops flying. */
@@ -252,6 +269,7 @@ public class FlightPlan {
         return (departureAirfield == null ? "route [" : "sortie from " + departureAirfield + " [")
             + String.join(" -> ", parts) + "] alt " + cruiseAltitude
             + String.format(", cruise %.2f", cruiseSpeed)
+            + (departureDelayTicks > 0 ? ", delay " + departureDelayTicks / 20 + "s" : "")
             + (airfieldName == null ? ", improvised landing" : ", landing at " + airfieldName);
     }
 }

@@ -33,10 +33,14 @@ public final class TowerWatch {
 
     /** What an aircraft is doing about a runway, as far as the board is concerned. */
     public enum Role {
-        /** Holds the reservation: cleared onto the runway and on the way down, or rolling out. */
+        /** Holds the reservation as an arrival: on the way down, or rolling out. */
         OCCUPYING,
+        /** Holds the reservation as a departure: taxiing out, or rolling. */
+        DEPARTING,
         /** Orbiting the approach fix because the runway was busy when it asked. */
-        HOLDING
+        HOLDING,
+        /** Standing on a parking spot, waiting for the departure clock or for the runway. */
+        WAITING
     }
 
     /** Half a second. Fine enough for a readout printed as m:ss, cheap enough to ignore. */
@@ -83,10 +87,13 @@ public final class TowerWatch {
     }
 
     /**
-     * The airfield this aircraft is dealing with, as the flight plan records it.
+     * The airfield this aircraft is dealing with right now.
      *
-     * <p>{@code PlaneAutopilot.resolveLanding} writes the resolved name back into the plan before
-     * the aircraft can ever occupy or hold, so this is the same name the reservation is keyed by —
+     * <p>Every aircraft deals with exactly one at a time, and which one changes once during a
+     * sortie. On the ground at the departure field its business is the strip it is standing on or
+     * rolling down; from the climb-out onwards the only runway it cares about is the destination's.
+     * {@code PlaneAutopilot.resolveLanding} writes that name back into the plan before the aircraft
+     * can occupy or hold anything, so both answers are the names the reservations are keyed by —
      * including the {@code field-<id>} of an improvised landing.
      */
     public static @Nullable String airfieldOf(PlaneEntity plane) {
@@ -94,20 +101,27 @@ public final class TowerWatch {
         if (autopilot == null || !autopilot.isActive() || autopilot.getPlan() == null) {
             return null;
         }
-        return autopilot.getPlan().airfieldName();
+        String departure = autopilot.departureAirfieldName();
+        return departure != null ? departure : autopilot.getPlan().airfieldName();
     }
 
-    /** The aircraft's role at {@code airfield}, or null when it is doing neither. */
+    /** The aircraft's role at {@code airfield}, or null when it is doing none of them. */
     public static @Nullable Role roleOf(PlaneEntity plane, @Nullable String airfield) {
         PlaneAutopilot autopilot = plane.getAutopilot();
         if (airfield == null || autopilot == null || !autopilot.isActive()) {
             return null;
         }
+        if (autopilot.getMode() == AutopilotMode.PARKED) {
+            return Role.WAITING;
+        }
         if (autopilot.getMode() == AutopilotMode.HOLD) {
             return Role.HOLDING;
         }
         // The autopilot's own test, not a copy of it: true exactly when the reservation is valid.
-        return autopilot.holdsRunway(airfield) ? Role.OCCUPYING : null;
+        if (!autopilot.holdsRunway(airfield)) {
+            return null;
+        }
+        return airfield.equals(autopilot.departureAirfieldName()) ? Role.DEPARTING : Role.OCCUPYING;
     }
 
     /**
@@ -125,10 +139,12 @@ public final class TowerWatch {
     /** {@code m:ss}, or {@code ?} for a role that has not been sampled yet. */
     public static String elapsed(PlaneEntity plane) {
         long ticks = ticksInRole(plane);
-        if (ticks < 0) {
-            return "?";
-        }
-        long seconds = ticks / 20;
+        return ticks < 0 ? "?" : clock(ticks);
+    }
+
+    /** A tick count as {@code m:ss}. Shared so a wait and a countdown read the same way. */
+    public static String clock(long ticks) {
+        long seconds = Math.max(0, ticks) / 20;
         return seconds / 60 + ":" + String.format("%02d", seconds % 60);
     }
 }

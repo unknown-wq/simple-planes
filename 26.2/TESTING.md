@@ -106,7 +106,7 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 |---|---|
 | `strike <x y z> [distance] [bearing] [blast] [blocks] [fire]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test. The last three set the warhead: strength 0–16 (default 4), whether it breaks blocks, whether it sets fire |
 | `route <from> <to> [speed]` | point-to-point cruise — the "does it explode for no reason" test, and the speed-regulation test |
-| `flight <from> <to> [speed]` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
+| `flight <from> <to> [speed] [delay <s>]` | full sortie between two registered airfields — park, wait, taxi, take-off, cruise, approach, landing. `delay` is seconds spent on the parking spot before the runway is asked for |
 | `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
 | `survey <t1> <t2>` | register a runway |
 | `airfields [info\|show\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
@@ -296,6 +296,60 @@ sleep 6
 The refusals are worth exercising too, and each has its own message: a spot more than 64 blocks from
 the threshold, one raised or sunk more than 2 blocks (`fill` a 4-block plinth next to the runway),
 one within 5 blocks of an existing spot, and one on unloaded ground.
+
+**Check the aircraft is on the spot, not in it.** The launch line prints the spawn position and
+`status` prints where it settled, and those are one block apart on purpose:
+
+```
+Plane #1 parked at airfield-1 (671, -59, 11), …
+  #1 parked pos=671,-60,11 agl=0 …
+```
+
+`agl=0` on the second line is the assertion. A spot marked with `park … 670 -60 10` is stored as the
+block `670, -61, 10`, so `-60` is its top face; anything lower means the aircraft is inside the
+ground and the taxi will never start.
+
+### Recipe: departure delay, and two aircraft for one runway
+
+Both halves of the departure gate are assertable from the log, and the second one needs two aircraft
+ordered a few seconds apart out of the *same* field:
+
+```sh
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2" delay 30'
+for i in $(seq 1 8); do ./cmd.sh "autopilot status"; sleep 5; done
+# -> wait=clock 0:27 … 0:14 … 0:04 … wait=runway
+# -> Plane #1 cleared to taxi at airfield-1/36 after 31s on the parking spot.
+
+./cmd.sh "kill @e[type=simpleplanes:plane]"
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+sleep 3
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+for i in $(seq 1 16); do ./cmd.sh "autopilot status"; sleep 1; done
+```
+
+Poll `status` every **one** second here, not every five: the whole interesting window is the ten
+seconds the second aircraft spends stationary, and the moment to catch is the single tick where the
+first one enters `climb` and the second is cleared. The assertions are
+`Plane #B holding on the parking spot at airfield-1: runway occupied by #A`, a `pos=` on #B that does
+not change while #A taxis, and the pair of lines in the same second:
+
+```
+Plane #57 cleared to taxi at airfield-1/36 after 10s on the parking spot.
+  #56 climb pos=657,-47,-66 agl=13 …
+```
+
+`autopilot tower` is the other view of the same fact and is the quicker check while a run is live —
+`airfield-1  36/18  OCCUPIED  #56 departure, taxi, 0:04` with `#57 departure, parked, 0:01, waiting
+for the runway` indented under it.
+
+To prove the reservation cannot leak, kill an aircraft while it holds one and read the board back:
+
+```sh
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+sleep 4                                            # taxiing, so it holds airfield-1
+./cmd.sh "kill @e[type=simpleplanes:plane]"
+./cmd.sh "autopilot tower"                         # -> airfield-1  36/18  FREE  no traffic
+```
 
 ### The one thing this rig cannot see
 

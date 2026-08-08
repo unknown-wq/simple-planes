@@ -265,6 +265,27 @@ public final class AutopilotConfig {
     public static final int MAX_PARKING_SPOTS = 8;
     /** Ticks a taxi may take before the aircraft gives up and departs from where it stands. */
     public static final int TAXI_TIMEOUT = 900;
+    /**
+     * Longest departure delay {@code /autopilot flight … delay <seconds>} accepts.
+     *
+     * <p>An hour, and the bound exists because a parked aircraft still occupies one of the
+     * {@link #MAX_ACTIVE_AUTOPILOTS} slots and keeps a chunk bubble alive the whole time it waits.
+     * A mistyped delay is otherwise indistinguishable from an aircraft that never launched.
+     */
+    public static final int MAX_DEPARTURE_DELAY_SECONDS = 3600;
+    /**
+     * Ticks between a parked aircraft's attempts to take the departure runway.
+     *
+     * <p>Deliberately the same 20 ticks {@code PlaneAutopilot#tickHold} polls at, because it is the
+     * same rule: whoever polls a free runway first takes it. Matching the two means a departure and
+     * an arrival compete on equal terms rather than one of them being able to poll the other out.
+     *
+     * <p>There is no timeout behind this. Rolling anyway after some number of failed polls would
+     * put an aircraft on a runway that is genuinely occupied, which is the one thing the gate
+     * exists to prevent; a departure therefore waits for as long as it takes, and
+     * {@code /autopilot tower} is what makes that visible.
+     */
+    public static final int DEPARTURE_POLL_INTERVAL = 20;
 
     // ---- chunk loading ----
     /**
