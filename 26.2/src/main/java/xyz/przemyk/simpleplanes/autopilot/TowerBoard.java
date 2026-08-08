@@ -38,8 +38,6 @@ import java.util.Map;
  *       ticks and whoever polls first takes it, arrivals and departures alike. Numbering them would
  *       draw an order that does not exist, so they are listed longest-wait-first with the poll rule
  *       stated.</li>
- *   <li><b>No runway end in use.</b> Which of the two ends an arrival picked is private to the
- *       flight director; the board prints the designator pair the airfield has.</li>
  * </ul>
  *
  * <p>Departures <em>are</em> shown, which they were not: a reservation used to be taken only for the
@@ -47,6 +45,11 @@ import java.util.Map;
  * holds a reservation from the start of the taxi to the climb-out, and aircraft still standing on
  * their parking spots are listed under the field they are waiting to leave, with what they are
  * waiting for.
+ *
+ * <p>Each aircraft's row also carries the end it picked and a one-phrase account of how it intends
+ * to get there ({@code straight in}, {@code extended final 600}, {@code orbit to lose 120},
+ * {@code around left 30 deg}). Both come from the flight director's own state rather than being
+ * re-derived here, so the board cannot describe an arrival differently from the way it is flown.
  */
 public final class TowerBoard {
 
@@ -205,13 +208,26 @@ public final class TowerBoard {
         return lines;
     }
 
-    /** {@code #12 arrival, final, 0:14, 288 blocks out} — the same shape for every role. */
+    /**
+     * {@code #12 arrival 09, final, 0:14, 288 blocks out [straight in]} — the same shape for every
+     * role, arrival or departure.
+     *
+     * <p>The trailing bracket is the flight director's own account of the arrival: which geometry it
+     * chose and why. It is the answer to "why is that aircraft circling", which is the question a
+     * board full of holding traffic exists to raise, and it comes from the aircraft rather than
+     * being re-derived here, so the board cannot disagree with it.
+     */
     private static Component trafficLine(PlaneEntity plane, Stand stand, boolean withElapsed) {
         PlaneAutopilot autopilot = plane.getAutopilot();
         boolean departure = autopilot != null && stand.name().equals(autopilot.departureAirfieldName());
+        // The end is only meaningful for an arrival: a departure's runway end is chosen by the
+        // taxi, and printing a landing designator beside it would read as a clearance it does not
+        // have.
+        String end = departure || autopilot == null ? null : autopilot.landingDesignator();
         MutableComponent line = Component.literal("#" + plane.getId() + " ")
             .append(departure ? text("departure", "departure") : text("arrival", "arrival"))
-            .append(Component.literal(", " + (autopilot == null ? "?" : autopilot.getMode().getName())));
+            .append(Component.literal((end == null ? "" : " " + end)
+                + ", " + (autopilot == null ? "?" : autopilot.getMode().getName())));
         if (withElapsed) {
             line.append(Component.literal(", " + TowerWatch.elapsed(plane)));
         }
@@ -229,6 +245,9 @@ public final class TowerBoard {
                 line.append(Component.literal(", "))
                     .append(text("blocks_out", "%s blocks out", Math.round(distance)));
             }
+        }
+        if (autopilot != null) {
+            line.append(Component.literal(" [")).append(autopilot.planComponent()).append(Component.literal("]"));
         }
         return line;
     }
