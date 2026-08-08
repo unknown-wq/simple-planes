@@ -174,6 +174,8 @@
     "simpleplanes.autopilot.plan.around": "around %s %s deg, saves %s of climb",
     "simpleplanes.autopilot.plan.left": "left",
     "simpleplanes.autopilot.plan.right": "right",
+    "simpleplanes.autopilot.airframe.large": "large",
+    "simpleplanes.autopilot.airframe.cargo": "cargo",
     "simpleplanes.tower.summary": "%s runways in this dimension, %s occupied, %s holding, %s waiting to depart.",    "simpleplanes.tower.empty": "No airfields registered in this dimension, and no aircraft holding for one.",
     "simpleplanes.tower.no_traffic": "no traffic",
     "simpleplanes.tower.holding_only": "%s holding, none cleared yet",

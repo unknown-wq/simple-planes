@@ -103,6 +103,64 @@ the aircraft in the world, and test flights all use the same corridor — a park
 line will be rammed by the next one, which registers as a plane-to-plane collision and ends the run
 early with a confusing report. Use `./cmd.sh "kill @e[type=simpleplanes:plane]"`.
 
+**And force-load the airfield before you kill, or the kill does nothing.** A command selector only
+sees entities in **loaded chunks**, and the aircraft you most need to remove is the one parked at the
+far airfield, in chunks nobody is near. `kill @e[…]` reports `No entity was found`, looks like it
+worked, and leaves the wreck exactly where the next arrival is going to touch down. What that then
+produces is not a crash but a plausible-looking approach defect:
+
+```
+did not land at airfield-2/18: came to rest 5 blocks above the runway surface, at 2655, -55, -178
+did not land at airfield-2/18: came to rest 6 blocks above the runway surface, at 2655, -54, -180
+did not land at airfield-2/18: came to rest 7 blocks above the runway surface, at 2655, -53, -187
+```
+
+The tell is that the number **grows** run over run, and the touchdown point marches down the strip,
+as the pile gets taller and longer. Force-loading the two fields and killing inside that window
+turned up **52 entities** on a rig that had been reporting `No entity was found` all afternoon. Do
+this before every run that you intend to draw a conclusion from:
+
+```sh
+./cmd.sh "forceload add 640 -200 670 0"
+./cmd.sh "forceload add 2640 -200 2670 0"
+sleep 6
+./cmd.sh "kill @e[type=!player]"
+```
+
+**Repair the runway too.** A landing that fails badly enough explodes — `PlaneEntity#causeFallDamage`
+above 45 degrees of bank — and the explosion breaks blocks, so a failed run leaves a crater in the
+strip that the *next* run flies into. Measured: a cargo arrival tracking the centreline to within 0.5
+blocks and the runway heading to within 0.6 degrees went from 0.416 blocks/tick to **0.000 in a single
+tick** against the lip of a hole left by an earlier test, and reported `came down at … in go_around`.
+The approach was faultless; the ground was not. The superflat is bedrock at −64, dirt at −63/−62 and
+grass at −61, so restoring it is three fills per field:
+
+```sh
+./cmd.sh "fill 2640 -63 -200 2670 -62 0 minecraft:dirt"
+./cmd.sh "fill 2640 -61 -200 2670 -61 0 minecraft:grass_block"
+./cmd.sh "fill 2640 -60 -200 2670 -56 0 minecraft:air"     # 31x201x5 = 31155, under the 32768 limit
+```
+
+`Successfully filled 111 block(s)` on the dirt layer is how many blocks of runway were missing.
+
+**The mob gamerule was renamed in 26.2.** `gamerule doMobSpawning false` is **rejected** —
+`GameRuleRegistryFix` renames it to `minecraft:spawn_mobs`. The failure is one line of
+`Incorrect argument for command` in a log that is otherwise full of trace output, so it is very easy
+to spend an afternoon believing spawning is off while it is not. That matters here because
+`LargePlaneEntity` and `CargoPlaneEntity` mount any nearby non-player `LivingEntity`, so livestock
+changes what those two airframes are:
+
+```sh
+./cmd.sh "gamerule minecraft:spawn_mobs false"     # -> Gamerule spawn_mobs is now set to: false
+```
+
+**`/tick sprint <ticks>` is the difference between minutes and hours.** Vanilla, no mod code
+involved: the server runs that many ticks as fast as the CPU allows, and the physics is unaffected
+because ticks are still ticks. A 2000-block sortie that takes 90 s of wall clock completes in about
+3 s. `/tick sprint stop` aborts it, and the server prints `Sprint completed with N ticks per second`
+when it finishes — which is also the signal to poll for, since an aircraft that never produces an
+outcome will otherwise keep you waiting for the full sprint.
+
 `start.sh` keeps a FIFO open on the server's stdin, so `cmd.sh` can feed console commands to a
 running server at any time; `console.log` is the transcript. Command output (`sendSuccess`) is
 printed to the console, so assertions can be made by grepping the log.
@@ -257,7 +315,8 @@ and every autopilot aircraft prints one line per tick to `console.log`:
 
 ```
 trace #5 t=1713 flare pos=0.3,-56.02,15.6 agl=3.98 gnd=-60.0 landable=false vs=-0.063 spd=0.439
-      thr=0 og=false water=false cmdalt=-57.9 thr_y=-60.0 dthr=15.1 daim=-21.5 lat=-0.2
+      thr=0 og=false water=false hdg=360.0 cmdhdg=0.6 roll=-0.1 cmdalt=-57.9
+      thr_y=-60.0 dthr=15.1 daim=-21.5 lat=-0.2
 ```
 
 `gnd`/`landable` are the two surface answers (`AGL` reference, and whether it is ground at all),
@@ -265,6 +324,18 @@ trace #5 t=1713 flare pos=0.3,-56.02,15.6 agl=3.98 gnd=-60.0 landable=false vs=-
 and `water` are `getOnGround()` and `isOnWater()` — which are not the same question and were being
 treated as one. A 90-second sortie is about 1800 lines; `grep "trace #5" console.log` per aircraft.
 It is off by default and costs a `Boolean.getBoolean` per tick when it is.
+
+**`hdg`/`cmdhdg`/`roll` are what make a lateral problem readable.** Without them a heading can only be
+recovered by differencing two `pos=` samples, and that gives the *track* rather than where the nose
+points — while the landing gates are written about the nose. More importantly, a reconstructed
+heading cannot separate "not tracking the command" from "tracking a command that is wrong". Those are
+completely different bugs and they look identical in `pos=`: the cargo approach turned out to be
+holding its commanded heading to within a degree the whole time, while the command itself sat 40
+degrees off the runway.
+
+A one-tick collapse in `spd=` with `og=true` well above `gnd=` is the signature of hitting something
+solid — usually a leftover aircraft or a crater, both of which are rig contamination rather than
+flight defects. See "Kill leftovers between runs" above.
 
 **`daim` is the one the arrival is actually flown to**, and it is not `dthr`. The glide slope ends on
 the aim point, the flare is triggered relative to it and the "still airborne" go-around is measured
@@ -416,6 +487,36 @@ Three traps:
 Measured against a 61×101 grove of 15-block bamboo: free until the grove, then 0.50 b/t stops 4
 blocks in at −2 HP and stays there for ever, 1.00 destroys at 4 blocks in, 2.00 destroys at 2 blocks
 in, and 2.00 into a stone wall of the same height destroys likewise.
+
+### Recipe: how fast an airframe can actually turn
+
+The number the whole arrival geometry is sized on, and it is not the one in `AutopilotConfig`. A
+route out and straight back forces a 180-degree turnback flown at the commanded speed with the yaw
+control saturated the whole way:
+
+```sh
+./cmd.sh "autopilot route 0 -20 0 600 -20 0 0.50 type cargo"
+./cmd.sh "tick sprint 2600"
+grep "trace #" console.log        # mean d(hdg)/dt over any window where |hdg-cmdhdg| stays > 20
+```
+
+Measure the **mean heading change per tick over a 40-tick window in which the heading error never
+drops below 20 degrees** — below that the controller is braking and the rate is no longer the
+airframe's limit. Measured on the current build:
+
+| airframe | speed | nominal | measured | radius |
+|---|---|---|---|---|
+| `plane` | 1.16 | 2.5 | 2.065 | 32 |
+| `large` | 1.34 | 1.25 | 1.025 | 75 |
+| `cargo` | 0.50 | 0.5 | 0.507 | 56 |
+| `cargo` | 1.56 | 0.5 | 0.503 | 178 |
+| `cargo` | 1.98 | 0.5 | **0.296** | 380 |
+
+The nominal `MAX_YAW_RATE * getRotationSpeedMultiplier()` clamps the **nose** rate, and
+`tickRotateMotion` only pulls the velocity vector round to follow it at a finite rate — so the
+realised turn rate falls away above roughly 1.5 blocks/tick and the realised radius at cruise is
+nearly double the model's. At approach speed the nominal figure is exact. See `AUTOPILOT.md`,
+"Which airframe flies".
 
 ### Recipe: is the throttle loop actually regulating
 

@@ -15,6 +15,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -26,6 +27,7 @@ import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -123,8 +125,10 @@ public final class AutopilotCommand {
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
                     .then(Commands.argument("to", BlockPosArgument.blockPos())
                         .executes(context -> route(context, AutopilotConfig.CRUISE_SPEED))
+                        .then(aircraftTypeArgument(context -> route(context, AutopilotConfig.CRUISE_SPEED)))
                         .then(Commands.argument("speed", cruiseSpeedArgument())
-                            .executes(context -> route(context, requestedSpeed(context)))))));
+                            .executes(context -> route(context, requestedSpeed(context)))
+                            .then(aircraftTypeArgument(context -> route(context, requestedSpeed(context))))))));
 
             // flight <from> <to> [speed] [delay <seconds>]
             //
@@ -142,17 +146,21 @@ public final class AutopilotCommand {
                         .suggests(AIRFIELD_SUGGESTIONS)
                         .executes(AutopilotCommand::flight)
                         .then(departureDelayArgument())
+                        .then(aircraftTypeArgument(AutopilotCommand::flight))
                         .then(Commands.argument("speed", cruiseSpeedArgument())
                             .executes(AutopilotCommand::flight)
-                            .then(departureDelayArgument())))));
+                            .then(departureDelayArgument())
+                            .then(aircraftTypeArgument(AutopilotCommand::flight))))));
 
             root.then(Commands.literal("inbound")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
                     .then(Commands.argument("airfield", StringArgumentType.string())
                         .suggests(AIRFIELD_SUGGESTIONS)
                         .executes(context -> inbound(context, AutopilotConfig.CRUISE_SPEED))
+                        .then(aircraftTypeArgument(context -> inbound(context, AutopilotConfig.CRUISE_SPEED)))
                         .then(Commands.argument("speed", cruiseSpeedArgument())
-                            .executes(context -> inbound(context, requestedSpeed(context)))))));
+                            .executes(context -> inbound(context, requestedSpeed(context)))
+                            .then(aircraftTypeArgument(context -> inbound(context, requestedSpeed(context))))))));
 
             root.then(Commands.literal("survey")
                 .then(Commands.argument("threshold1", BlockPosArgument.blockPos())
@@ -268,11 +276,43 @@ public final class AutopilotCommand {
         return Commands.literal("delay")
             .then(Commands.argument("seconds",
                     IntegerArgumentType.integer(0, AutopilotConfig.MAX_DEPARTURE_DELAY_SECONDS))
-                .executes(AutopilotCommand::flight));
+                .executes(AutopilotCommand::flight)
+                .then(aircraftTypeArgument(AutopilotCommand::flight)));
     }
 
     private static int departureDelayTicks(CommandContext<CommandSourceStack> context) {
         return optionalInt(context, "seconds", 0) * 20;
+    }
+
+    /**
+     * {@code type <plane|large|cargo|random>} — which airframe flies the sortie.
+     *
+     * <p>A keyword branch for the same reason the delay is one: every existing invocation has to
+     * keep parsing unchanged, and there is now more than one optional thing to say. It is accepted
+     * last, after {@code delay}, so the two read in the order a person says them ("in thirty
+     * seconds, a cargo plane") without doubling the size of the tree to allow both orders.
+     *
+     * <p>{@code random} draws from the three fixed-wing airframes. Helicopters are excluded
+     * deliberately — see {@link AircraftType}.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> aircraftTypeArgument(
+            com.mojang.brigadier.Command<CommandSourceStack> action) {
+        return Commands.literal("type")
+            .then(Commands.argument("aircraft", StringArgumentType.word())
+                .suggests((context, builder) -> SharedSuggestionProvider.suggest(
+                    Arrays.stream(AircraftType.values()).map(AircraftType::getSerializedName), builder))
+                .executes(action));
+    }
+
+    private static AircraftType aircraftType(CommandContext<CommandSourceStack> context) {
+        return has(context, "aircraft")
+            ? AircraftType.byName(StringArgumentType.getString(context, "aircraft"))
+            : AircraftType.PLANE;
+    }
+
+    /** "cargo plane", "large plane", "plane" — read off the entity, so it cannot disagree with it. */
+    private static String airframeOf(PlaneEntity plane) {
+        return BuiltInRegistries.ENTITY_TYPE.getKey(plane.getType()).getPath().replace('_', ' ');
     }
 
     /** " at 2.40 blocks/tick", or " at the default 2.40 blocks/tick" — always says what was ordered. */
@@ -411,7 +451,7 @@ public final class AutopilotCommand {
         Airfield nearest = AutopilotSavedData.get(level).nearest(from.getX(), from.getZ(), 512);
         PlaneEntity plane = AutopilotSpawner.launchRoute(level, waypoints, cruiseAltitude, 2,
             nearest == null ? null : nearest.name(), source.getPlayer(),
-            cruiseSpeed, Blast.DEFAULT);
+            cruiseSpeed, Blast.DEFAULT, aircraftType(context));
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -419,7 +459,8 @@ public final class AutopilotCommand {
         source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " flying "
             + from.toShortString() + " -> " + to.toShortString() + " -> " + from.toShortString()
             + " at altitude " + cruiseAltitude + describeSpeed(cruiseSpeed) + ", "
-            + (nearest == null ? "improvised landing" : "landing at " + nearest.name())), true);
+            + (nearest == null ? "improvised landing" : "landing at " + nearest.name())
+            + ", " + airframeOf(plane)), true);
         return 1;
     }
 
@@ -467,7 +508,7 @@ public final class AutopilotCommand {
         }
 
         PlaneEntity plane = AutopilotSpawner.launchSortie(level, from, to, source.getPlayer(),
-            cruiseSpeed, Blast.DEFAULT, delayTicks);
+            cruiseSpeed, Blast.DEFAULT, delayTicks, aircraftType(context));
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -478,7 +519,7 @@ public final class AutopilotCommand {
             + ", " + Math.round(plane.getZ()) + "), sortie to " + to.name()
             + " - " + Math.round(distance) + " blocks" + describeSpeed(cruiseSpeed)
             + (delayTicks > 0 ? ", departing in " + delayTicks / 20 + "s" : "")
-            + " (once the runway is free)."), true);
+            + " (once the runway is free), " + airframeOf(plane) + "."), true);
         return 1;
     }
 
@@ -512,7 +553,7 @@ public final class AutopilotCommand {
 
         PlaneEntity plane = AutopilotSpawner.launchInbound(level,
             new Vec3(from.getX() + 0.5, from.getY(), from.getZ() + 0.5), destination, source.getPlayer(),
-            cruiseSpeed, Blast.DEFAULT);
+            cruiseSpeed, Blast.DEFAULT, aircraftType(context));
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -521,7 +562,7 @@ public final class AutopilotCommand {
             + destination.name() + " from " + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
             + ", " + Math.round(plane.getZ()) + " - "
             + Math.round(AutopilotMath.horizontalDistance(plane.position(), destination.centre()))
-            + " blocks" + describeSpeed(cruiseSpeed) + "."), true);
+            + " blocks" + describeSpeed(cruiseSpeed) + ", " + airframeOf(plane) + "."), true);
         return 1;
     }
 
