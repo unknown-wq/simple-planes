@@ -136,6 +136,7 @@ public final class AirfieldBrowser {
 
         thresholdLine(output, level, airfield, endA);
         thresholdLine(output, level, airfield, endB);
+        centrelineLine(output, level, airfield);
 
         output.component(AutopilotText.tr("detail.preferred", "  preferred landing direction %s",
             airfield.bestEnd(level).designator()));
@@ -197,6 +198,29 @@ public final class AirfieldBrowser {
         }
         output.component(line.append(Component.literal("  "))
             .append(copyable(BlockPos.containing(end.threshold()))));
+    }
+
+    /**
+     * Whether this airfield's stored centreline is actually down the middle of its strip, and what
+     * to do about it if not.
+     *
+     * <p>The survey only started centring the thresholds recently, and airfields already on disk
+     * were deliberately left exactly as they were saved — nothing reinterprets a stored threshold.
+     * The consequence is that an old airfield can sit half a runway width off its own strip with
+     * nothing anywhere saying so, and every arrival into it will fly that line perfectly. This is
+     * where it says so. The measurement is live, so it needs the runway's chunks loaded and it is
+     * silent when they are not: an unloaded strip reads as having no edges, and an airfield nobody
+     * is standing near must not be accused of being crooked on no evidence.
+     */
+    private static void centrelineLine(AutopilotOutput output, Level level, Airfield airfield) {
+        double offset = airfield.centrelineOffset(level);
+        if (offset < 1.0) {
+            return;
+        }
+        output.component(AutopilotText.tr("detail.off_centre",
+            "  centreline is %s blocks off the middle of the strip - run"
+                + " /autopilot airfields resurvey \"%s\" while standing near it",
+            String.format("%.0f", offset), airfield.name()).withStyle(ChatFormatting.YELLOW));
     }
 
     private static void parkingLines(AutopilotOutput output, Level level, Airfield airfield) {
@@ -329,6 +353,68 @@ public final class AirfieldBrowser {
         output.component(AutopilotText.tr("manage.renamed", "Renamed %s to %s.", from, to)
             .withStyle(ChatFormatting.GREEN));
         return true;
+    }
+
+    /**
+     * Measures an already-registered airfield again from its own stored thresholds, keeping its name
+     * and its parking spots.
+     *
+     * <p><b>This exists because nothing else re-reads a stored threshold, and nothing else should.</b>
+     * The survey now puts the thresholds on the middle of the strip rather than on the blocks that
+     * were clicked, which moves the take-off lineup, the aim point, the glide slope and the landing
+     * gates together. Applying that to airfields already on disk on load would silently move every
+     * runway in every existing world, and this codebase has been bitten by silently reinterpreting
+     * persisted data before. So stored airfields keep exactly the geometry they were saved with, and
+     * this is the one command that changes it — deliberately, by name, from a player who asked.
+     *
+     * <p>Re-clicking both ends with the survey tool already does the same thing, because a survey
+     * whose thresholds land within the re-survey tolerance of a registered pair replaces it. This
+     * only removes the need to be standing on the right blocks: the stored ones are the right blocks.
+     * It still needs the runway loaded, for the same reason {@code /autopilot survey} does — a survey
+     * of unloaded ground registers a runway made of nothing.
+     */
+    public static boolean resurvey(AutopilotOutput output, ServerLevel level, String name) {
+        AutopilotSavedData data = AutopilotSavedData.get(level);
+        Airfield airfield = data.get(name);
+        if (airfield == null) {
+            output.component(unknown(name).withStyle(ChatFormatting.RED));
+            return false;
+        }
+        if (RunwayOccupancy.holder(level, name) != null) {
+            output.component(AutopilotText.tr("manage.busy",
+                "%s is in use by an aircraft; try again when the runway is free.", name)
+                .withStyle(ChatFormatting.RED));
+            return false;
+        }
+        BlockPos a = airfield.thresholdA();
+        BlockPos b = airfield.thresholdB();
+        if (!level.hasChunkAt(a) || !level.hasChunkAt(b)) {
+            output.component(AutopilotText.tr("manage.resurvey_unloaded",
+                "%s is not loaded, and a survey measures real blocks. Go to the runway, or"
+                    + " force-load it, and try again.", name).withStyle(ChatFormatting.RED));
+            return false;
+        }
+        Airfield fresh = Airfield.survey(level, name, a, b)
+            .withParkingSpots(airfield.parkingSpots());
+        data.put(fresh);
+        double moved = Math.max(distance(a, fresh.thresholdA()), distance(b, fresh.thresholdB()));
+        output.component(moved < 0.5
+            ? AutopilotText.tr("manage.resurveyed_unchanged",
+                "Re-surveyed %s; its centreline was already down the middle of the strip.", name)
+                .withStyle(ChatFormatting.GREEN)
+            : AutopilotText.tr("manage.resurveyed",
+                "Re-surveyed %s: the centreline moved %s blocks onto the middle of the strip."
+                    + " Everything an arrival is flown to moves with it.",
+                name, String.format("%.0f", moved)).withStyle(ChatFormatting.GREEN));
+        AirfieldReport.report(output, level, fresh);
+        AirfieldReport.highlight(level, fresh);
+        return true;
+    }
+
+    private static double distance(BlockPos a, BlockPos b) {
+        double dx = a.getX() - b.getX();
+        double dz = a.getZ() - b.getZ();
+        return Math.sqrt(dx * dx + dz * dz);
     }
 
     /** Marks a parking spot, or explains why that place will not do. */

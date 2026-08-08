@@ -44,7 +44,7 @@ import java.util.List;
  * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed] [delay &lt;seconds&gt;]
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt; [speed]
  * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
- * /autopilot airfields [info|show|remove|rename|park|unpark] …
+ * /autopilot airfields [info|show|resurvey|remove|rename|park|unpark] …
  * /autopilot tower [&lt;airfield&gt;]
  * /autopilot status
  * /autopilot stop
@@ -169,6 +169,10 @@ public final class AutopilotCommand {
                     .then(Commands.argument("airfield", StringArgumentType.string())
                         .suggests(AIRFIELD_SUGGESTIONS)
                         .executes(AutopilotCommand::airfieldShow)))
+                .then(Commands.literal("resurvey")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .executes(AutopilotCommand::airfieldResurvey)))
                 .then(Commands.literal("remove")
                     .then(Commands.argument("airfield", StringArgumentType.string())
                         .suggests(AIRFIELD_SUGGESTIONS)
@@ -615,6 +619,16 @@ public final class AutopilotCommand {
         source.sendSuccess(() -> Component.literal("Marked " + airfield.name() + " at "
             + airfield.thresholdA().toShortString() + "."), false);
         return 1;
+    }
+
+    /**
+     * Re-measures a registered airfield from its own stored thresholds. The one command that
+     * rewrites saved runway geometry — see {@link AirfieldBrowser#resurvey}.
+     */
+    private static int airfieldResurvey(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return AirfieldBrowser.resurvey(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "airfield")) ? 1 : 0;
     }
 
     private static int airfieldRemove(CommandContext<CommandSourceStack> context) {

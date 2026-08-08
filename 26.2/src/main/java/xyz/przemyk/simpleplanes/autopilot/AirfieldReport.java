@@ -37,9 +37,37 @@ public final class AirfieldReport {
         if (existing != null) {
             output.line("Re-surveyed " + airfield.name() + ", replacing the previous measurement.");
         }
+        reportCentring(output, first, second, airfield);
         report(output, level, airfield);
         highlight(level, airfield);
         return airfield;
+    }
+
+    /**
+     * Says so when the survey moved a threshold off the block that was clicked.
+     *
+     * <p>Silently relocating the thing the player just pointed at would be worse than the bug it
+     * fixes, and the number is the one that matters: half a runway width of correction is the
+     * difference between rolling down the middle and rolling along the edge. Nothing is printed when
+     * the clicks were already on the centreline, which is the case on any strip whose edges the
+     * survey cannot see (see {@code Airfield#centreOnStrip}).
+     */
+    private static void reportCentring(AutopilotOutput output, BlockPos first, BlockPos second,
+                                       Airfield airfield) {
+        // survey() keeps the order of the two clicks, and it only ever moves a threshold sideways,
+        // so this distance is the lateral correction and nothing else.
+        double moved = Math.max(horizontal(first, airfield.thresholdA()),
+            horizontal(second, airfield.thresholdB()));
+        if (moved >= 0.5) {
+            output.line(String.format("  centreline moved %.0f blocks: the thresholds are on the"
+                + " middle of the strip, not on the blocks that were clicked", moved));
+        }
+    }
+
+    private static double horizontal(BlockPos a, BlockPos b) {
+        double dx = a.getX() - b.getX();
+        double dz = a.getZ() - b.getZ();
+        return Math.sqrt(dx * dx + dz * dz);
     }
 
     /**

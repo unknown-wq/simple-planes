@@ -258,15 +258,18 @@ Two modes, switched with **sneak + right-click the air**; the tooltip says which
 
 **Right-click the air** in either mode browses the airfields, nearest first.
 
-Mark the two **centreline ends** (not opposite corners), which is what makes the runway heading
-exact. The survey reports:
+**Click anywhere on each end** — a corner is fine. The survey finds the middle of the strip for
+itself; see [The centreline is the middle of the strip](#the-centreline-is-the-middle-of-the-strip).
+The survey reports:
 
 * length, measured width, slope in degrees
-* both thresholds with their elevation and compass heading
+* both thresholds with their elevation and compass heading, and how far the thresholds had to move
+  sideways to reach the middle of the strip
 * both **runway designators** (`09/27` style, derived from the true heading)
 * surface roughness — the standard deviation of the centreline surface height, so `0.00` is a
   perfectly flat strip
-* obstacles in each approach funnel: terrain columns poking above the glide slope out to 200 blocks
+* obstacles in each approach funnel: 10-block segments of the funnel with something poking above the
+  glide slope, out to 200 blocks
 * the preferred landing direction
 * warnings for a short runway or a steep slope
 
@@ -539,6 +542,80 @@ beyond that it commits to the landing rather than orbiting forever.
    runway aiming point, once a second above 15 blocks AGL. Unlike the heightmap this also catches
    overhangs. A blocked corridor triggers a go-around.
 
+### The centreline is the middle of the strip
+
+The user's report was that the aircraft "always takes off from the exact first point marked with
+right-click and lands on that point or on the opposite one, instead of down the middle of the runway
+end" — *"самолет всегда взлетает из крайней первой точки что отмечена ПКМ и садится туда же или на
+противоположную, а не по середине края"*. That was exactly what the code did: `Airfield.survey` took
+the two clicked blocks as the thresholds, literally, and **every number the aircraft flies hangs off
+the threshold** — the take-off lineup, the parking apron, the touchdown aim point, the glide slope,
+the lateral offset on the approach and the landing gates. Mark an edge and all of them move to the
+edge together.
+
+Nobody clicks the middle of a runway end, because there is nothing there to click. You stand on a
+corner, where you can see what you are marking.
+
+Measured on the rig, both ends clicked on the left edge of a 13-wide plinth running from x = −6.0 to
+x = 7.0 (true middle x = 0.5):
+
+| | before | after |
+|---|---|---|
+| stored thresholds | `-6 -57 0` / `-6 -57 -160` | `0 -57 0` / `0 -57 -160` |
+| parked and rolling, whole take-off | x = **−5.50** | x = **0.50** |
+| touchdown and stop | x = **−5.8** | x = **0.20** |
+| off the middle of the strip | **6.3 blocks**, on a strip 6.5 blocks wide either side | **0.3** |
+| lateral tracking error (`lat` in the trace) | −0.2 | −0.2 |
+
+That last row is the point. The aircraft was never flying badly; it was flying a perfect approach
+onto a line the survey had put on the runway edge, with the outboard wing over the drop-off.
+
+**Each end is centred on its own cross-section.** The survey measures how far the strip reaches
+either side of each clicked point, perpendicular to the current centreline, and moves that end to the
+middle of what it finds — then re-derives the heading and does it again, up to
+`SURVEY_CENTRING_PASSES` (3) times, because moving an end sideways changes the perpendicular.
+
+The obvious alternative was to keep the clicked heading exactly and shift both ends by one common
+amount. It was tried first and it is wrong on the case that matters most: the two corners easiest to
+reach at the two ends of a strip are usually on *opposite* sides, and averaging +6 and −6 gives 0, so
+the centreline stays diagonal — the very arrival being complained about. Measured with the near-left
+and far-right corners of the same 160×13 strip clicked, independent centring returns `0 -57 0` /
+`0 -57 -160` and designators 000/180: the two corner clicks become the true axis. The cost is that
+the survey may report a slightly different heading from the one clicked, which is a correction — the
+strip's own edges are better evidence of which way it runs than two clicks are.
+
+**Ground the survey cannot tell from the strip is left alone.** The cross-section stops at the first
+column more than a block off the threshold elevation, so a runway flush with the field around it —
+or anything on the superflat test world — has no edges to find, both probes run to the limit, the
+offset comes out zero and the clicked line is kept untouched. Verified: an off-centre survey on the
+open superflat produces exactly the thresholds that were clicked and prints no correction.
+
+**It also fixes the measured width.** The width probe ran ±`SURVEY_MAX_WIDTH/2` from the clicked
+line, which is only half the strip when the click is on an edge. A 25-wide strip clicked on its left
+edge measured **13**; clicked in the middle it measured 25. It now reports 25 either way, because the
+probe runs from a centreline that is actually central. Width feeds the landing lateral gate, the
+parking apron offset and now the approach funnel, so halving it was not cosmetic.
+
+> **Airfields already on disk are not touched.** `Airfield` persists its two thresholds, and
+> re-centring them on load would silently move every runway in every existing world — this codebase
+> has been bitten by silently reinterpreting persisted data before, and the correction here is up to
+> half a runway width. **Only newly surveyed airfields are centred.** A stored airfield keeps exactly
+> the geometry it was saved with, and there are two ways to bring it up to date, both of which a
+> human has to ask for:
+>
+> * re-click both ends with the survey tool, which already replaces an airfield whose thresholds land
+>   within 12 blocks of a registered pair, or
+> * **`/autopilot airfields resurvey <airfield>`**, new here, which re-measures the field from its own
+>   stored thresholds and keeps its name and its parking spots.
+>
+> `/autopilot airfields info` says when a field needs it — `centreline is 6 blocks off the middle of
+> the strip - run /autopilot airfields resurvey "airfield-1" while standing near it` — and says
+> nothing when the runway's chunks are not loaded, because an unloaded strip reads as having no edges
+> and a field nobody is standing near must not be accused of being crooked on no evidence. `resurvey`
+> refuses an unloaded field for the same reason `/autopilot survey` does, refuses while an aircraft
+> holds the runway, and is idempotent: run twice it reports `its centreline was already down the
+> middle of the strip`.
+
 ### Where on the runway it touches down
 
 The user's complaint was that a 183-block strip was being used from the very edge — "садятся
@@ -731,6 +808,90 @@ really has come to rest on them — that was never a false altitude, only a fals
 the next section that fixes it. What did change for a forest is the flare: a canopy rising under the
 approach used to bring AGL to four blocks while the aircraft was still well above the runway, and the
 height-above-threshold term now refuses that.
+
+### What the approach funnel can see, and the bamboo report
+
+The report was that **bamboo is not treated as an obstacle** — the modern bamboo, not sugar cane.
+Most of that does not reproduce, and the half that does is not about bamboo at all.
+
+**Bamboo is visible to every heightmap the mod uses.** `Blocks.BAMBOO` is registered
+`.forceSolidOn()`, and `BlockBehaviour.BlockStateBase#calculateSolid` returns true on that flag
+before it ever looks for a collision-shape cache — which matters, because bamboo is also
+`.dynamicShape()` and therefore has no cache. `blocksMotion()` is
+`block != COBWEB && block != BAMBOO_SAPLING && isSolid()`, so a stalk is in `MOTION_BLOCKING` *and* in
+`OCEAN_FLOOR`. Measured by flying over a 15-block bamboo wall on the superflat with the trace on:
+`gnd=-45` against a ground of −60, `landable=true`. Terrain following sees it, the survey counts it,
+and the flare treats its canopy as a surface.
+
+**Bamboo collides, and hard.** Its collision shape is a full-height column 3/16 of a block wide, and
+that is enough. Measured with planes summoned into a 61×101 bamboo grove 15 stalks tall, entering
+horizontally at canopy height with a known `Motion` (the same method as the water-impact recipe):
+
+| entry speed | outcome |
+|---|---|
+| 0.50 b/t | stopped 4 blocks inside the grove, **−2 HP**, and stayed there permanently |
+| 1.00 b/t | **destroyed**, 4 blocks in |
+| 2.00 b/t | **destroyed**, 2 blocks in |
+| 2.00 b/t into a stone wall of the same height (control) | destroyed |
+
+So an aircraft flown into a bamboo forest is stopped or destroyed exactly as it is by a wall. Nothing
+here needed fixing, and the "an aircraft that settles into a canopy really has come to rest on it"
+judgement recorded for leaves applies unchanged: the aircraft does come to rest on the bamboo, it is
+not on a runway, and `landingProblem` says so rather than reporting a landing.
+
+**What was actually broken is how the approach funnel was sampled**, and it lost stone just as
+happily as bamboo. `countApproachObstacles` took **one heightmap column every 10 blocks along the
+extended centreline** — 20 points, and nothing else, in a corridor 200 blocks long and as wide as the
+runway. Measured on a 160-block field with a 20-block-tall obstruction in its 36 funnel:
+
+| obstruction | before | after |
+|---|---|---|
+| bamboo wall 5 deep, on the centreline, **between** two stations | **0** | 1 |
+| bamboo clump 4–8 blocks **beside** the centreline, over a station | **0** | 2 |
+| **stone** wall 5 deep, on the centreline, between two stations | **0** | 1 |
+| bamboo wall 5 deep, moved 5 blocks so a station lands on it (control) | 1 | 2 |
+| nothing at all (control) | 0 | 0 |
+
+The preferred landing direction followed: before, only the control flipped the field to its other
+end; after, every one of them does.
+
+Each station is now a **cell** rather than a column — `SURVEY_APPROACH_SUBSTEPS` (5) positions along
+track, so there is a sample every 2 blocks instead of every 10, and
+`SURVEY_APPROACH_LATERAL_SAMPLES` (5) columns spread across the funnel width, which is the runway's
+own width with a floor of `SURVEY_FUNNEL_MIN_HALF_WIDTH` (5) either side. A station is flagged when
+the highest column in its cell pokes above the glide slope, so **the reported number keeps its old
+scale** — still 20 stations, still "n of 20" — and stays comparable with the counts already persisted
+on existing airfields. It can only ever go up, which is the safe direction. Cost is 25 heightmap
+lookups per station and 500 per funnel, paid at survey time and once per arrival for an airfield old
+enough to have no stored counts; nothing here runs per tick.
+
+`TerrainScanner.scan` samples the cruise profile the same way — 12 columns over 220 blocks — and was
+deliberately left alone. It is far less exposed, because the grid moves with the aircraft: an
+obstacle missed at 200 blocks out is sampled again at 180, at 160 and at every sample distance in
+between as the aircraft closes on it, which a one-shot survey of a fixed funnel never gets to do.
+
+**Other tall vegetation.** Bands laid across a cruise track on the superflat and read straight off
+the per-tick trace, with `random_tick_speed` set to 0 so nothing grows mid-measurement:
+
+| band | `gnd` | `landable` | in the heightmaps? |
+|---|---|---|---|
+| plain grass (control) | −60 | true | — |
+| **bamboo stalks**, 15 tall | **−45**, the canopy | true | both. `forceSolidOn` |
+| **bamboo saplings** | −60, the bare ground | true | **neither** — `blocksMotion` excludes them by name |
+| **sugar cane**, 3 tall | −60 | true | neither — `noCollision`, so not solid |
+| **cactus**, 3 tall | **−57**, its top | true | both — it has a nearly full collision box |
+| **kelp** in 4 of water | −59, the waterline | false | the water is seen, the kelp is not |
+| **big dripleaf** on a 2-block stem | −60 | true | neither — `forceSolidOff` |
+| **tall grass** (two blocks) | −60 | true | neither |
+| **sweet berry bushes** | −60 | true | neither |
+| **vines** on a wall face | −60 | true | neither |
+
+Nothing in that table is worth code. Everything invisible is at most three blocks tall against a
+`TERRAIN_CLEARANCE` of 22, and everything invisible except one has no collision either, so an
+aircraft passes straight through it — the same consistency powder snow has. The exception is worth
+knowing about: **big dripleaf is `forceSolidOff` but `BigDripleafBlock` does have a collision shape**,
+so it is the one plant that is invisible to the scanner and solid to `Entity#move`. A leaf on a stem
+is not an obstacle at aircraft scale, so it is recorded here rather than fixed.
 
 ### A landing report has to be true
 
@@ -1172,6 +1333,7 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
 /autopilot airfields                             browse, nearest first
 /autopilot airfields info <airfield>             the full survey of one field
 /autopilot airfields show <airfield>             draw it in world with particles
+/autopilot airfields resurvey <airfield>         re-measure it from its own stored thresholds
 /autopilot airfields rename <airfield> <name>    rename it
 /autopilot airfields remove <airfield>           delete it
 /autopilot airfields park <airfield> <x y z>     mark a parking spot
@@ -1461,7 +1623,19 @@ world cannot double-count either.
   in a turn, flip the sign of `desiredRoll` in `PlaneAutopilot#applyControls` — it will not change the
   flight path. The *magnitude* does matter, though: a banked aircraft yawing hard couples into pitch
   through the quaternion, which is why bank is surrendered at low speed.
-* **Improvised landings are rough** by nature. Survey a runway for anything reliable.
+* **Improvised landings are rough** by nature. Survey a runway for anything reliable. They are also
+  not centred on anything: `Airfield.improvise` builds its thresholds straight from the terrain
+  rather than going through `survey`, so the centring described in
+  [The centreline is the middle of the strip](#the-centreline-is-the-middle-of-the-strip) does not
+  apply to them. There is nothing to centre on — the strip is a guess, not a built runway.
+* **A runway the survey cannot see the edges of keeps the clicked centreline.** The cross-section
+  stops at the first column more than a block off the threshold elevation, so a strip laid flush with
+  the ground around it — mown grass, a dirt road, anything on the superflat — offers no evidence of
+  where its middle is and the two clicks are used as given. Build a lip, a verge or a step of two
+  blocks or more if you want the survey to find the middle for you.
+* **Approach obstacles are counted in a corridor as wide as the runway**, out to 200 blocks and no
+  further, with a floor of 5 blocks either side on a narrow strip. A mast standing 30 blocks off the
+  centreline of a 13-wide field is not in the count, and neither is anything past 200 blocks.
 * **The touchdown aim point is derived from the runway's length and nothing else.** Not from the
   approach speed, which the arrival does not inherit anyway; not from the surface, which changes the
   roll-out by less than the block-to-block scatter of the float; and not from what stands past the

@@ -424,17 +424,14 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      */
     private static int scoreApproach(Level level, RunwayEnd end) {
         int score = 0;
-        double heading = end.landingHeading();
-        Vec3 threshold = end.threshold();
         for (int distance = AutopilotConfig.SURVEY_APPROACH_STEP;
              distance <= AutopilotConfig.SURVEY_APPROACH_LENGTH;
              distance += AutopilotConfig.SURVEY_APPROACH_STEP) {
-            Vec3 probe = AutopilotMath.pointAlong(threshold, heading + 180.0, distance);
             double allowed = Math.max(
                 end.glideSlopeAltitude(distance) - AutopilotConfig.SURVEY_OBSTACLE_MARGIN,
                 end.elevation());
-            int terrain = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
-            if (terrain == TerrainScanner.UNKNOWN_HEIGHT || terrain > allowed) {
+            FunnelCell cell = funnelCell(level, end, distance);
+            if (cell.anyUnknown() || (cell.known() && cell.highest() > allowed)) {
                 score++;
             }
         }
@@ -442,20 +439,86 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
-     * Counts terrain columns that poke above the glide slope in the approach funnel of one end.
-     * Uses the heightmap, so it is O(1) per sample and never forces a chunk load.
+     * The terrain found in one 10-block segment of an approach funnel.
+     *
+     * @param highest    the highest surface of every column that could be read, or
+     *                   {@link TerrainScanner#UNKNOWN_HEIGHT} when none of them could
+     * @param anyUnknown whether at least one column was in an unloaded chunk. Kept separate from
+     *                   {@code highest} because the report and the ranking need opposite answers:
+     *                   {@link #countApproachObstacles} must not claim an obstacle it did not see,
+     *                   and {@link #scoreApproach} must not treat ground nobody has loaded as clear.
+     */
+    private record FunnelCell(int highest, boolean anyUnknown) {
+        boolean known() {
+            return highest != TerrainScanner.UNKNOWN_HEIGHT;
+        }
+    }
+
+    /**
+     * Samples one station of an approach funnel as a patch of ground rather than as a single column.
+     *
+     * <p>This is the whole of the "bamboo is not treated as an obstacle" fix, and it is not about
+     * bamboo. The funnel used to be one heightmap column every {@value AutopilotConfig#SURVEY_APPROACH_STEP}
+     * blocks along the extended centreline — 20 points, and nothing else in a corridor 200 blocks
+     * long and as wide as the runway. Two things were therefore invisible, and both were measured on
+     * the rig with a 20-block-tall obstruction in the funnel of a 160-block field:
+     *
+     * <ul>
+     *   <li><b>Anything narrower than the step.</b> A wall 5 blocks deep sitting between two
+     *       stations counted 0. The same wall moved 5 blocks so that a station landed on it counted
+     *       1. Bamboo and stone behaved identically, which is the point: this was never a vegetation
+     *       bug. Bamboo only made it visible because bamboo grows in narrow clumps.</li>
+     *   <li><b>Anything beside the centreline.</b> A clump 4 to 8 blocks to one side of a 25-wide
+     *       field's centreline, directly over a station, counted 0 — while the landing gates let the
+     *       aircraft be a full runway width off that line.</li>
+     * </ul>
+     *
+     * <p>The cell keeps the reported number on its old scale — still 20 stations, still "n of 20" —
+     * so it stays comparable with the counts already persisted on airfields surveyed before this,
+     * and it can only ever go up, which is the safe direction. Cost is
+     * {@value AutopilotConfig#SURVEY_APPROACH_SUBSTEPS} x {@value AutopilotConfig#SURVEY_APPROACH_LATERAL_SAMPLES}
+     * = 25 heightmap lookups per station, 500 per funnel. That is paid at survey time and once per
+     * arrival for an airfield old enough to have no stored counts; nothing here runs per tick.
+     */
+    private static FunnelCell funnelCell(Level level, RunwayEnd end, double distance) {
+        double heading = end.landingHeading();
+        double halfWidth = Math.max(AutopilotConfig.SURVEY_FUNNEL_MIN_HALF_WIDTH,
+            end.airfield().width() / 2.0);
+        int highest = TerrainScanner.UNKNOWN_HEIGHT;
+        boolean anyUnknown = false;
+        for (int step = 0; step < AutopilotConfig.SURVEY_APPROACH_SUBSTEPS; step++) {
+            double along = distance - (double) AutopilotConfig.SURVEY_APPROACH_STEP
+                * step / AutopilotConfig.SURVEY_APPROACH_SUBSTEPS;
+            Vec3 centre = AutopilotMath.pointAlong(end.threshold(), heading + 180.0, along);
+            for (int lane = 0; lane < AutopilotConfig.SURVEY_APPROACH_LATERAL_SAMPLES; lane++) {
+                double across = halfWidth * (2.0 * lane
+                    / (AutopilotConfig.SURVEY_APPROACH_LATERAL_SAMPLES - 1) - 1.0);
+                Vec3 probe = AutopilotMath.pointAlong(centre, heading + 90.0, across);
+                int terrain = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
+                if (terrain == TerrainScanner.UNKNOWN_HEIGHT) {
+                    anyUnknown = true;
+                } else if (highest == TerrainScanner.UNKNOWN_HEIGHT || terrain > highest) {
+                    highest = terrain;
+                }
+            }
+        }
+        return new FunnelCell(highest, anyUnknown);
+    }
+
+    /**
+     * Counts the 10-block segments of one end's approach funnel that have something in them poking
+     * above the glide slope. Each segment is sampled as a patch of ground, not as a single column —
+     * see {@link #funnelCell}. Uses the heightmap, so it is O(1) per sample and never forces a
+     * chunk load.
      *
      * <p>Columns in unloaded chunks are not counted, because they were not measured. That makes this
      * an honest report and a dangerous ranking — see {@link #scoreApproach} and {@link #bestEnd}.
      */
     public static int countApproachObstacles(Level level, RunwayEnd end) {
         int violations = 0;
-        double heading = end.landingHeading();
-        Vec3 threshold = end.threshold();
         for (int distance = AutopilotConfig.SURVEY_APPROACH_STEP;
              distance <= AutopilotConfig.SURVEY_APPROACH_LENGTH;
              distance += AutopilotConfig.SURVEY_APPROACH_STEP) {
-            Vec3 probe = AutopilotMath.pointAlong(threshold, heading + 180.0, distance);
             // Never allow less clearance than the runway's own elevation. The margin is subtracted
             // from a slope that starts at the threshold, so within the first couple of samples it
             // asks for headroom *below* the ground the runway is built on: on a perfectly flat
@@ -465,8 +528,8 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             double allowed = Math.max(
                 end.glideSlopeAltitude(distance) - AutopilotConfig.SURVEY_OBSTACLE_MARGIN,
                 end.elevation());
-            int terrain = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
-            if (terrain != TerrainScanner.UNKNOWN_HEIGHT && terrain > allowed) {
+            FunnelCell cell = funnelCell(level, end, distance);
+            if (cell.known() && cell.highest() > allowed) {
                 violations++;
             }
         }
@@ -507,13 +570,25 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
-     * Surveys a runway from two clicked centreline points. The width is measured outwards from the
-     * centreline: the runway is considered to continue sideways for as long as the surface stays
+     * Surveys a runway from two clicked points on its two ends. The width is measured outwards from
+     * the centreline: the runway is considered to continue sideways for as long as the surface stays
      * within one block of the centreline elevation.
+     *
+     * <p><b>The clicked points are not taken as the centreline.</b> They used to be, and that is the
+     * whole of the "the aircraft takes off from the exact block I right-clicked and lands on it"
+     * report: a player marking a strip clicks something they can see and stand on, which is an edge
+     * or a corner, and every number the arrival is flown to — the lineup, the aim point, the glide
+     * slope, the lateral offset, the landing gates — hangs off the threshold. Measured on the rig
+     * with both ends clicked on the left edge of a 13-wide strip, the whole take-off roll and the
+     * touchdown were at x = -5.5 against a strip running from -6.0 to 7.0: 6 blocks off the middle,
+     * with the outboard wing over the drop-off, and the aircraft tracking its centreline perfectly
+     * the whole way (lat = -0.2). See {@link #centreOnStrip}.
      */
     public static Airfield survey(Level level, String name, BlockPos clickedA, BlockPos clickedB) {
-        BlockPos a = snapToSurface(level, clickedA);
-        BlockPos b = snapToSurface(level, clickedB);
+        BlockPos[] thresholds = centreOnStrip(level,
+            snapToSurface(level, clickedA), snapToSurface(level, clickedB));
+        BlockPos a = thresholds[0];
+        BlockPos b = thresholds[1];
         int width = measureWidth(level, a, b);
         // Both approach funnels are counted here, while the chunks are loaded, and stored. This is
         // the only moment the numbers can be trusted: a survey requires a loaded position, whereas
@@ -534,32 +609,137 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         return new BlockPos(pos.getX(), surface - 1, pos.getZ());
     }
 
-    private static int measureWidth(Level level, BlockPos a, BlockPos b) {
-        Vec3 centreA = new Vec3(a.getX() + 0.5, a.getY() + 1.0, a.getZ() + 0.5);
-        Vec3 centreB = new Vec3(b.getX() + 0.5, b.getY() + 1.0, b.getZ() + 0.5);
-        double heading = AutopilotMath.headingTo(centreA, centreB);
-        Vec3 middle = new Vec3((centreA.x + centreB.x) * 0.5, (centreA.y + centreB.y) * 0.5, (centreA.z + centreB.z) * 0.5);
-        double reference = middle.y;
+    /**
+     * How far the strip reaches to either side of one point, in whole blocks.
+     *
+     * @param left  blocks of strip found to the left of the probed point
+     * @param right blocks of strip found to its right
+     */
+    private record CrossSection(int left, int right) {
+        /** How far the probed point is to the right of the middle of what was found. */
+        double offsetFromMiddle() {
+            return (right - left) / 2.0;
+        }
 
+        int width() {
+            return left + right + 1;
+        }
+    }
+
+    /**
+     * Walks sideways from {@code point}, perpendicular to {@code heading}, stopping at the first
+     * column more than a block off {@code reference}.
+     *
+     * @param limit how far to probe on each side. {@link #measureWidth} uses half
+     *              {@link AutopilotConfig#SURVEY_MAX_WIDTH}, because it probes from the middle;
+     *              {@link #centreOnStrip} uses the whole of it, because it probes from wherever the
+     *              player clicked and that may be one full width away from the far edge.
+     */
+    private static CrossSection crossSection(Level level, Vec3 point, double heading,
+                                             double reference, int limit) {
         int left = 0;
         int right = 0;
-        for (int offset = 1; offset <= AutopilotConfig.SURVEY_MAX_WIDTH / 2; offset++) {
-            Vec3 probe = AutopilotMath.pointAlong(middle, heading + 90.0, offset);
-            if (levelWith(level, probe, reference)) {
-                right = offset;
-            } else {
+        for (int offset = 1; offset <= limit; offset++) {
+            if (!levelWith(level, AutopilotMath.pointAlong(point, heading + 90.0, offset), reference)) {
                 break;
             }
+            right = offset;
         }
-        for (int offset = 1; offset <= AutopilotConfig.SURVEY_MAX_WIDTH / 2; offset++) {
-            Vec3 probe = AutopilotMath.pointAlong(middle, heading - 90.0, offset);
-            if (levelWith(level, probe, reference)) {
-                left = offset;
-            } else {
+        for (int offset = 1; offset <= limit; offset++) {
+            if (!levelWith(level, AutopilotMath.pointAlong(point, heading - 90.0, offset), reference)) {
                 break;
             }
+            left = offset;
         }
-        return Math.max(3, left + right + 1);
+        return new CrossSection(left, right);
+    }
+
+    /**
+     * Moves two clicked end points sideways onto the middle of the strip they are standing on, and
+     * returns them as thresholds.
+     *
+     * <p><b>Each end is centred on its own cross-section, so the clicked heading is a starting guess
+     * rather than the answer.</b> The obvious alternative — shift both ends by one common amount, so
+     * that the direction the player indicated is preserved exactly — was tried first and is wrong on
+     * the case that matters most. Clicking a corner is the normal thing to do, and the two corners
+     * that are easiest to reach are usually on opposite sides of the strip; a common shift averages
+     * those two offsets to about zero and leaves the centreline running diagonally across the runway,
+     * which is exactly the arrival the report complains about. Centring the ends independently turns
+     * the same two clicks into the true axis. Measured on a 160x13 strip with the near-left and
+     * far-right corners clicked: the clicked heading is 4.3 degrees off the strip, the common shift
+     * leaves it there, and independent centring produces 000/180 with both thresholds on the middle.
+     *
+     * <p>The cost of independence is that the survey may return a slightly different heading from
+     * the one clicked, and therefore different designators. That is a correction, not a surprise —
+     * the strip's own edges are better evidence of which way it runs than two clicks are.
+     *
+     * <p><b>Ground the survey cannot tell from the strip is left alone.</b> The cross-section stops
+     * at the first column more than a block off the threshold elevation, so on a runway that is
+     * flush with the field around it — a mown strip on flat grass, or anything on the superflat test
+     * world — both probes run to the limit, the offset comes out zero and the clicked line is kept
+     * unchanged. Nothing here invents a centreline out of ground that has no edges.
+     */
+    private static BlockPos[] centreOnStrip(Level level, BlockPos clickedA, BlockPos clickedB) {
+        BlockPos a = clickedA;
+        BlockPos b = clickedB;
+        for (int pass = 0; pass < AutopilotConfig.SURVEY_CENTRING_PASSES; pass++) {
+            double heading = AutopilotMath.headingTo(surfacePoint(a), surfacePoint(b));
+            BlockPos movedA = centreEnd(level, a, heading);
+            BlockPos movedB = centreEnd(level, b, heading);
+            if (movedA.equals(a) && movedB.equals(b)) {
+                break;
+            }
+            a = movedA;
+            b = movedB;
+        }
+        return new BlockPos[] {a, b};
+    }
+
+    /** One end moved onto the middle of its own cross-section, re-snapped to the surface there. */
+    private static BlockPos centreEnd(Level level, BlockPos end, double heading) {
+        Vec3 point = surfacePoint(end);
+        CrossSection section = crossSection(level, point, heading, point.y,
+            AutopilotConfig.SURVEY_MAX_WIDTH);
+        int offset = (int) Math.round(section.offsetFromMiddle());
+        if (offset == 0) {
+            return end;
+        }
+        Vec3 moved = AutopilotMath.pointAlong(point, heading + 90.0, offset);
+        return snapToSurface(level,
+            new BlockPos((int) Math.floor(moved.x), end.getY(), (int) Math.floor(moved.z)));
+    }
+
+    /** The point an aircraft touches at a threshold block: the centre of its top face. */
+    private static Vec3 surfacePoint(BlockPos threshold) {
+        return new Vec3(threshold.getX() + 0.5, threshold.getY() + 1.0, threshold.getZ() + 0.5);
+    }
+
+    /**
+     * How far the stored centreline of this airfield lies from the middle of the strip underneath
+     * it, in blocks — 0 on a runway surveyed since the survey started centring, and up to half the
+     * runway width on one surveyed before it. Measures live terrain, so it is only meaningful with
+     * the runway's chunks loaded and it is deliberately not stored.
+     */
+    public double centrelineOffset(Level level) {
+        double heading = AutopilotMath.headingTo(pointA(), pointB());
+        double offsetA = crossSection(level, pointA(), heading, pointA().y,
+            AutopilotConfig.SURVEY_MAX_WIDTH).offsetFromMiddle();
+        double offsetB = crossSection(level, pointB(), heading, pointB().y,
+            AutopilotConfig.SURVEY_MAX_WIDTH).offsetFromMiddle();
+        return Math.max(Math.abs(offsetA), Math.abs(offsetB));
+    }
+
+    private static int measureWidth(Level level, BlockPos a, BlockPos b) {
+        Vec3 centreA = surfacePoint(a);
+        Vec3 centreB = surfacePoint(b);
+        double heading = AutopilotMath.headingTo(centreA, centreB);
+        Vec3 middle = new Vec3((centreA.x + centreB.x) * 0.5, (centreA.y + centreB.y) * 0.5, (centreA.z + centreB.z) * 0.5);
+        // Half the maximum on each side, because this probes from the middle of a centreline that
+        // centreOnStrip has already put there. Before that it probed from wherever the player
+        // clicked, which is why an edge click on a 25-wide strip used to report a width of 13: one
+        // side found nothing and the other hit the limit halfway across.
+        return Math.max(3, crossSection(level, middle, heading, middle.y,
+            AutopilotConfig.SURVEY_MAX_WIDTH / 2).width());
     }
 
     private static boolean levelWith(Level level, Vec3 probe, double reference) {

@@ -122,7 +122,7 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 | `flight <from> <to> [speed] [delay <s>]` | full sortie between two registered airfields — park, wait, taxi, take-off, cruise, approach, landing. `delay` is seconds spent on the parking spot before the runway is asked for |
 | `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
 | `survey <t1> <t2>` | register a runway |
-| `airfields [info\|show\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
+| `airfields [info\|show\|resurvey\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
 | `tower [<airfield>]` | runway states — free/occupied, by which aircraft, in what mode, for how long, and who is holding |
 | `status` | live list of autopilot aircraft with a status line each |
 | `stop` | stop all of them |
@@ -321,6 +321,36 @@ three times, switches ends, goes around once more, commits, and prints
 `did not land at airfield-1/18: came to rest in the water, at 1, -63, -142`. That is five approaches
 — eight minutes of real time, or about ten seconds under `tick sprint 30000`.
 
+### Recipe: a runway whose edges the survey can see
+
+**The superflat has no runway edges, and that hides a whole class of bug.** `Airfield.measureWidth`
+and the threshold centring both walk sideways until the surface is more than a block off the
+threshold elevation; on open superflat that never happens, so every strip surveyed there reports the
+maximum width of 25 and every click is already "on the centreline". Testing anything about runway
+width or centreline position needs a strip with a detectable lip.
+
+Build a plinth. Superflat is bedrock −64, dirt −63/−62, grass −61, so `surfaceHeight` is −60; filling
+the strip up to −58 puts its surface at −57, three blocks proud of the field:
+
+```sh
+./cmd.sh "forceload add -64 -240 64 80"
+./cmd.sh "fill -6 -60 -160 6 -58 0 minecraft:stone"    # 13 wide (x -6..6), 161 long
+./cmd.sh "autopilot survey -6 -58 0 -6 -58 -160"       # both ends clicked on the LEFT EDGE
+```
+
+**Three blocks, not two, and the reason is the departure.** Two is enough for the width probe (its
+tolerance is ±1) but not for parking: `PARKING_MAX_ELEVATION_DIFFERENCE` is 2, so a two-block plinth
+lets the derived apron sit on the grass *beside* the strip, and the aircraft then has to taxi up a
+step the ground handling cannot climb. Seen on this rig as `takeoff pos=-3,-60,2 spd=0.000 thr=10`
+repeating for 22 000 ticks and then `Plane #4 lost at -3, -60, 2 in takeoff` — a perfect-looking
+freeze that is entirely an artefact of the test terrain. At three blocks the apron is refused and the
+departure starts on the strip, which is what the code intends.
+
+Read the answer off `airfields info` (the stored thresholds are printed) and off the trace: `pos=` in
+`parked`/`takeoff`/`rollout` is where the aircraft actually is across the strip, while `lat=` is only
+its error against the *surveyed* line and reads 0.2 whether that line is down the middle or on the
+edge. Comparing the two is the whole test.
+
 ### Recipe: what the surface probes read
 
 Lay bands of a surface across a cruise track and fly over them with the trace on; there is no need to
@@ -338,6 +368,54 @@ grep "trace #" console.log        # read gnd= and landable= per band
 Measured at 100 blocks up: grass `gnd=-60 landable=true`, lava `gnd=-60 landable=false`, leaves
 `gnd=-57 landable=true`, powder snow `gnd=-60 landable=true` — the ground *under* the snow, because
 powder snow is in neither heightmap. See `AUTOPILOT.md`, "Water is not ground".
+
+**Vegetation needs three extra precautions**, all learned the hard way here. The measured table for
+ten species is in `AUTOPILOT.md`, "What the approach funnel can see, and the bamboo report".
+
+* **Turn random ticking off, and note the gamerule was renamed.** 26.2 namespaces them:
+  `/gamerule random_tick_speed 0`, not `randomTickSpeed`. The old name is a *parse error* on the
+  console, which prints as `gamerule randomTickSpeed 0<--[HERE]` and is easy to read as success. Two
+  runs were wasted on a band of bamboo saplings that had quietly grown into 3-block stalks during a
+  `tick sprint 4000`, which is exactly the reading the band exists to take.
+* **Most plants pop off when `fill` updates their neighbours, and each has its own rule.** Cactus
+  breaks when any horizontal neighbour is solid, and cactus is solid, so a filled slab of it deletes
+  itself — place a lattice, one column every 2 blocks in x *and* z. Sugar cane needs water beside the
+  block underneath it, so lay water channels every third row and cane in the two rows between. Vines
+  need a face to hang on: a stone pillar in the next column along, `minecraft:vine[east=true]` in the
+  column you are measuring.
+* **Check what actually survived before flying.** `execute if block <x y z> minecraft:cactus run say
+  OK cactus` per band, and read the log — a band that silently failed to place reads exactly like a
+  block that is invisible to the heightmap.
+
+### Recipe: flying into something with a known speed
+
+`Motion` in the summon NBT plus `tick freeze` / `tick step` is the cleanest impact measurement on
+this rig, and it is not only for water. An unridden plane is simulated server-side, so it flies the
+real collision path; freezing the clock and stepping it 2 ticks at a time is what makes "where
+exactly did it die" answerable.
+
+```sh
+./cmd.sh "tick freeze"
+./cmd.sh "summon simpleplanes:plane 430 -53.0 390 {Motion:[0.0,0.0,2.0]}"
+./cmd.sh "tick step 2"
+./cmd.sh "execute as @e[type=simpleplanes:plane] run data get entity @s Pos"
+./cmd.sh "execute as @e[type=simpleplanes:plane] run data get entity @s health"
+```
+
+Three traps:
+
+* **Select on `type`, not on a tag.** `Tags:["b20"]` in the summon NBT and `@e[tag=b20]` did not
+  match on this build; `@e[type=simpleplanes:plane]` always does. Kill the previous aircraft and run
+  one at a time instead.
+* **Everything must be inside a `forceload`d region**, including the control. An entity in an
+  unloaded chunk is not in the entity list, so `data get` prints nothing at all — which is
+  indistinguishable from "the aircraft was destroyed", and cost a control run here.
+* **A plane summoned with no throttle sinks while it flies**, about 0.1 blocks/tick at 2.0 b/t
+  forward, so aim the entry a little high if the obstacle is short.
+
+Measured against a 61×101 grove of 15-block bamboo: free until the grove, then 0.50 b/t stops 4
+blocks in at −2 HP and stays there for ever, 1.00 destroys at 4 blocks in, 2.00 destroys at 2 blocks
+in, and 2.00 into a stone wall of the same height destroys likewise.
 
 ### Recipe: is the throttle loop actually regulating
 

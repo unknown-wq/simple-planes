@@ -631,8 +631,49 @@ public final class AutopilotConfig {
 
     // ---- runway survey ----
     public static final int SURVEY_MAX_WIDTH = 24;
+    /**
+     * How many times the survey re-centres the two clicked thresholds on the strip before giving up.
+     *
+     * <p>It has to be more than one because the cross-section is measured perpendicular to the
+     * <em>current</em> centreline, and moving an end sideways changes that centreline. Three is
+     * empirically more than enough: on the rig a threshold clicked on the edge of a 13-wide strip is
+     * centred to the block in one pass and the second pass moves it 0, and the two-corners case
+     * (opposite edges at opposite ends of a 160x13 strip, a 4.3-degree error in the clicked heading)
+     * settles in two. The loop also stops as soon as a pass moves nothing.
+     */
+    public static final int SURVEY_CENTRING_PASSES = 3;
     public static final int SURVEY_APPROACH_LENGTH = 200;
     public static final int SURVEY_APPROACH_STEP = 10;
+    /**
+     * Sub-samples along track inside one approach-funnel station, so the funnel is covered
+     * continuously instead of at 20 isolated points.
+     *
+     * <p>{@link #SURVEY_APPROACH_STEP} is the spacing of the stations the count is reported in, and
+     * it used to be the sampling resolution as well: one heightmap column every 10 blocks. Anything
+     * narrower than that could sit between two samples and be invisible. Measured on the rig with a
+     * 20-block-tall wall 5 blocks deep in the approach funnel of a 160-block field: on the
+     * centreline between two stations it counted <b>0</b> obstacles, and the same wall moved 5
+     * blocks so that it covered a station counted 1 — and the material made no difference, bamboo
+     * and stone both vanished. 5 sub-samples puts a column every 2 blocks, so the smallest thing
+     * that can hide is a 1-block-thick wall.
+     */
+    public static final int SURVEY_APPROACH_SUBSTEPS = 5;
+    /**
+     * Columns sampled across the funnel at each along-track position, spread over the funnel width.
+     *
+     * <p>The old sampling looked only at the extended centreline, so a hill, a tree or a bamboo
+     * clump a few blocks to one side was not an obstacle at all — while the landing gates allow the
+     * aircraft to be up to {@link #GATE_LATERAL_OFFSET} (or the runway width) off that line, and the
+     * approach turn routinely uses it. Measured on the rig: a 20-block-tall bamboo clump 4 to 8
+     * blocks off the centreline of a 25-wide field, directly over a station, counted <b>0</b>.
+     */
+    public static final int SURVEY_APPROACH_LATERAL_SAMPLES = 5;
+    /**
+     * Narrowest funnel the survey will look across, in blocks either side of the extended centreline.
+     * The funnel is the runway's own width carried forward, so a wide strip gets a wide funnel; this
+     * is the floor for a strip narrow enough that its own width would be a meaningless corridor.
+     */
+    public static final double SURVEY_FUNNEL_MIN_HALF_WIDTH = 5.0;
     /**
      * What one flagged column in an approach funnel is worth, in blocks of track, when an arrival
      * chooses which end to land on. Large on purpose: a column poking through the glide slope is a
