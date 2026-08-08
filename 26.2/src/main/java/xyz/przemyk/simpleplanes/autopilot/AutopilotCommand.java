@@ -37,7 +37,7 @@ import java.util.List;
  * <pre>
  * /autopilot strike &lt;target&gt; [distance] [bearing] [blast] [blocks] [fire]
  * /autopilot route &lt;from&gt; &lt;to&gt; [speed]
- * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed]
+ * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed] [delay &lt;seconds&gt;]
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt; [speed]
  * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
  * /autopilot airfields [info|show|remove|rename|park|unpark] …
@@ -95,14 +95,25 @@ public final class AutopilotCommand {
                         .then(Commands.argument("speed", cruiseSpeedArgument())
                             .executes(context -> route(context, requestedSpeed(context)))))));
 
+            // flight <from> <to> [speed] [delay <seconds>]
+            //
+            // The delay is what a person thinks of first, but it cannot be the first argument: every
+            // existing `/autopilot flight "a" "b"` and `/autopilot flight "a" "b" 2.60` has to keep
+            // parsing exactly as it does, and inserting a positional argument in front of them would
+            // reinterpret the airfield names. A trailing positional would not work either — it would
+            // be reachable only by also giving a speed. A keyword branch off both the two-argument
+            // and the three-argument forms gets the delay without touching either, and reads as what
+            // it is at the call site.
             root.then(Commands.literal("flight")
                 .then(Commands.argument("from", StringArgumentType.string())
                     .suggests(AIRFIELD_SUGGESTIONS)
                     .then(Commands.argument("to", StringArgumentType.string())
                         .suggests(AIRFIELD_SUGGESTIONS)
-                        .executes(context -> flight(context, AutopilotConfig.CRUISE_SPEED))
+                        .executes(AutopilotCommand::flight)
+                        .then(departureDelayArgument())
                         .then(Commands.argument("speed", cruiseSpeedArgument())
-                            .executes(context -> flight(context, requestedSpeed(context)))))));
+                            .executes(AutopilotCommand::flight)
+                            .then(departureDelayArgument())))));
 
             root.then(Commands.literal("inbound")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
@@ -204,7 +215,29 @@ public final class AutopilotCommand {
     }
 
     private static double requestedSpeed(CommandContext<CommandSourceStack> context) {
-        return AutopilotConfig.clampCruiseSpeed(DoubleArgumentType.getDouble(context, "speed"));
+        return has(context, "speed")
+            ? AutopilotConfig.clampCruiseSpeed(DoubleArgumentType.getDouble(context, "speed"))
+            : AutopilotConfig.CRUISE_SPEED;
+    }
+
+    /**
+     * {@code delay <seconds>} — how long a sortie waits on its parking spot before it asks for the
+     * runway.
+     *
+     * <p>Seconds, because that is what a person thinks in; the flight plan stores ticks. Bounded
+     * rather than unbounded because a parked aircraft holds one of the
+     * {@link AutopilotConfig#MAX_ACTIVE_AUTOPILOTS} slots for the whole wait, so a mistyped delay is
+     * indistinguishable from a launch that failed.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> departureDelayArgument() {
+        return Commands.literal("delay")
+            .then(Commands.argument("seconds",
+                    IntegerArgumentType.integer(0, AutopilotConfig.MAX_DEPARTURE_DELAY_SECONDS))
+                .executes(AutopilotCommand::flight));
+    }
+
+    private static int departureDelayTicks(CommandContext<CommandSourceStack> context) {
+        return optionalInt(context, "seconds", 0) * 20;
     }
 
     /** " at 2.40 blocks/tick", or " at the default 2.40 blocks/tick" — always says what was ordered. */
@@ -306,9 +339,11 @@ public final class AutopilotCommand {
      * for pointing at unloaded ground — which is the normal case, since both runways are usually
      * nowhere near a player. The spawner makes the departure and destination chunks resident itself.
      */
-    private static int flight(CommandContext<CommandSourceStack> context, double cruiseSpeed) {
+    private static int flight(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         ServerLevel level = source.getLevel();
+        double cruiseSpeed = requestedSpeed(context);
+        int delayTicks = departureDelayTicks(context);
         String fromName = StringArgumentType.getString(context, "from");
         String toName = StringArgumentType.getString(context, "to");
 
@@ -340,7 +375,7 @@ public final class AutopilotCommand {
         }
 
         PlaneEntity plane = AutopilotSpawner.launchSortie(level, from, to, source.getPlayer(),
-            cruiseSpeed, Blast.DEFAULT);
+            cruiseSpeed, Blast.DEFAULT, delayTicks);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -349,7 +384,9 @@ public final class AutopilotCommand {
         source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " parked at "
             + from.name() + " (" + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
             + ", " + Math.round(plane.getZ()) + "), sortie to " + to.name()
-            + " - " + Math.round(distance) + " blocks" + describeSpeed(cruiseSpeed) + "."), true);
+            + " - " + Math.round(distance) + " blocks" + describeSpeed(cruiseSpeed)
+            + (delayTicks > 0 ? ", departing in " + delayTicks / 20 + "s" : "")
+            + " (once the runway is free)."), true);
         return 1;
     }
 

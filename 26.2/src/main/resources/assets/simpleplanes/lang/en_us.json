@@ -146,7 +146,7 @@
     "simpleplanes.autopilot.detail.parking_occupied": "  occupied",
     "simpleplanes.autopilot.detail.parking_free": "  free",
     "simpleplanes.autopilot.detail.parking_on_strip": "  on the strip",
-    "simpleplanes.autopilot.manage.busy": "%s is in use by an aircraft on approach; try again when it has landed.",
+    "simpleplanes.autopilot.manage.busy": "%s is in use by an aircraft; try again when the runway is free.",
     "simpleplanes.autopilot.manage.removed": "Removed airfield %s.",
     "simpleplanes.autopilot.manage.blank_name": "An airfield name cannot be blank.",
     "simpleplanes.autopilot.manage.name_taken": "There is already an airfield called %s.",
@@ -157,7 +157,7 @@
     "simpleplanes.autopilot.manage.unpark_none": "No parking spot of %s near %s.",
     "simpleplanes.autopilot.manage.unparked": "Removed the parking spot at %s (%s left).",
     "simpleplanes.autopilot.detail.threshold_unsurveyed": " (measured now, not surveyed)",
-    "simpleplanes.tower.summary": "%s runways in this dimension, %s occupied, %s holding.",
+    "simpleplanes.tower.summary": "%s runways in this dimension, %s occupied, %s holding, %s waiting to depart.",
     "simpleplanes.tower.empty": "No airfields registered in this dimension, and no aircraft holding for one.",
     "simpleplanes.tower.no_traffic": "no traffic",
     "simpleplanes.tower.holding_only": "%s holding, none cleared yet",
@@ -169,5 +169,10 @@
     "simpleplanes.tower.threshold": "%s  heading %s  threshold %s",
     "simpleplanes.tower.not_registered": "(not registered)",
     "simpleplanes.tower.unregistered_note": "not registered in this dimension - traffic is flying to a strip it surveyed for itself, or to one that has since been removed",
-    "simpleplanes.tower.unknown": "No such airfield: %s, and nothing is flying to one by that name. Use /autopilot airfields to list them."
+    "simpleplanes.tower.unknown": "No such airfield: %s, and nothing is flying to one by that name. Use /autopilot airfields to list them.",
+    "simpleplanes.tower.departure": "departure",
+    "simpleplanes.tower.waiting_only": "%s waiting to depart, none cleared yet",
+    "simpleplanes.tower.waiting_header": "waiting to depart (no sequence: the first to poll a free runway takes it):",
+    "simpleplanes.tower.wait_clock": "%s on the clock",
+    "simpleplanes.tower.wait_runway": "waiting for the runway"
 }

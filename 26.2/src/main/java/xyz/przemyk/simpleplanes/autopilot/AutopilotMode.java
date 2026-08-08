@@ -6,18 +6,19 @@ import com.mojang.serialization.Codec;
  * Flight-director state machine states.
  *
  * <pre>
- * IDLE ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
- *                                        │          ▲         │  ▲                │
- *                                        │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
- *                                        └──► STRIKE (one-way attack run, no landing)
+ * IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
+ *                                                 │          ▲         │  ▲                │
+ *                                                 │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
+ *                                                 └──► STRIKE (one-way attack run, no landing)
  * </pre>
  *
- * <p>{@code TAXI} is only entered by a sortie that starts parked at a registered airfield; an
- * aircraft launched in the air begins at {@code CLIMB} and one placed on open ground at
+ * <p>{@code PARKED} and {@code TAXI} are only entered by a sortie that starts at a registered
+ * airfield; an aircraft launched in the air begins at {@code CLIMB} and one placed on open ground at
  * {@code TAKEOFF}.
  */
 public enum AutopilotMode {
     IDLE("idle"),
+    PARKED("parked"),
     TAXI("taxi"),
     TAKEOFF("takeoff"),
     CLIMB("climb"),
@@ -53,9 +54,21 @@ public enum AutopilotMode {
         return IDLE;
     }
 
-    /** Modes in which the aircraft is committed to a runway and must hold the reservation. */
+    /** Modes in which an <em>arriving</em> aircraft is committed to a runway and holds its reservation. */
     public boolean usesRunway() {
         return this == APPROACH || this == FINAL || this == FLARE || this == ROLLOUT || this == TAKEOFF;
+    }
+
+    /**
+     * Modes in which a <em>departing</em> aircraft holds the reservation on the field it is leaving.
+     *
+     * <p>{@code PARKED} is deliberately not one of them: waiting on the spot is exactly the state of
+     * not having the runway yet, and an aircraft that already held it would be gating itself.
+     * {@code TAKEOFF} ends at {@link AutopilotConfig#TAKEOFF_CLEAR_HEIGHT} above the ground and past
+     * the far threshold, which is where the strip is genuinely free again.
+     */
+    public boolean holdsDepartureRunway() {
+        return this == TAXI || this == TAKEOFF;
     }
 
     /** Modes where the wings must stay level (ground roll, touchdown). */
@@ -65,6 +78,6 @@ public enum AutopilotMode {
 
     /** Modes flown with the wheels on the ground, where there is no flight path to speak of. */
     public boolean isGroundPhase() {
-        return this == TAXI || this == TAKEOFF || this == ROLLOUT;
+        return this == PARKED || this == TAXI || this == TAKEOFF || this == ROLLOUT;
     }
 }

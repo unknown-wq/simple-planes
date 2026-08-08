@@ -273,14 +273,15 @@ exact. The survey reports:
 ## 3. The state machine
 
 ```
-IDLE ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
-                              │          ▲         │  ▲                 │
-                              │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
-                              └──► STRIKE (one-way attack run, no landing)
+IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
+                             │          ▲         │  ▲                 │
+                             │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
+                             └──► STRIKE (one-way attack run, no landing)
 ```
 
 | Mode | What it does |
 |---|---|
+| `PARKED` | Stationary on the parking spot, throttle shut, running the departure clock down and then asking for the runway |
 | `TAXI` | Ground steering from the parking spot to the departure threshold at 0.20 speed, elevator neutral |
 | `TAKEOFF` | Full power, ground steering on the runway heading, elevator aft, rotate at 0.35 speed, wings level |
 | `CLIMB` | Climb to cruise altitude on the first waypoint's bearing |
@@ -361,17 +362,28 @@ sampled any closer than that to the aimpoint, and the detonation covers the diff
 ## 3a. Airfield to airfield: the scripted sortie
 
 ```
-/autopilot flight <from> <to>
+/autopilot flight <from> <to> [speed] [delay <seconds>]
 ```
 
 Two registered airfields by name; one aircraft flies the whole thing:
 
-**Parked.** The aircraft is created stationary, on the ground, throttle shut, on an apron beside the
-departure runway — `width/2 + 4` blocks off the centreline and 12 blocks back from the threshold.
-If the ground alongside is not level with the runway (within 2 blocks) the apron is abandoned and it
-parks on the centreline behind the threshold instead, because the surveyed strip is the one piece of
-ground known to be flat. **No initial velocity.** The velocity a strike is launched with is an
-air-launch and stays exclusive to strikes; a runway departure has a runway.
+**Parked.** The aircraft is created stationary, on the ground, throttle shut, on a **marked parking
+spot** if the field has one (§4b) and otherwise on an apron derived from the survey — `width/2 + 4`
+blocks off the centreline and 12 blocks back from the threshold. If the ground alongside is not level
+with the runway (within 2 blocks) the apron is abandoned and it parks on the centreline behind the
+threshold instead, because the surveyed strip is the one piece of ground known to be flat. **No
+initial velocity.** The velocity a strike is launched with is an air-launch and stays exclusive to
+strikes; a runway departure has a runway.
+
+It is spawned one block above the parking surface and settles onto it. Verified on the rig against a
+spot marked at `670, -61, 10`: the launch line reads `parked at airfield-1 (671, -59, 11)` and the
+first `status` poll reads `pos=671,-60,11 agl=0` — the top of the marked block, not inside it. The
+half-block is the difference between the block a player clicked and
+`TerrainScanner.surfaceHeight`, which reports the first *free* block; both `Airfield#pointA` and the
+parking validation use that same convention, so they are directly comparable.
+
+**Waiting.** `PARKED` is where the aircraft sits until it is allowed to move, and there are two
+separate gates — see [Departure delay and the runway gate](#departure-delay-and-the-runway-gate).
 
 **Taxi.** `TAXI` steers to a lineup point at the threshold at `TAXI_SPEED` (0.20 b/t), then stops
 chasing the point and simply holds the runway heading until it is within `TAXI_ALIGNED_ERROR` (8°) —
@@ -389,6 +401,84 @@ chosen by `Airfield#bestEnd` (approach obstacles, ties to uphill).
 
 **Report.** Every phase change that matters prints to the console, and the flight ends with one
 assertable line — `Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).`
+
+### Departure delay and the runway gate
+
+`PARKED` holds the aircraft on its spot until two things are true, in order.
+
+**The clock.** `delay <seconds>` on the command, stored on the flight plan as ticks. It runs down
+whatever else is happening and is purely what was ordered.
+
+**The runway.** Only once the clock has run out does the aircraft ask `RunwayOccupancy` for the
+departure field, and it does not move until it has it. Asking earlier would reserve a strip for an
+aircraft that is not going to use it for another five minutes, which is worse than not reserving one
+at all.
+
+**A departure now reserves the runway**, which is new — it used to reserve nothing, so two sorties
+out of one field would taxi onto the same threshold and the tower board printed `FREE` for a strip
+with an aircraft rolling down it. The reservation is taken *before* the mode changes, so the aircraft
+is never in `TAXI` without holding the runway, and it is released on the `TAKEOFF → CLIMB` transition
+— `TAKEOFF_CLEAR_HEIGHT`, 10 blocks above the ground and past the far threshold. Measured on the rig,
+two sorties ordered 3 s apart out of `airfield-1`:
+
+```
+Plane #56 cleared to taxi at airfield-1/36 after 1s on the parking spot.
+Plane #57 holding on the parking spot at airfield-1: runway occupied by #56.
+  #56 taxi    pos=670,-60,10 ...          dep=airfield-1/36
+  #57 parked  pos=639,-60,4  spd=0.00 ... dep=airfield-1/36 wait=runway
+  … ten seconds of #57 sitting still while #56 taxis, lines up and rolls …
+Plane #57 cleared to taxi at airfield-1/36 after 10s on the parking spot.
+  #56 climb   pos=657,-47,-66 agl=13 ...   ← the same second: #56 left TAKEOFF, #57 got the runway
+```
+
+**It cannot leak.** Nothing here is a new lifetime to get wrong: `RunwayOccupancy` validates every
+reservation against `PlaneAutopilot#holdsRunway` rather than trusting its map, and that method is now
+true for a departure exactly while the mode is `TAXI` or `TAKEOFF`. An aircraft that is killed,
+crashes, despawns or is stopped therefore stops holding the runway without anything having to notice
+— on top of the existing `releaseAll` on `stop` and on `PlaneEntity#remove`. Verified: an aircraft
+killed mid-taxi while holding `airfield-1` leaves the board reading `airfield-1  36/18  FREE`.
+
+**There is no timeout on the runway gate, and that is deliberate.** Rolling anyway after some number
+of failed polls would put an aircraft onto a runway that is genuinely occupied, which is the one
+thing the gate exists to prevent. A departure waits for as long as it takes; `/autopilot tower` is
+what makes that visible. (The *taxi* keeps its `TAXI_TIMEOUT` — by then the aircraft already owns the
+strip and the only question is whether it is straight on it.)
+
+**No order between waiting aircraft.** A parked aircraft polls every `DEPARTURE_POLL_INTERVAL` (20)
+ticks on its own tick counter, which is the same rule and the same interval an arrival in `HOLD`
+uses, so departures and arrivals compete on equal terms and neither can poll the other out simply by
+asking more often. Whoever polls a free runway first takes it. With two aircraft waiting the order is
+unspecified and a long-waiting aircraft can be passed over — the tower board says so in as many words
+rather than printing a queue number that means nothing.
+
+### Why the delay is a keyword argument
+
+`/autopilot flight <from> <to> [speed] [delay <seconds>]`, not `/autopilot flight <delay> <from> <to>`.
+
+The delay is the first thing anyone thinks of, but it cannot be the first argument: `flight` already
+takes two strings, so a leading positional would reinterpret every existing
+`/autopilot flight "airfield-1" "airfield-2"` as a delay and one airfield. A *trailing* positional is
+no better — it would be reachable only by also giving a speed, so "wait 30 seconds" would mean
+"wait 30 seconds and, by the way, here is a cruise speed I did not care about". The keyword branches
+off both the two-argument and the three-argument forms, so all four of these parse and the first two
+are byte-identical to what they were:
+
+```
+/autopilot flight "airfield-1" "airfield-2"
+/autopilot flight "airfield-1" "airfield-2" 2.60
+/autopilot flight "airfield-1" "airfield-2" delay 30
+/autopilot flight "airfield-1" "airfield-2" 2.80 delay 15
+```
+
+Seconds, because that is what a person thinks in; the plan stores ticks. Bounded at
+`MAX_DEPARTURE_DELAY_SECONDS` (3600) by the argument parser — `Integer must not be more than 3600:
+found 99999` — because a parked aircraft still holds one of the 24 autopilot slots and a chunk bubble
+for the whole wait, so a mistyped delay is indistinguishable from a launch that failed.
+
+The plan field is `optionalFieldOf("departure_delay", 0)`, so a plan with no delay writes no key at
+all and is byte-identical to one written before this existed. Verified with `data get`:
+`{kind: "route", …, max_legs: 1}` with no delay ordered, and `…, departure_delay: 300, …` for
+`delay 15`.
 
 ### Testing the arrival on its own
 
@@ -447,9 +537,11 @@ beyond that it commits to the landing rather than orbiting forever.
    overhangs. A blocked corridor triggers a go-around.
 
 **Holding.** `RunwayOccupancy` is a small reservation registry keyed by dimension and airfield name.
-An aircraft reserves the runway when it commits to the approach and releases it on landing, on a
-go-around, or when it is destroyed. A second aircraft arriving at a busy field enters `HOLD` and
-orbits the approach fix at circuit height until the runway frees up.
+An arrival reserves the runway when it commits to the approach and releases it on landing, on a
+go-around, or when it is destroyed; a departure reserves it before it starts to taxi and releases it
+on the climb-out (see [Departure delay and the runway gate](#departure-delay-and-the-runway-gate)).
+A second aircraft arriving at a busy field enters `HOLD` and orbits the approach fix at circuit
+height until the runway frees up; one departing from a busy field stays on its parking spot.
 
 **Which end to land on** is chosen from the approach obstacle counts **recorded by the survey**;
 ties go to the uphill direction, because landing uphill shortens the roll-out. There is no wind —
@@ -581,6 +673,12 @@ the rest are where a queue forms behind it. Verified: two sorties launched a sec
 Anything that fails re-validation drops through to the next spot and finally to the derived apron, so
 a marked spot can never strand an aircraft that would otherwise have flown.
 
+A marked spot is now also somewhere an aircraft **waits** rather than merely somewhere it appears:
+`PARKED` sits there for the ordered delay and then for as long as the runway is busy. That makes the
+"more than one spot" rule load-bearing instead of cosmetic — with two spots marked, two sorties
+ordered seconds apart wait on different squares while the first one uses the strip, and each is
+listed under the field on `/autopilot tower` with what it is waiting for.
+
 ---
 
 ## 5. Terrain following and obstacle avoidance
@@ -613,6 +711,8 @@ you want a reliable one.
 |---|---|---|
 | Airfields, including marked parking spots | `SavedData` per dimension, `data/simpleplanes/airfields.dat` | **Yes** |
 | In-progress route flight | Plane entity NBT, via `FlightPlan.CODEC` | **Yes** |
+| Departure delay *ordered* | Plane entity NBT, `departure_delay` on the plan | **Yes** |
+| Departure delay *remaining* | Flight director only | No — a reloaded `PARKED` becomes `TAKEOFF`, see §9 |
 | Half-drawn route / half-marked runway | Data component on the item | **Yes** |
 | Runway reservations | In memory | No — and correctly so, they are re-derived on load |
 | Strike flights | Not written | No — see below |
@@ -659,7 +759,9 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
 /autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]
                                                  launch an attack run
 /autopilot route <x y z> <x y z> [speed]         fly A -> B -> A and land
-/autopilot flight <from> <to> [speed]            full sortie between two registered airfields
+/autopilot flight <from> <to> [speed] [delay <seconds>]
+                                                 full sortie between two registered airfields;
+                                                 delay is how long it waits on its parking spot
 /autopilot inbound <x y z> <airfield> [speed]    one-way arrival into a named airfield
 /autopilot survey <x y z> <x y z>                survey a runway between two thresholds
 /autopilot tower [<airfield>]                    runway states: free/occupied, by whom, who is holding
@@ -767,34 +869,52 @@ runway doing, and who is waiting for it":
 
 ```
 > autopilot tower
-2 runways in this dimension, 1 occupied, 1 holding.
-airfield-1  36/18  FREE      no traffic
+3 runways in this dimension, 2 occupied, 1 holding, 1 waiting to depart.
+airfield-1  36/18  OCCUPIED  #56 departure, taxi, 0:04
+  waiting to depart (no sequence: the first to poll a free runway takes it):
+    #57 departure, parked, 0:01, waiting for the runway
 airfield-2  36/18  OCCUPIED  #2 arrival, final, 0:22, 186 blocks out
   holding (no sequence: the first to poll a free runway takes it):
     #1 arrival, hold, 0:19, 328 blocks out
+airfield-3  09/27  FREE      1 waiting to depart, none cleared yet
+  waiting to depart (no sequence: the first to poll a free runway takes it):
+    #9 departure, parked, 0:04, 0:25 on the clock
 ```
 
-Per runway: the designator pair, `FREE` or `OCCUPIED`, and for an occupant its id, its mode and how
-long it has held the reservation. Aircraft orbiting for that runway are listed under it,
-longest-wait-first, with the same elapsed time and their horizontal range to the field.
-`/autopilot tower <airfield>` adds the runway geometry, both thresholds, and everything else on the
-way in that has not asked for the runway yet.
+Per runway: the designator pair, `FREE` or `OCCUPIED`, and for an occupant its id, whether it is a
+`departure` or an `arrival`, its mode and how long it has held the reservation. Aircraft orbiting for
+that runway are listed under it, longest-wait-first, with the same elapsed time and their horizontal
+range to the field; aircraft still on their parking spots are listed the same way with **what they
+are waiting for** — `0:25 on the clock` or `waiting for the runway`. Those two are never merged into
+one word, because a wait that cannot say which of the two gates it is behind is indistinguishable
+from a hang. `/autopilot tower <airfield>` adds the runway geometry, both thresholds, and everything
+else on the way in that has not asked for the runway yet.
+
+`/autopilot status` carries the same two facts per aircraft: `dep=airfield-1/36` while it is on the
+ground at the departure field, plus `wait=clock 0:14` or `wait=runway` while it is parked.
+
+```
+#1 parked pos=671,-60,11 agl=0 hdg=324 pitch=+5 roll=-0 spd=0.03 vs=-0.03 thr=0
+    want[hdg=324 alt=-60 spd=0.00] tgt=2655,0,-100 dist=1987 dep=airfield-1/36 wait=clock 0:14 legs=0/1
+```
 
 A name that is not registered still gets a row when traffic is flying to it — an improvised landing
 strip (`field-52  --/--  OCCUPIED  #52 arrival, final, 0:29  (not registered)`), or a field that was
 removed while an aircraft was already inbound.
 
-**The board is read-only and it does not smooth anything over.** Three things it deliberately does
-not claim, all of them true of the code as it stands:
+**The board is read-only and it does not smooth anything over.** Two things it deliberately does
+not claim, both of them true of the code as it stands:
 
-* **No queue order.** There is none: an aircraft in `HOLD` polls `RunwayOccupancy.isFree` every 20
-  ticks and whichever one polls first takes the runway. Numbering the holders would draw an order
-  that does not exist, so they are listed by wait time with the poll rule printed.
-* **No departures.** A reservation is only ever taken for the field an aircraft is *landing* at, so
-  an aircraft taxiing or rolling for take-off holds nothing and its strip reads `FREE`. That is
-  today's behaviour and the board shows it rather than inventing a state.
+* **No queue order.** There is none: an aircraft in `HOLD` or in `PARKED` polls
+  `RunwayOccupancy` every 20 ticks and whichever one polls first takes the runway, arrivals and
+  departures alike. Numbering them would draw an order that does not exist, so they are listed by
+  wait time with the poll rule printed.
 * **No runway end in use.** Which of the two ends an arrival picked is private to the flight
   director; the board prints the pair the airfield has.
+
+The third thing it used to not claim was **departures**, and that is now fixed rather than
+documented: a departure holds a reservation from the start of the taxi to the climb-out, so the
+strip it is using reads `OCCUPIED`, by whom, and in which direction.
 
 Occupancy comes from `RunwayOccupancy.holder()`, which validates the holder instead of trusting the
 map, so the board can never show a runway as busy because of an aircraft that crashed — and it can
@@ -888,11 +1008,17 @@ world cannot double-count either.
 * **There is no taxiway network.** Marked parking makes the *start* of the taxi a human decision;
   the taxi itself is still a straight line to the threshold, which is why a marked spot is validated
   along that line and capped at 64 blocks from it.
-* **There is no runway sequencing.** One reservation per airfield, taken by arrivals only, and no
-  queue behind it: holding aircraft re-poll every 20 ticks and whoever polls first is next, so a
-  long-waiting aircraft can be passed over. Departures reserve nothing at all, so two sorties out of
-  the same field will taxi onto the same threshold. `/autopilot tower` makes both visible; neither
-  is fixed.
+* **There is no runway sequencing.** One reservation per airfield, now taken by departures as well
+  as arrivals, but still no queue behind it: waiting aircraft re-poll every 20 ticks and whoever
+  polls first is next, so a long-waiting aircraft can be passed over and the order between two
+  aircraft waiting for the same strip is unspecified. `/autopilot tower` makes it visible; it is not
+  fixed. What *is* fixed is the collision it used to allow — two sorties out of the same field can
+  no longer taxi onto the same threshold.
+* **A restart during a departure delay departs the aircraft immediately.** `PlaneAutopilot.load`
+  maps a saved `PARKED` to `TAKEOFF`, exactly as it already does for `TAXI`, because it does not
+  re-resolve the departure runway and a restored `PARKED` would have nothing to ask for and no way
+  to leave the spot. The remaining delay is lost. Departing from where it stands is the same
+  compromise a half-finished taxi has always made.
 * **Taxi is a straight line to the threshold.** There is no taxiway network and no obstacle
   avoidance on the ground: the aircraft steers directly at the lineup point. On a surveyed field with
   a sane parking apron that is enough; it will not thread a hangar.
