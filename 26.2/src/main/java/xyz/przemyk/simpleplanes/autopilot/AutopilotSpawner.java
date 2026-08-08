@@ -35,6 +35,8 @@ public final class AutopilotSpawner {
      * boosted plane, so the run starts at attack speed instead of building up to it.
      */
     public static final double STRIKE_LAUNCH_SPEED = 2.0;
+    /** Route launches leave at cruise speed rather than attack speed. */
+    public static final double CRUISE_LAUNCH_SPEED = 0.7;
 
     /**
      * Raised speed ceiling for a strike aircraft.
@@ -153,6 +155,13 @@ public final class AutopilotSpawner {
         PlaneEntity plane = create(level, start.x, start.y, start.z, AutopilotMath.headingTo(start, towards));
         if (plane == null) {
             return null;
+        }
+        // Launch at flying speed, like a strike. A route aircraft spawned mid-air with zero
+        // airspeed has to dive to pick up flying speed, and from a low cruise altitude that dive
+        // ends in the ground.
+        Vec3 run = towards.subtract(start);
+        if (run.lengthSqr() > 1.0E-6) {
+            plane.setDeltaMovement(run.normalize().scale(CRUISE_LAUNCH_SPEED));
         }
         addToWorld(level, plane);
 
