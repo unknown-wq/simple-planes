@@ -47,6 +47,7 @@ import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
 import org.joml.Vector3f;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.autopilot.Blast; // autopilot:
 import xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot; // autopilot:
 import xyz.przemyk.simpleplanes.container.ModifyUpgradesContainer;
 import xyz.przemyk.simpleplanes.container.PlaneInventoryContainer;
@@ -483,7 +484,18 @@ public class PlaneEntity extends Entity {
                 getZ(),
                 10, 1, 1, 1, 1);
         }
-        level().explode(this, getX(), getY(), getZ(), 4.0F, Level.ExplosionInteraction.TNT);
+        // autopilot: the warhead is a property of the flight, not a constant. An aircraft with no
+        // flight plan — every plane a player ever built or flew — gets Blast.DEFAULT, which is
+        // 4.0F with TNT block interaction and no fire, i.e. bit-for-bit what this line used to do.
+        Blast blast = Blast.DEFAULT;
+        PlaneAutopilot engaged = getAutopilot();
+        if (engaged != null && engaged.getPlan() != null) {
+            blast = engaged.getPlan().blast();
+        }
+        // The fuller overload, because "does it break blocks" and "does it start fires" are separate
+        // arguments there: the interaction selects the block behaviour (TNT craters and drops, NONE
+        // leaves the world alone and only damages entities) and fire is its own flag.
+        level().explode(this, getX(), getY(), getZ(), blast.power(), blast.fire(), blast.interaction());
     }
 
     protected void dropItem(ServerLevel serverLevel) {
@@ -1119,9 +1131,23 @@ public class PlaneEntity extends Entity {
      * <p>A plane with a rider is untouched: its {@code Q_Client} is refreshed every tick from the
      * client that is authoritative for it, so the two quaternions agree and the branch below picks
      * the same one it always did.
+     *
+     * <p><b>The test is {@code getPlayer()}, not {@code getControllingPassenger()}.</b> The question
+     * this branch is really asking is "is there somebody whose client is authoritative and sending
+     * {@code RotationPacket}s", and only a player is ever that. {@link #getControllingPassenger()}
+     * returns the first passenger if it is any {@link LivingEntity}, so a <em>mob</em> aboard used to
+     * select {@code Q_Client} — and a mob is not a pilot and sends nothing, so the quaternion stayed
+     * frozen at the spawn orientation and the frozen-thrust bug came straight back. That is not a
+     * hypothetical: {@link LargePlaneEntity} and {@link CargoPlaneEntity} deliberately mount any
+     * nearby non-player {@code LivingEntity} in their {@code tick()}, so a plane parked near a cow
+     * acquires a passenger by itself. Measured on a 200-block out-and-back with a pig aboard, before
+     * this fix: the flight director commanded heading 236 to bring the aircraft home, the nose
+     * obediently read 236, and the aircraft flew east-north-east instead — the range to the target
+     * grew monotonically 380, 575, 826, 1060, 1287 blocks and it never came back. With the fix the
+     * same flight turns and closes.
      */
     public Vector3f transformPosPhysics(Vector3f relPos) {
-        Quaternionf rotation = getControllingPassenger() == null
+        Quaternionf rotation = getPlayer() == null
             ? getQ(transformQScratch)
             : getQ_Client(transformQScratch);
         EulerAngles angles = toEulerAngles(rotation, transformAngles);

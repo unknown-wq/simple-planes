@@ -4,8 +4,12 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,14 +22,50 @@ import java.util.List;
  * <p>Both thresholds are stored at the surface block the aircraft should touch, so
  * {@code threshold.y} is the runway elevation at that end.
  */
-public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, int width) {
+public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, int width,
+                      List<BlockPos> parkingSpots, int approachObstaclesA, int approachObstaclesB) {
+
+    /** Stored obstacle count meaning "never measured" — an airfield from before they were recorded. */
+    public static final int OBSTACLES_UNKNOWN = -1;
 
     public static final Codec<Airfield> CODEC = RecordCodecBuilder.create(instance -> instance.group(
         Codec.STRING.fieldOf("name").forGetter(Airfield::name),
         BlockPos.CODEC.fieldOf("threshold_a").forGetter(Airfield::thresholdA),
         BlockPos.CODEC.fieldOf("threshold_b").forGetter(Airfield::thresholdB),
-        Codec.INT.fieldOf("width").forGetter(Airfield::width)
+        Codec.INT.fieldOf("width").forGetter(Airfield::width),
+        // Optional with an empty default, so every airfield surveyed before parking spots existed
+        // loads unchanged and simply falls back to the derived apron.
+        BlockPos.CODEC.listOf().optionalFieldOf("parking", List.<BlockPos>of())
+            .forGetter(Airfield::parkingSpots),
+        // Likewise optional: an airfield stored before the counts were recorded loads with
+        // OBSTACLES_UNKNOWN and bestEnd falls back to measuring them.
+        Codec.INT.optionalFieldOf("obstacles_a", OBSTACLES_UNKNOWN).forGetter(Airfield::approachObstaclesA),
+        Codec.INT.optionalFieldOf("obstacles_b", OBSTACLES_UNKNOWN).forGetter(Airfield::approachObstaclesB)
     ).apply(instance, Airfield::new));
+
+    public Airfield {
+        parkingSpots = List.copyOf(parkingSpots);
+    }
+
+    /** An airfield with no marked parking and no measured approaches. */
+    public Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, int width) {
+        this(name, thresholdA, thresholdB, width, List.of(), OBSTACLES_UNKNOWN, OBSTACLES_UNKNOWN);
+    }
+
+    public Airfield withName(String newName) {
+        return new Airfield(newName, thresholdA, thresholdB, width, parkingSpots,
+            approachObstaclesA, approachObstaclesB);
+    }
+
+    public Airfield withParkingSpots(List<BlockPos> spots) {
+        return new Airfield(name, thresholdA, thresholdB, width, spots,
+            approachObstaclesA, approachObstaclesB);
+    }
+
+    /** True when the survey measured both approach funnels and the numbers can be trusted. */
+    public boolean hasSurveyedApproaches() {
+        return approachObstaclesA >= 0 && approachObstaclesB >= 0;
+    }
 
     public Vec3 pointA() {
         return new Vec3(thresholdA.getX() + 0.5, thresholdA.getY() + 1.0, thresholdA.getZ() + 0.5);
@@ -79,12 +119,36 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     /**
      * Picks the landing direction with the cleaner approach funnel. Ties are broken towards the
      * downhill-to-uphill direction, because landing uphill shortens the roll-out.
+     *
+     * <p><b>The counts come from the survey, not from a fresh measurement.</b> This used to recount
+     * both funnels every time, and it chose exactly wrongly. {@link #countApproachObstacles} reads
+     * terrain through {@code TerrainScanner.surfaceHeight}, which returns
+     * {@link TerrainScanner#UNKNOWN_HEIGHT} for a column in an unloaded chunk, and an unknown column
+     * was skipped rather than counted — so an unloaded funnel scored <em>zero obstacles and won</em>.
+     * {@code resolveLanding} runs while the aircraft is still hundreds of blocks out, when the far
+     * end's approach is exactly the part of the world nobody has loaded, so the aircraft
+     * systematically chose the end it could not see. Observed on the rig as arrivals onto end 18
+     * against a survey that recorded 36 as preferred; on hilly ground it means choosing the end with
+     * the hill in it, which is the reverse of what the function is for.
+     *
+     * <p>The survey ran with the chunks loaded — {@code /autopilot survey} insists on it — so its
+     * numbers are the trustworthy ones, and they are persisted for precisely this. Airfields stored
+     * before the counts were recorded fall back to measuring, and that fallback now treats an
+     * unknown column as an obstacle rather than as clear sky: "not loaded" must never be the cheapest
+     * answer.
      */
     public RunwayEnd bestEnd(Level level) {
         RunwayEnd a = endA();
         RunwayEnd b = endB();
-        int obstaclesA = countApproachObstacles(level, a);
-        int obstaclesB = countApproachObstacles(level, b);
+        int obstaclesA;
+        int obstaclesB;
+        if (hasSurveyedApproaches()) {
+            obstaclesA = approachObstaclesA;
+            obstaclesB = approachObstaclesB;
+        } else {
+            obstaclesA = scoreApproach(level, a);
+            obstaclesB = scoreApproach(level, b);
+        }
         if (obstaclesA != obstaclesB) {
             return obstaclesA < obstaclesB ? a : b;
         }
@@ -106,36 +170,249 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
-     * Where an aircraft is parked before it taxis: beside the runway, clear of the strip, a little
-     * way back from the departure threshold.
+     * Where an aircraft starts a departure, and which way it is facing there.
      *
-     * <p>Falls back to the centreline behind the threshold when the ground alongside is not level
-     * with the runway — an apron is only sensible if there is somewhere flat to put it, and the
-     * surveyed strip itself is the one piece of ground known to be flat.
+     * @param onRunway true when the spot is on the surveyed strip itself rather than off to one side
      */
-    public static Vec3 parkingPosition(Level level, RunwayEnd departure) {
+    public record ParkingSpot(Vec3 position, double heading, boolean onRunway) {}
+
+    /**
+     * Where an aircraft is parked before it taxis: beside the runway, clear of the strip, a little
+     * way back from the departure threshold — but only if there is somewhere flat to put it.
+     *
+     * <p><b>Every candidate off the strip must pass the same elevation test.</b> This used to try
+     * two aprons with a {@code ±2} block tolerance and then, if neither passed, take the ground
+     * straight back from the threshold <em>with no check at all</em>. On a field where the ground
+     * falls away off the end of the runway that put the aircraft in a hole: measured in a user's
+     * world, a runway at elevation 69 with the ground 11 blocks off the end at 64 parked the
+     * aircraft at y=64 and then asked it to taxi 4-5 blocks uphill onto the strip, which the ground
+     * handling has no way to do. The unchecked fallback defeated the very check the branch above it
+     * exists for.
+     *
+     * <p>The last resort is now the runway itself. The survey has already established that the
+     * strip is flat and its elevation is known exactly, so it is the one placement that cannot be
+     * wrong — and a runway departure starts from the threshold anyway. The spot sits inside
+     * {@link AutopilotConfig#TAXI_LINEUP_RADIUS} of the threshold, so the taxi phase goes straight
+     * to lining up instead of trying to roll backwards to a point behind it.
+     */
+    public static ParkingSpot parkingPosition(Level level, RunwayEnd departure) {
         double heading = departure.landingHeading();
         Vec3 threshold = departure.threshold();
+
+        // A spot a player marked beats anything derived from probing the ground, because a human
+        // looked at it. They are still re-checked here rather than trusted: the terrain may have
+        // been dug out since, and which end of the strip is the departure end is decided per flight
+        // by Airfield#bestEnd, so a spot that is rollable to one threshold need not be to the other.
+        // Anything that fails simply drops through to the next spot and finally to the survey-time
+        // heuristic below, so a marked apron can never strand an aircraft that would otherwise fly.
+        ParkingSpot marked = markedParkingPosition(level, departure);
+        if (marked != null) {
+            return marked;
+        }
+
         Vec3 behind = AutopilotMath.pointAlong(threshold, heading + 180.0,
             AutopilotConfig.PARKING_BEHIND_THRESHOLD);
 
         double sideways = departure.airfield().width() / 2.0 + AutopilotConfig.PARKING_LATERAL_OFFSET;
         for (double side : new double[] {90.0, -90.0}) {
             Vec3 apron = AutopilotMath.pointAlong(behind, heading + side, sideways);
-            int surface = TerrainScanner.surfaceHeight(level, apron.x, apron.z);
-            if (surface != TerrainScanner.UNKNOWN_HEIGHT && Math.abs(surface - threshold.y) <= 2.0) {
-                return new Vec3(apron.x, surface, apron.z);
+            Vec3 spot = groundedIfLevelWith(level, apron, threshold.y);
+            if (spot != null && taxiPathIsRollable(level, spot, threshold)) {
+                return new ParkingSpot(spot, AutopilotMath.headingTo(spot, threshold), false);
             }
         }
 
-        int surface = TerrainScanner.surfaceHeight(level, behind.x, behind.z);
-        double y = surface == TerrainScanner.UNKNOWN_HEIGHT ? threshold.y : surface;
-        return new Vec3(behind.x, y, behind.z);
+        // Straight back from the threshold — now held to the same tolerance as the aprons.
+        Vec3 straightBack = groundedIfLevelWith(level, behind, threshold.y);
+        if (straightBack != null && taxiPathIsRollable(level, straightBack, threshold)) {
+            return new ParkingSpot(straightBack, AutopilotMath.headingTo(straightBack, threshold), false);
+        }
+
+        // Nothing off the strip qualifies. Park on the strip, facing down it.
+        Vec3 onRunway = AutopilotMath.pointAlong(threshold, heading, AutopilotConfig.PARKING_ON_RUNWAY_OFFSET);
+        return new ParkingSpot(onRunway, heading, true);
+    }
+
+    /**
+     * The first marked apron this departure can actually use, or null when the airfield has none
+     * marked or none of them qualify right now.
+     *
+     * <p>"Qualify" is two questions, and they are different. <em>Usable</em> is about the ground —
+     * still level with the runway, still rollable to this particular threshold — and a spot that
+     * fails it is unusable for everyone. <em>Free</em> is about traffic: an aircraft already sitting
+     * there. Spots are tried in the order they were marked, so the first one is the normal
+     * departure position and the rest are where a queue forms behind it.
+     */
+    private static @Nullable ParkingSpot markedParkingPosition(Level level, RunwayEnd departure) {
+        Airfield airfield = departure.airfield();
+        Vec3 threshold = departure.threshold();
+        ParkingSpot occupiedFallback = null;
+        for (BlockPos spot : airfield.parkingSpots()) {
+            Vec3 position = usableParkingSpot(level, spot, threshold);
+            if (position == null) {
+                continue;
+            }
+            ParkingSpot parking = new ParkingSpot(position, AutopilotMath.headingTo(position, threshold), false);
+            if (isParkingSpotFree(level, position)) {
+                return parking;
+            }
+            if (occupiedFallback == null) {
+                occupiedFallback = parking;
+            }
+        }
+        // Every marked spot is taken. Still better than the derived apron — the ground there is
+        // known good, and two aircraft on one square is a problem for whatever clears them onto the
+        // runway, not for the survey.
+        return occupiedFallback;
+    }
+
+    /**
+     * The marked spot {@code spot} as a usable parking position for a departure from
+     * {@code threshold}, or null if the ground there or on the way no longer works.
+     */
+    private static @Nullable Vec3 usableParkingSpot(Level level, BlockPos spot, Vec3 threshold) {
+        Vec3 probe = new Vec3(spot.getX() + 0.5, 0, spot.getZ() + 0.5);
+        Vec3 position = groundedIfLevelWith(level, probe, threshold.y);
+        if (position == null || !taxiPathIsRollable(level, position, threshold)) {
+            return null;
+        }
+        return position;
+    }
+
+    /** True when no other aircraft is already standing on this apron. */
+    public static boolean isParkingSpotFree(Level level, Vec3 position) {
+        AABB box = AABB.ofSize(position, AutopilotConfig.PARKING_SPOT_CLEARANCE * 2,
+            6.0, AutopilotConfig.PARKING_SPOT_CLEARANCE * 2);
+        return level.getEntities(EntityTypeTest.forClass(PlaneEntity.class), box, plane -> true).isEmpty();
+    }
+
+    /**
+     * Why {@code spot} cannot be a parking apron for {@code airfield}, or null when it can.
+     *
+     * <p>Marked spots are validated when they are marked rather than when they are used, so the
+     * player who put one in the wrong place is told immediately instead of finding out three
+     * minutes into a sortie. The four tests are exactly the four ways the ground handling gets
+     * stuck: nothing there to stand on, a step up or down onto the strip, a ditch on the way, and a
+     * spot so far from the runway that the straight-line taxi is a journey of its own.
+     */
+    public static @Nullable String parkingSpotProblem(Level level, Airfield airfield, BlockPos spot) {
+        Vec3 probe = new Vec3(spot.getX() + 0.5, 0, spot.getZ() + 0.5);
+        Vec3 nearest = AutopilotMath.horizontalDistance(probe, airfield.pointA())
+            <= AutopilotMath.horizontalDistance(probe, airfield.pointB())
+            ? airfield.pointA() : airfield.pointB();
+
+        double distance = AutopilotMath.horizontalDistance(probe, nearest);
+        if (distance > AutopilotConfig.PARKING_MAX_TAXI_DISTANCE) {
+            return String.format("%.0f blocks from the nearest threshold; the taxi is a straight line,"
+                + " so keep it within %.0f", distance, AutopilotConfig.PARKING_MAX_TAXI_DISTANCE);
+        }
+        int surface = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
+        if (surface == TerrainScanner.UNKNOWN_HEIGHT) {
+            return "no ground there (the chunk is not loaded, or there is nothing to stand on)";
+        }
+        if (Math.abs(surface - nearest.y) > AutopilotConfig.PARKING_MAX_ELEVATION_DIFFERENCE) {
+            return String.format("%.0f blocks off the runway elevation; an aircraft cannot taxi up or"
+                + " down a step", Math.abs(surface - nearest.y));
+        }
+        Vec3 position = new Vec3(probe.x, surface, probe.z);
+        if (!taxiPathIsRollable(level, position, nearest)) {
+            return "the ground between it and the threshold is not level all the way";
+        }
+        for (BlockPos existing : airfield.parkingSpots()) {
+            if (existing.distSqr(spot) < AutopilotConfig.PARKING_SPOT_CLEARANCE
+                * AutopilotConfig.PARKING_SPOT_CLEARANCE) {
+                return "there is already a parking spot at " + existing.toShortString();
+            }
+        }
+        if (airfield.parkingSpots().size() >= AutopilotConfig.MAX_PARKING_SPOTS) {
+            return airfield.name() + " already has the maximum of "
+                + AutopilotConfig.MAX_PARKING_SPOTS + " parking spots";
+        }
+        return null;
+    }
+
+    /**
+     * True when this spot sits on the surveyed strip itself. Not a reason to refuse it — parking on
+     * the runway is what the fallback does when nothing beside it is level — but worth saying out
+     * loud, because an aircraft waiting there is an aircraft standing on the landing area.
+     */
+    public boolean isOnStrip(BlockPos spot) {
+        Vec3 probe = new Vec3(spot.getX() + 0.5, 0, spot.getZ() + 0.5);
+        double heading = AutopilotMath.headingTo(pointA(), pointB());
+        double along = AutopilotMath.alongTrack(pointA(), heading, probe);
+        return along >= 0 && along <= length()
+            && Math.abs(AutopilotMath.lateralOffset(pointA(), heading, probe)) <= width() / 2.0;
+    }
+
+    /**
+     * The surface at {@code probe} as a parking position, or null when it is unknown or not level
+     * with the runway. {@code TerrainScanner.surfaceHeight} reports the first free block, which is
+     * the same convention {@link #pointA()} uses for a threshold, so the two are directly comparable.
+     */
+    private static @Nullable Vec3 groundedIfLevelWith(Level level, Vec3 probe, double runwayElevation) {
+        int surface = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
+        if (surface == TerrainScanner.UNKNOWN_HEIGHT
+            || Math.abs(surface - runwayElevation) > AutopilotConfig.PARKING_MAX_ELEVATION_DIFFERENCE) {
+            return null;
+        }
+        return new Vec3(probe.x, surface, probe.z);
+    }
+
+    /**
+     * Whether the aircraft can actually roll from a parking spot to the threshold.
+     *
+     * <p>A level parking spot is not enough on its own: the taxi is a straight line to the lineup
+     * point with no obstacle avoidance and no ability to climb, so a spot that is level with the
+     * runway but separated from it by a ditch or a step is just as unusable as one in a hole. Every
+     * few blocks along that line has to be level with the runway too.
+     */
+    private static boolean taxiPathIsRollable(Level level, Vec3 from, Vec3 threshold) {
+        double distance = AutopilotMath.horizontalDistance(from, threshold);
+        int steps = (int) Math.ceil(distance / AutopilotConfig.TAXI_PATH_SAMPLE_STEP);
+        for (int i = 1; i < steps; i++) {
+            double t = (double) i / steps;
+            Vec3 probe = new Vec3(from.x + (threshold.x - from.x) * t, 0, from.z + (threshold.z - from.z) * t);
+            if (groundedIfLevelWith(level, probe, threshold.y) == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Ranking score for one approach funnel when there is no surveyed count to use: obstacles seen,
+     * plus every column that could not be seen at all.
+     *
+     * <p>Separate from {@link #countApproachObstacles} because the two answer different questions.
+     * The report answers "what did we find", and saying "20 obstacles" about ground nobody has
+     * loaded would be a lie. This answers "which end would I rather commit to", and there the only
+     * safe reading of an unknown column is that it might be a hill.
+     */
+    private static int scoreApproach(Level level, RunwayEnd end) {
+        int score = 0;
+        double heading = end.landingHeading();
+        Vec3 threshold = end.threshold();
+        for (int distance = AutopilotConfig.SURVEY_APPROACH_STEP;
+             distance <= AutopilotConfig.SURVEY_APPROACH_LENGTH;
+             distance += AutopilotConfig.SURVEY_APPROACH_STEP) {
+            Vec3 probe = AutopilotMath.pointAlong(threshold, heading + 180.0, distance);
+            double allowed = Math.max(
+                end.glideSlopeAltitude(distance) - AutopilotConfig.SURVEY_OBSTACLE_MARGIN,
+                end.elevation());
+            int terrain = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
+            if (terrain == TerrainScanner.UNKNOWN_HEIGHT || terrain > allowed) {
+                score++;
+            }
+        }
+        return score;
     }
 
     /**
      * Counts terrain columns that poke above the glide slope in the approach funnel of one end.
      * Uses the heightmap, so it is O(1) per sample and never forces a chunk load.
+     *
+     * <p>Columns in unloaded chunks are not counted, because they were not measured. That makes this
+     * an honest report and a dangerous ranking — see {@link #scoreApproach} and {@link #bestEnd}.
      */
     public static int countApproachObstacles(Level level, RunwayEnd end) {
         int violations = 0;
@@ -145,7 +422,15 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
              distance <= AutopilotConfig.SURVEY_APPROACH_LENGTH;
              distance += AutopilotConfig.SURVEY_APPROACH_STEP) {
             Vec3 probe = AutopilotMath.pointAlong(threshold, heading + 180.0, distance);
-            double allowed = end.glideSlopeAltitude(distance) - AutopilotConfig.SURVEY_OBSTACLE_MARGIN;
+            // Never allow less clearance than the runway's own elevation. The margin is subtracted
+            // from a slope that starts at the threshold, so within the first couple of samples it
+            // asks for headroom *below* the ground the runway is built on: on a perfectly flat
+            // superflat test world every airfield reported "approach obstacles 2" at both ends, from
+            // the 10- and 20-block samples, with nothing there at all. Ground at runway level is the
+            // runway, not an obstacle.
+            double allowed = Math.max(
+                end.glideSlopeAltitude(distance) - AutopilotConfig.SURVEY_OBSTACLE_MARGIN,
+                end.elevation());
             int terrain = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
             if (terrain != TerrainScanner.UNKNOWN_HEIGHT && terrain > allowed) {
                 violations++;
@@ -196,7 +481,13 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         BlockPos a = snapToSurface(level, clickedA);
         BlockPos b = snapToSurface(level, clickedB);
         int width = measureWidth(level, a, b);
-        return new Airfield(name, a, b, width);
+        // Both approach funnels are counted here, while the chunks are loaded, and stored. This is
+        // the only moment the numbers can be trusted: a survey requires a loaded position, whereas
+        // an arriving aircraft asks the question from hundreds of blocks away. See bestEnd.
+        Airfield airfield = new Airfield(name, a, b, width);
+        return new Airfield(name, a, b, width, List.of(),
+            countApproachObstacles(level, airfield.endA()),
+            countApproachObstacles(level, airfield.endB()));
     }
 
     /** Moves a clicked position onto the terrain surface, so a click on a wall still works. */

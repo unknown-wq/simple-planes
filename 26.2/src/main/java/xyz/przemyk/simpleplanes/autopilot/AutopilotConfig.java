@@ -17,6 +17,12 @@ public final class AutopilotConfig {
     // ---- control surface authority (must match PlaneEntity's tickPitch/tickYaw/tickRoll) ----
     public static final double PITCH_ACCEL = 0.5;
     public static final double YAW_ACCEL = 0.5;
+    /**
+     * Yaw rate ceiling, degrees per tick, as {@code PlaneEntity#tickYaw} clamps it (before the
+     * airframe's own {@code getRotationSpeedMultiplier}). This is what sets the turn radius, and
+     * therefore how close to a waypoint a fast aircraft can physically get.
+     */
+    public static final double MAX_YAW_RATE = 2.5;
     public static final double ROLL_ACCEL = 0.5;
 
     public static final double PITCH_DEADBAND = 0.4;
@@ -40,19 +46,96 @@ public final class AutopilotConfig {
 
     // ---- speed schedule ----
     /**
-     * Cruise target. The airframe's own equilibrium at full throttle is 0.76 blocks/tick — solve
-     * {@code 0.03125 * (1 - v / 0.8125) = 0.001 v^2 + 0.0005 v + 0.001} — so anything at or above
-     * that simply pins the throttle open, which is what is wanted for a cruise.
+     * Cruise speed a route, sortie or inbound flies when the command was given no speed argument.
+     *
+     * <p><b>This is a fast default on purpose</b>, and it replaces the old 0.80. Every aircraft the
+     * autopilot creates now carries a booster and {@link #ROUTE_MAX_SPEED}, so the airframe under it
+     * is not the one 0.80 was chosen for, and the point of fitting the booster was to use it.
+     *
+     * <p>2.60 rather than {@link #MAX_CRUISE_SPEED}. The thrust fade in {@code PlaneEntity#tickMotion}
+     * gives each throttle notch its own equilibrium speed, and on this airframe the top of the range
+     * is notch 9 at 2.66 and notch 10 at 2.82 (measured on the rig at 2.78-2.83 with the lever
+     * pinned at 10). A commanded 2.80 therefore sits on the stop: the loop has no notch left to add
+     * and nothing to regulate with, so the number is not so much commanded as accepted. 2.60 sits
+     * inside the band, which means the aircraft holds the speed it was told rather than whatever
+     * full throttle happens to produce, and keeps a notch in hand for a climb or a turn — while
+     * still being 93 percent of the airframe's absolute maximum and more than three times the speed
+     * this default used to be.
      */
-    public static final double CRUISE_SPEED = 0.80;
+    public static final double CRUISE_SPEED = 2.60;
     public static final double CLIMB_SPEED = 0.70;
     public static final double APPROACH_SPEED = 0.50;
     public static final double FINAL_SPEED = 0.40;
     /** Deliberately unreachable, so the strike run simply pins the throttle at maximum. */
     public static final double STRIKE_SPEED = 9.0;
+
+    /**
+     * Lower bound on a commanded cruise speed. Below this the aircraft is close enough to
+     * {@link #MIN_FLYING_SPEED} that the throttle loop spends the flight rescuing it from stalls.
+     */
+    public static final double MIN_CRUISE_SPEED = 0.40;
+    /**
+     * Upper bound on a commanded cruise speed, in blocks/tick.
+     *
+     * <p>Not an arbitrary cap: it is what the boosted airframe actually sustains.
+     * {@code PlaneEntity#tickMotion} fades the thrust out towards
+     * {@code maxSpeed * 10 * (push + 0.05)}, which at {@link #ROUTE_MAX_SPEED} and the booster's
+     * throttle 10 is 3.375, and the drag polynomial balances that at 2.82. There is also a hard
+     * limiter at 3.0 in the same method. Measured on the rig: a route commanded at 2.80 held
+     * 2.78-2.83 for a 3000-block leg with the lever pinned at 10.
+     *
+     * <p>Asking for more than this does not go faster, it only removes the speed loop's ability to
+     * regulate — which is why {@link #CRUISE_SPEED} sits a notch below rather than here.
+     */
+    public static final double MAX_CRUISE_SPEED = 2.80;
+
+    /** Clamps a requested cruise speed into the range the airframe can actually fly. */
+    public static double clampCruiseSpeed(double requested) {
+        if (Double.isNaN(requested)) {
+            return CRUISE_SPEED;
+        }
+        return Math.max(MIN_CRUISE_SPEED, Math.min(MAX_CRUISE_SPEED, requested));
+    }
+
+    /**
+     * Speed ceiling given to a route/sortie aircraft, which now carries a booster like a strike
+     * does. This is the point thrust fades out at, not a limiter — see {@link #MAX_CRUISE_SPEED}.
+     * Raising the ceiling does not by itself make the aircraft fly fast; it decides how much thrust
+     * each notch produces, and what the aircraft flies is whatever the flight director commands.
+     */
+    public static final float ROUTE_MAX_SPEED = 3.0f;
+
+    /**
+     * Safety factor on the computed deceleration distance.
+     *
+     * <p>{@link AutopilotMath#decelerationDistance} models level flight at throttle 0. The real
+     * deceleration leg is not quite level — the aircraft is giving up cruise altitude for circuit
+     * height at the same time, and that descent puts energy back in — and the throttle loop only
+     * revises the lever every {@link #THROTTLE_INTERVAL} ticks. Starting the bleed this much earlier
+     * than the ideal covers both, at the cost of arriving at the approach fix a little slow, which
+     * the approach handles and the flare prefers.
+     */
+    public static final double DECELERATION_MARGIN = 1.35;
     public static final double SPEED_DEADBAND = 0.03;
     /** Ticks between throttle adjustments, to stop the engine lever from chattering. */
     public static final int THROTTLE_INTERVAL = 5;
+    /**
+     * Speed excess, in blocks/tick, above which the throttle goes to its floor in one step instead
+     * of one notch every {@link #THROTTLE_INTERVAL} ticks.
+     *
+     * <p>The mirror image of {@link #MIN_FLYING_SPEED}'s immediate slam open, and it was found the
+     * same way: by measuring. {@link AutopilotMath#decelerationDistance} models the bleed with the
+     * throttle already shut, but from a fast cruise the lever starts at 10 and takes ten adjustments
+     * — 50 ticks — to get there, and 50 ticks at nearly cruise speed is another 130 blocks of not
+     * really braking. Measured on a straight-in deceleration from 2.80: the modelled 158 blocks came
+     * out as 270 on the rig, so the aircraft was still doing 1.4 blocks/tick when it reached the
+     * waypoint the bleed was aimed at. Cutting the lever in one step when the deficit is this large
+     * makes the realised distance match the model the schedule is built on.
+     *
+     * <p>Set above the excess the loop sees in normal cruise regulation (a commanded 0.40 sits at
+     * 0.43, an excess of 0.03) so ordinary station-keeping still moves one notch at a time.
+     */
+    public static final double THROTTLE_CUT_EXCESS = 0.20;
 
     /**
      * Horizontal speed below which the throttle loop stops being polite and slams the lever open.
@@ -66,13 +149,21 @@ public final class AutopilotConfig {
     public static final double MIN_FLYING_SPEED = 0.32;
 
     /**
-     * Throttle never goes below this while airborne.
+     * Throttle floor while airborne <em>and still short of the commanded speed</em>.
      * <p>
      * Closing the throttle completely is not "no thrust", it is an airbrake:
      * {@code PlaneEntity#tickMotion} multiplies the whole drag polynomial by
      * {@code brakesMul = 5} at throttle 0. Leaving one notch in keeps that off, which is the
-     * difference between a descent and a deceleration. Only {@code FLARE} and {@code ROLLOUT} —
-     * where stopping is the point, and the ground is right there — are allowed to close it.
+     * difference between a descent and a deceleration.
+     * <p>
+     * It is a floor on <em>needed</em> power only, and that qualifier is not decoration. On the
+     * boosted airframe every autopilot aircraft now carries, one notch is a cruise setting in its
+     * own right: {@code setMaxSpeed(3.0)} puts the thrust fade-out at {@code 1.6875} for throttle 1,
+     * where the drag curve balances at about 1.0 blocks/tick. Applied unconditionally this floor
+     * therefore <em>is</em> the minimum speed of the aircraft — measured on the rig, a cruise
+     * commanded at 0.80 sat at 0.93 for a whole 2000-block leg with the lever on 1, unable to go
+     * slower. {@code PlaneAutopilot#applyThrottle} drops the floor to 0 whenever the aircraft is
+     * above its commanded speed, which is when there is no power worth protecting.
      */
     public static final int MIN_AIRBORNE_THROTTLE = 1;
 
@@ -142,6 +233,36 @@ public final class AutopilotConfig {
     public static final double PARKING_LATERAL_OFFSET = 4.0;
     /** How far back from the threshold the parking spot sits, along the runway. */
     public static final double PARKING_BEHIND_THRESHOLD = 12.0;
+    /**
+     * How far a parking spot's surface may differ from the runway elevation, in blocks. Applied to
+     * every candidate — the aprons, the ground behind the threshold and every sample along the taxi
+     * line — because the aircraft has no way to taxi up or down a step.
+     */
+    public static final double PARKING_MAX_ELEVATION_DIFFERENCE = 2.0;
+    /**
+     * Where on the strip an aircraft parks when nothing off it is level enough. Kept inside
+     * {@link #TAXI_LINEUP_RADIUS} so the taxi phase lines up and departs instead of rolling
+     * backwards towards a point behind the aircraft.
+     */
+    public static final double PARKING_ON_RUNWAY_OFFSET = 3.0;
+    /** Spacing of the level-ground samples along a taxi route, in blocks. */
+    public static final double TAXI_PATH_SAMPLE_STEP = 2.0;
+    /**
+     * How far a <em>marked</em> parking spot may be from the nearest threshold.
+     *
+     * <p>The taxi is a straight line with no obstacle avoidance (see {@code PlaneAutopilot#tickTaxi}),
+     * so distance is not free: every block of it is ground that has to be level and clear. Far
+     * enough to put an apron off the side of a wide strip and a little way back, short enough that
+     * the taxi stays the short roll the ground handling is written for.
+     */
+    public static final double PARKING_MAX_TAXI_DISTANCE = 64.0;
+    /**
+     * How far apart marked parking spots must be, and the radius searched for an aircraft already
+     * standing on one. Roughly two plane lengths, so a queue of departures does not overlap.
+     */
+    public static final double PARKING_SPOT_CLEARANCE = 5.0;
+    /** Most parking spots one airfield may have marked, so a stray tool cannot fill the save. */
+    public static final int MAX_PARKING_SPOTS = 8;
     /** Ticks a taxi may take before the aircraft gives up and departs from where it stands. */
     public static final int TAXI_TIMEOUT = 900;
 
@@ -213,6 +334,38 @@ public final class AutopilotConfig {
     /** Degrees the hold target advances around the fix each tick (a slow racetrack orbit). */
     public static final double HOLD_TURN_RATE = 1.1;
     public static final int MAX_GO_AROUNDS = 3;
+
+    // ---- how much runway is actually needed ----
+    /*
+     * Both numbers below are derived from the ground physics rather than guessed, because "is this
+     * runway long enough" is the first question the airfield browser has to answer and a wrong
+     * answer either rejects usable fields or launches sorties that cannot finish.
+     *
+     * The ground roll is short in this flight model. PlaneEntity#tickOnGround multiplies dragMul by
+     * 20*(3 - blockFriction), which on grass (friction 0.6) is 48x, so rolling drag is 0.024*v
+     * against a thrust of 0.00625 per throttle notch. Simulating that tick loop from a standstill to
+     * the ROTATE_SPEED of 0.35 b/t gives 3.8 blocks and 29 ticks at throttle 5, and 1.9 blocks and
+     * 15 ticks at the booster's throttle 10. Braking from 0.40 b/t to a stop at throttle 0, where
+     * brakesMul is 5, takes 2.1 blocks and 14 ticks.
+     *
+     * So neither roll is what limits a runway: the landing does, and it is dominated by where the
+     * aircraft aims rather than by how long it takes to stop.
+     */
+    /** Runway consumed by a departure: the parked position plus the roll to rotation, with margin. */
+    public static final double TAKEOFF_LENGTH_NEEDED = PARKING_ON_RUNWAY_OFFSET + 4.0 * 2.0;
+    /**
+     * Runway consumed by an arrival: the aircraft aims {@link #TOUCHDOWN_AIM_OFFSET} blocks in,
+     * may float past it in the flare, and then needs its roll-out. Doubled, because a go-around
+     * that is committed rather than flown again lands long.
+     */
+    public static final double LANDING_LENGTH_NEEDED = (TOUCHDOWN_AIM_OFFSET + 3.0) * 2.0;
+    /**
+     * Shortest runway the autopilot will call usable. Reported by the airfield browser and checked
+     * before a sortie is launched, so a field that cannot be flown out of is refused at the command
+     * rather than discovered by an aircraft in the air.
+     */
+    public static final double MIN_USABLE_RUNWAY_LENGTH =
+        Math.max(TAKEOFF_LENGTH_NEEDED, LANDING_LENGTH_NEEDED);
 
     // ---- runway survey ----
     public static final int SURVEY_MAX_WIDTH = 24;

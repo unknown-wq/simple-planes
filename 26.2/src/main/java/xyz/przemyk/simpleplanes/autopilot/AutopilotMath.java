@@ -104,4 +104,139 @@ public final class AutopilotMath {
         }
         return 0;
     }
+
+    // ------------------------------------------------------------------ deceleration schedule
+
+    /*
+     * How far it takes to slow down, and therefore when to start.
+     *
+     * A fast cruise is only useful if the aircraft can still land at the end of it, and the approach
+     * is tuned around arriving at APPROACH_SPEED. Clamping the commanded speed at the moment the mode
+     * changes does not achieve that: the aircraft is still doing cruise speed when the glide slope
+     * starts, so it floats down the slope high and fast and either goes around or arrives too hot to
+     * flare. The energy has to be shed *before* the descent, over however many blocks the drag curve
+     * actually needs.
+     *
+     * This is the same shape as the strike's dive point, which is derived from the height still to be
+     * lost rather than being a fixed distance. Here the derivation is from the speed still to be lost.
+     *
+     * The model is PlaneEntity#tickMotion exactly:
+     *
+     *     speed -= (dragQuad*v^2 + dragMul*v + drag) * brakesMul
+     *
+     * with the coefficients below and brakesMul = 5, which is what throttle 0 gives — idle is an
+     * airbrake in this flight model, not neutral. Integrating that forward from a speed until it
+     * reaches the target speed gives both the distance needed and, read backwards, the speed the
+     * aircraft is allowed to be doing at a given distance out. 2.80 b/t down to 0.50 b/t is 158
+     * blocks and 124 ticks, which a straight tick-loop simulation of PlaneEntity#tickMotion agrees
+     * with exactly.
+     *
+     * Two things this model deliberately does not include, both of which the caller has to cover:
+     *
+     *  - It assumes the throttle is already shut. The lever moves one notch per THROTTLE_INTERVAL
+     *    ticks, so from a cruise at throttle 10 it needs 50 ticks to get there and the aircraft
+     *    spends them barely slowing. Measured on the rig, that turned the 158 blocks into 270 and
+     *    left the aircraft doing 1.4 b/t at the waypoint it was braking for. Hence
+     *    AutopilotConfig#THROTTLE_CUT_EXCESS, which shuts the lever in one step when the deficit is
+     *    that large.
+     *  - It assumes level flight. The real bleed is flown while giving up cruise altitude, and that
+     *    descent puts energy back in. Hence AutopilotConfig#DECELERATION_MARGIN.
+     *
+     * It also assumes throttle 0 rather than MIN_AIRBORNE_THROTTLE, and that is not a small
+     * difference: at throttle 1 the boosted airframe's thrust balances the drag curve at about
+     * 1.0 b/t, so the deceleration does not merely take longer, it stops there and never reaches
+     * APPROACH_SPEED at all.
+     */
+
+    /** {@code TempMotionVars} drag coefficients, copied from {@code PlaneEntity.TempMotionVars}. */
+    private static final double DRAG_QUAD = 0.001;
+    private static final double DRAG_MUL = 0.0005;
+    private static final double DRAG = 0.001;
+    /** {@code brakesMul} at throttle 0 — the whole drag polynomial is multiplied by this. */
+    private static final double BRAKES_MULTIPLIER = 5.0;
+
+    /** Speed the table is built down to and up from; covers the whole flyable range. */
+    private static final double TABLE_MIN_SPEED = 0.05;
+    private static final double TABLE_MAX_SPEED = 3.20;
+    private static final double TABLE_STEP = 0.01;
+    private static final int TABLE_SIZE = (int) Math.round((TABLE_MAX_SPEED - TABLE_MIN_SPEED) / TABLE_STEP) + 1;
+
+    /**
+     * {@code BRAKING_DISTANCE[i]} is the distance travelled while decelerating from
+     * {@code TABLE_MIN_SPEED} up to speed {@code i} — i.e. a cumulative curve. The distance between
+     * any two speeds is one subtraction, and the inverse ("what speed may I be doing this far out")
+     * is one binary search. Built once, so nothing here allocates or iterates per tick.
+     */
+    private static final double[] BRAKING_DISTANCE = buildBrakingTable();
+
+    private static double[] buildBrakingTable() {
+        double[] table = new double[TABLE_SIZE];
+        table[0] = 0;
+        // Integrate the deceleration between adjacent table speeds. dv is fixed by the table, so the
+        // distance for that step is v * dt with dt = dv / decel(v) — no simulation loop needed.
+        for (int i = 1; i < TABLE_SIZE; i++) {
+            double speed = TABLE_MIN_SPEED + i * TABLE_STEP;
+            double decelPerTick = decelerationPerTick(speed);
+            double ticks = TABLE_STEP / decelPerTick;
+            table[i] = table[i - 1] + speed * ticks;
+        }
+        return table;
+    }
+
+    /** Speed lost in one tick at throttle 0, from the drag polynomial. */
+    public static double decelerationPerTick(double speed) {
+        return (DRAG_QUAD * speed * speed + DRAG_MUL * speed + DRAG) * BRAKES_MULTIPLIER;
+    }
+
+    private static double brakingDistanceFromRest(double speed) {
+        double clamped = Mth.clamp(speed, TABLE_MIN_SPEED, TABLE_MAX_SPEED);
+        double exact = (clamped - TABLE_MIN_SPEED) / TABLE_STEP;
+        int index = (int) exact;
+        if (index >= TABLE_SIZE - 1) {
+            return BRAKING_DISTANCE[TABLE_SIZE - 1];
+        }
+        double fraction = exact - index;
+        return Mth.lerp(fraction, BRAKING_DISTANCE[index], BRAKING_DISTANCE[index + 1]);
+    }
+
+    /**
+     * Ground distance needed to decelerate from {@code from} to {@code to} with the throttle closed.
+     *
+     * @return 0 when the aircraft is already at or below the target speed
+     */
+    public static double decelerationDistance(double from, double to) {
+        if (from <= to) {
+            return 0;
+        }
+        return Math.max(0, brakingDistanceFromRest(from) - brakingDistanceFromRest(to));
+    }
+
+    /**
+     * The speed to command right now so that closing the throttle arrives at {@code to} exactly
+     * {@code distance} blocks from here — the inverse of {@link #decelerationDistance}.
+     *
+     * <p>Self-correcting in the same way the strike's dive is: an aircraft that is behind the
+     * deceleration profile is asked for a lower speed the closer it gets, rather than being cut to
+     * the final number in one step. The result is clamped into {@code [to, cruise]}, so it is a
+     * no-op for the whole part of the leg that is far enough out.
+     */
+    public static double speedSchedule(double cruise, double to, double distance) {
+        if (distance <= 0) {
+            return to;
+        }
+        double budget = brakingDistanceFromRest(to) + distance;
+        // Binary search the cumulative curve for the speed whose braking distance fits the budget.
+        int low = 0;
+        int high = TABLE_SIZE - 1;
+        while (low < high) {
+            int mid = (low + high + 1) >>> 1;
+            if (BRAKING_DISTANCE[mid] <= budget) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        double speed = TABLE_MIN_SPEED + low * TABLE_STEP;
+        return Mth.clamp(speed, to, cruise);
+    }
 }

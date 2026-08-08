@@ -2,6 +2,7 @@ package xyz.przemyk.simpleplanes.autopilot;
 
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
+import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 import java.util.HashMap;
@@ -61,6 +62,19 @@ public final class RunwayOccupancy {
     /** Releases every reservation held by this aircraft, whatever the airfield. */
     public static void releaseAll(PlaneEntity plane) {
         RESERVATIONS.values().removeIf(holder -> holder == plane);
+    }
+
+    /**
+     * The aircraft currently holding this runway, or null when it is free.
+     *
+     * <p>Validated against the holder rather than trusted, exactly like {@link #isFree}, so an
+     * aircraft that crashed or had its autopilot switched off does not show up as occupying a
+     * runway for ever. Used by the airfield browser: "reserved by #7" is the difference between a
+     * usable destination and one that will send traffic into a holding orbit.
+     */
+    public static @Nullable PlaneEntity holder(Level level, String airfield) {
+        PlaneEntity holder = RESERVATIONS.get(new Key(level.dimension(), airfield));
+        return stillHolding(holder, airfield) ? holder : null;
     }
 
     public static boolean isFree(Level level, String airfield, PlaneEntity asker) {

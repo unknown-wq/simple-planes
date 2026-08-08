@@ -22,12 +22,29 @@ public interface AutopilotOutput {
         line(text);
     }
 
+    /**
+     * Sends a rich chat component — clickable names, copyable coordinates, hover tooltips.
+     *
+     * <p>Degrades rather than disappearing: the default implementation flattens the component to
+     * its plain text, which is what a console, a command block or a datapack function should see.
+     * Every caller must therefore keep the information in the text and use the click and hover
+     * events only for convenience, never to carry a value that is not also written out.
+     */
+    default void component(Component component) {
+        line(component.getString());
+    }
+
     /** Sends to a player's chat. */
     static AutopilotOutput toPlayer(Player player) {
         return new AutopilotOutput() {
             @Override
             public void line(String text) {
                 AutopilotFeedback.info(player, text);
+            }
+
+            @Override
+            public void component(Component component) {
+                player.sendSystemMessage(component);
             }
 
             @Override
@@ -48,6 +65,13 @@ public interface AutopilotOutput {
             @Override
             public void line(String text) {
                 source.sendSuccess(() -> Component.literal(text), false);
+            }
+
+            @Override
+            public void component(Component component) {
+                // A player source gets the interactive component; the console prints its flattened
+                // text, which is why every row has to read correctly without its click events.
+                source.sendSuccess(() -> component, false);
             }
 
             @Override

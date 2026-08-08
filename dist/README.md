@@ -11,7 +11,7 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `674a17c57a68aca3ac729f8e1edfe084039ba7c0a71bcf103b3690102375640f` |
+| sha256 | `b0ef947b892ace7bd96392729be8adfbc62ad5e563bbe0beed088ec1f0e08d48` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.

@@ -104,13 +104,19 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 
 | Command | Use |
 |---|---|
-| `strike <x y z> [distance] [bearing]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test |
-| `route <from> <to>` | point-to-point cruise — the "does it explode for no reason" test |
-| `flight <from> <to>` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
-| `inbound <x y z> <airfield>` | one-way arrival into a named airfield — the landing test, without the departure |
-| `survey <t1> <t2>` / `airfields` | register and list runways |
+| `strike <x y z> [distance] [bearing] [blast] [blocks] [fire]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test. The last three set the warhead: strength 0–16 (default 4), whether it breaks blocks, whether it sets fire |
+| `route <from> <to> [speed]` | point-to-point cruise — the "does it explode for no reason" test, and the speed-regulation test |
+| `flight <from> <to> [speed]` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
+| `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
+| `survey <t1> <t2>` | register a runway |
+| `airfields [info\|show\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
+| `tower [<airfield>]` | runway states — free/occupied, by which aircraft, in what mode, for how long, and who is holding |
 | `status` | live list of autopilot aircraft with a status line each |
 | `stop` | stop all of them |
+
+`speed` is the cruise speed in blocks per tick, clamped to 0.40–2.80. Omitted, it is the default
+2.60. It is the single most useful argument on this rig: the same flight at 0.40 and at 2.80
+exercises completely different parts of the controller.
 
 ### Recipe: a complete airfield-to-airfield sortie
 
@@ -129,9 +135,10 @@ sleep 8
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
 ```
 
-Airfields persist in `SavedData`, so the survey only has to be done once per world. The sortie takes
-about four minutes of wall clock; poll `./cmd.sh "autopilot status"` to watch it, and assert on the
-final line:
+Airfields persist in `SavedData`, so the survey only has to be done once per world. A 2000-block
+sortie takes about **two minutes** of wall clock at the 2.60 default (it was nearer four at the old
+0.80, and adding `0.80` as a trailing argument still gets you that); poll
+`./cmd.sh "autopilot status"` to watch it, and assert on the final line:
 
 ```
 Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).
@@ -141,6 +148,62 @@ Every terminal event now goes through `AutopilotFeedback.report`, which logs to 
 there is no owning player — landings, go-arounds (with the reason), runway switches and
 "came down at". Progress chatter still uses `overlay`, which no-ops headlessly. If you add a new
 end-of-flight path, use `report`, or it will be invisible on this rig.
+
+### Recipe: measuring an explosion
+
+Blast strength needs a number, not an impression. The trick is that `fill … replace` reports how
+many blocks it changed, so **refilling the crater counts it**. The superflat has exactly three
+destructible layers — bedrock at −64, dirt at −63/−62, grass at −61 — so a box over `-63 … -61`
+captures the whole crater, and 81×81×3 = 19 683 blocks stays under the 32 768-per-`fill` limit.
+
+```sh
+./cmd.sh "forceload add -2040 -2040 -1960 -1960"      # x1 z1 x2 z2 - easy to transpose, check it
+sleep 4
+./cmd.sh "autopilot strike -2000 -61 -2000 200 0"                    # default warhead
+sleep 22
+./cmd.sh "fill -2040 -63 -2040 -1960 -61 -1960 minecraft:glass replace minecraft:air"
+# -> "Successfully filled 89 block(s)"  == 89 blocks destroyed
+```
+
+Count fires the same way, one layer higher, before counting blocks (fire sits on top of the ground):
+
+```sh
+./cmd.sh "autopilot strike -2000 -61 -2800 200 0 8.0 false true"     # no block damage, incendiary
+./cmd.sh "fill -2040 -60 -2840 -1960 -60 -2760 minecraft:air replace minecraft:fire"
+# -> 145                      fires placed
+./cmd.sh "fill -2040 -63 -2840 -1960 -61 -2760 minecraft:glass replace minecraft:air"
+# -> "No blocks were filled"  nothing destroyed, which is the point of blocks=false
+```
+
+Use a fresh site per shot — craters must not overlap — and `tick query` for the cost: it prints the
+average and the P50/P95/P99 over the last 100 ticks, which is how the 16.0 ceiling was shown to be
+affordable (1.3 ms average, 6.1 ms P99, against a 50 ms budget).
+
+### Recipe: proving something survives a save
+
+`autopilot status` after a restart is **not** proof: a plane in a chunk nobody loads is not ticking
+and not in the entity list, so a perfectly good save looks like a lost aircraft. Two things are
+needed — the aircraft has to be inside a force-loaded region *at shutdown*, and it has to still be
+there when you look.
+
+The trap is that it keeps flying. A routed aircraft covers hundreds of blocks between the `save-all`
+and the `stop`, and leaves any corridor you force-loaded around it. **`tick freeze` pins it**, which
+makes the whole thing deterministic:
+
+```sh
+./cmd.sh "autopilot route -2000 -60 -2000 -1000 -60 -2000"
+sleep 6
+./cmd.sh "tick freeze"
+./cmd.sh 'execute at @e[type=simpleplanes:plane,limit=1] run forceload add ~-32 ~-32 ~32 ~32'
+./cmd.sh "save-all flush"
+./stop.sh && ./start.sh
+./cmd.sh "data get entity @e[type=simpleplanes:plane,limit=1] autopilot.plan.blast"
+# -> Plane has the following entity data: {breaks_blocks: 0b, fire: 1b, power: 12.0f}
+```
+
+`data get entity … autopilot` is also the quick way to see a flight plan without a restart at all —
+it runs the same `addAdditionalSaveData` path — and `data merge entity` runs the read path, so the
+pair round-trips a codec in two commands. Remember `tick unfreeze` afterwards.
 
 ### Recipe: water impact
 
@@ -162,6 +225,77 @@ destroyed from 1.2. See `COLLISION-DIAGNOSIS.md`, section Р3.
 
 Both flights print a terminal line (`hit the target at …`, `flew into terrain at …`, …), which is
 what makes them assertable from a shell.
+
+### Recipe: is the throttle loop actually regulating
+
+The one-line version of the whole speed system. Fly a long straight leg at a commanded speed and
+compare `spd=` against `want[... spd=]` in `status`, and the position deltas against the clock.
+
+```sh
+./cmd.sh "autopilot route 0 -60 0 2000 -60 0 0.50"
+for i in $(seq 1 8); do ./cmd.sh "autopilot status"; sleep 8; done
+grep -E "^\[.*\]:   #" console.log | tail -8
+```
+
+The position delta divided by the elapsed ticks is the real speed, and it must agree with `spd=`
+and with what was ordered. Measured on the current build, straight and level:
+
+| commanded | holds at | lever |
+|---|---|---|
+| 0.40 | 0.43 | dithering 0/1 |
+| 0.50 | 0.52 | dithering 0/1 |
+| 1.20 | 1.23 | 1 |
+| 2.60 | 2.58–2.61 | dithering 8/9 |
+| 2.80 | 2.78–2.83 | pinned at 10 |
+
+A lever pinned at its floor or its ceiling while the speed sits somewhere else is the failure to
+look for; that is what "commanded 0.80, flew 0.93 at throttle 1" looked like.
+
+### Recipe: measuring a deceleration
+
+Fly straight at the runway so the whole bleed is flown in a straight line, and poll every second so
+the samples are 20 ticks apart:
+
+```sh
+./cmd.sh 'autopilot inbound 2655 -1 2000 "airfield-2" 2.80'
+for i in $(seq 1 60); do ./cmd.sh "autopilot status"; sleep 1; done
+```
+
+Sum the chord lengths between consecutive `pos=` samples for the distance; the speeds come from
+`spd=`. Do not use the straight-line distance between the first and last sample — the aircraft turns
+onto the approach partway through and the chord sum is already an underestimate of the path.
+
+### Recipe: a short runway, and refusing one
+
+`MIN_USABLE_RUNWAY_LENGTH` is 30 blocks, so a 24-block strip is the test case for the refusal and a
+66-block one is the test case for a landing that has to be tidy:
+
+```sh
+./cmd.sh "autopilot survey 660 -60 40 660 -60 64"     # 24 blocks -> registers with a warning
+./cmd.sh 'autopilot flight "airfield-1" "airfield-3"' # -> refused, with the numbers
+./cmd.sh 'autopilot airfields'                        # -> the row is marked TOO SHORT
+```
+
+### Recipe: marked parking
+
+`park` needs loaded ground for the same reason `survey` does — it measures the spot and the whole
+line from it to the threshold:
+
+```sh
+./cmd.sh "forceload add 640 -200 690 70"
+sleep 6
+./cmd.sh 'autopilot airfields park "airfield-1" 670 -60 10'
+./cmd.sh 'autopilot airfields park "airfield-1" 638 -60 3'
+./cmd.sh 'autopilot airfields info "airfield-1"'
+
+# two sorties a second apart must park on different spots, not on top of each other
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+```
+
+The refusals are worth exercising too, and each has its own message: a spot more than 64 blocks from
+the threshold, one raised or sunk more than 2 blocks (`fill` a 4-block plinth next to the runway),
+one within 5 blocks of an existing spot, and one on unloaded ground.
 
 ### The one thing this rig cannot see
 

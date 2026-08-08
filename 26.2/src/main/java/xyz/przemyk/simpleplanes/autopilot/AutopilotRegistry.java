@@ -72,6 +72,18 @@ public final class AutopilotRegistry {
         return activeCount() < AutopilotConfig.MAX_ACTIVE_AUTOPILOTS;
     }
 
+    /**
+     * The aircraft that are actually flying, pruned and copied.
+     *
+     * <p>A snapshot rather than the live set, because callers walk it and anything that touches an
+     * aircraft can load a chunk and register another one. Cheaper and more precise than scanning the
+     * level for entities: this is exactly the autopilot aircraft, with no world lookup at all.
+     */
+    public static List<PlaneEntity> active() {
+        prune();
+        return new ArrayList<>(ACTIVE);
+    }
+
     private static void prune() {
         ACTIVE.removeIf(plane -> plane.isRemoved()
             || !plane.isAlive()
