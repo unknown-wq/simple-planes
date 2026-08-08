@@ -404,6 +404,10 @@ public class PlaneAutopilot {
         cmdBankLimit = 0;
         cmdSpeed = AutopilotConfig.STRIKE_SPEED;
         cmdTerrainFollow = false;
+        // The whole lever, booster included. The ground roll to ROTATE_SPEED is 3.8 blocks at
+        // throttle 5 and 1.9 at throttle 10, and the shorter figure is the one the runway-length
+        // check in AutopilotConfig is derived from, so the departure has to actually fly it.
+        cmdMaxThrottle = maxThrottle(plane);
 
         // Elevator aft for the whole roll, exactly as a real departure is flown, and not only for
         // looks. PlaneEntity#tickOnGround reads the pitch input three ways: a positive input levels
@@ -434,11 +438,18 @@ public class PlaneAutopilot {
             cmdHeading = AutopilotMath.headingTo(plane.position(), waypoint);
         }
         cmdTargetAltitude = cruiseAltitude;
-        // The climb is flown at climb speed whatever the cruise was ordered at: accelerating and
-        // climbing at the same time just does both slowly, and the cruise leg is where the speed is
-        // wanted. The throttle ceiling is raised here anyway so a boosted aircraft can hold the
-        // climb speed against the extra drag of the climb.
-        cmdSpeed = AutopilotConfig.CLIMB_SPEED;
+        // Never slower than climb speed, and never slower than the cruise that was ordered.
+        //
+        // The climb used to be flown at CLIMB_SPEED flat, on the reasoning that accelerating and
+        // climbing at once does both badly. That reasoning does not survive a commanded cruise
+        // faster than the climb speed: the aircraft would spend the climb braking against a speed it
+        // is about to be told to fly again, and the climb rate is capped by MAX_CLIMB_RATE and
+        // MAX_CLIMB_ANGLE rather than by thrust anyway, so there is nothing to trade. The max()
+        // keeps the floor for a slow cruise — a route ordered at MIN_CRUISE_SPEED still climbs away
+        // at 0.70 rather than wallowing off the runway at 0.40.
+        cmdSpeed = plan == null
+            ? AutopilotConfig.CLIMB_SPEED
+            : Math.max(AutopilotConfig.CLIMB_SPEED, plan.cruiseSpeed());
         cmdMaxThrottle = maxThrottle(plane);
         if (Math.abs(plane.position().y - cmdTargetAltitude) < 8) {
             setMode(plane, AutopilotMode.CRUISE);
@@ -466,11 +477,20 @@ public class PlaneAutopilot {
         cmdSpeed = cruiseSpeedSchedule(plan, distanceToWaypoint);
 
         // Braking needs the airbrake, and the airbrake is throttle 0: tickMotion multiplies the whole
-        // drag polynomial by brakesMul = 5 there and by 1 everywhere else. Leaving the usual
-        // MIN_AIRBORNE_THROTTLE floor of 1 in place during the bleed would make the deceleration
-        // five times weaker than the model behind cruiseSpeedSchedule assumes — 800 blocks from
-        // 2.80 to 0.50 instead of 158 — so the aircraft would arrive at the descent still fast. The
-        // floor is dropped only while actually decelerating; the rest of the cruise keeps it.
+        // drag polynomial by brakesMul = 5 there and by 1 everywhere else.
+        //
+        // applyThrottle already drops the floor whenever the aircraft is above its commanded speed,
+        // so this is not what lets the bleed reach idle. What it does is settle the argument with
+        // the manoeuvre rule: that rule holds the power the loop had rather than letting it be
+        // reduced, and it keys off cmdMinThrottle > 0. Zeroing the floor for the duration of the
+        // bleed says braking wins over turn protection here — the descent is committed and the
+        // aircraft has to be slow for it, turn or no turn.
+        //
+        // The floor really does have to reach 0, and by more than a factor of five. With one notch
+        // left in, the boosted airframe does not decelerate to APPROACH_SPEED slowly: it does not
+        // get there at all, because throttle 1 balances the drag curve at about 1.0 blocks/tick and
+        // simply holds it. (This used to be written down as "800 blocks instead of 158", which is
+        // the drag-only figure with the thrust left out.)
         if (cmdSpeed < plan.cruiseSpeed() - 1.0E-3) {
             cmdMinThrottle = 0;
         }
@@ -991,7 +1011,8 @@ public class PlaneAutopilot {
      * <p><b>Idle is an airbrake, not neutral.</b> {@code PlaneEntity#tickMotion} multiplies the whole
      * drag polynomial by {@code brakesMul = 5} at throttle 0. Leaving
      * {@link AutopilotConfig#MIN_AIRBORNE_THROTTLE} in while airborne is the difference between
-     * descending and decelerating; only the flare and the roll-out ask for a real idle.
+     * descending and decelerating — but only while the aircraft still <em>needs</em> the power. See
+     * the overspeed branch below: on a boosted airframe that floor is by itself a cruise setting.
      *
      * <p><b>Stall recovery cannot wait for the next scheduled adjustment.</b> Below
      * {@link AutopilotConfig#MIN_FLYING_SPEED} the lever goes fully open on the spot rather than one
@@ -1011,23 +1032,55 @@ public class PlaneAutopilot {
             return;
         }
 
-        // Turning costs energy, so a turn is the last moment to be closing the throttle — and it was
-        // exactly where the throttle was being closed. Measured on a 200-block out-and-back: rolling
-        // into the 180 at the far waypoint briefly pushed the speed above the cruise target (the
-        // nose comes off the velocity vector, which un-fades the thrust in
-        // PlaneEntity#tickMotion), the loop obediently wound the lever back from 5 to 1, and the
-        // aircraft came out of the turn at 0.23 blocks/tick — below flying speed — and mushed 60
-        // blocks into the ground. Hold full power until the wings are level again.
-        if (!onGround && cmdMinThrottle > 0
-            && (Math.abs(Mth.wrapDegrees(roll)) > AutopilotConfig.MANOEUVRE_BANK
-                || Math.abs(headingError) > AutopilotConfig.MANOEUVRE_HEADING_ERROR)) {
-            floor = cmdMaxThrottle;
+        boolean manoeuvring = Math.abs(Mth.wrapDegrees(roll)) > AutopilotConfig.MANOEUVRE_BANK
+            || Math.abs(headingError) > AutopilotConfig.MANOEUVRE_HEADING_ERROR;
+        boolean overspeed = horizontalSpeed > cmdSpeed + AutopilotConfig.SPEED_DEADBAND;
+
+        if (!onGround && cmdMinThrottle > 0 && manoeuvring) {
+            // Turning costs energy, so a turn is the last moment to be closing the throttle — and it
+            // was exactly where the throttle was being closed. Measured on a 200-block out-and-back:
+            // rolling into the 180 at the far waypoint briefly pushed the speed above the cruise
+            // target (the nose comes off the velocity vector, which un-fades the thrust in
+            // PlaneEntity#tickMotion), the loop obediently wound the lever back from 5 to 1, and the
+            // aircraft came out of the turn at 0.23 blocks/tick — below flying speed — and mushed 60
+            // blocks into the ground.
+            //
+            // The rule is "do not reduce power", and it has to be written as exactly that. It used
+            // to raise the floor to cmdMaxThrottle, which on the unboosted airframe of the day was
+            // the same thing as holding station at 5 and on a boosted one is a command for full
+            // power. Measured on an argument-free sortie after the booster was fitted: the 93-degree
+            // turn off the departure runway put the lever on 10 and the aircraft climbed away at
+            // 2.18 blocks/tick against a commanded 0.70, then took another 45 ticks to wind back
+            // down. Holding whatever the loop had already chosen keeps the turn protection and
+            // cannot invent thrust nothing asked for.
+            floor = Math.max(floor, Math.min(throttle, cmdMaxThrottle));
+        } else if (!onGround && overspeed) {
+            // Above the commanded speed, so there is no power to protect: let the lever reach idle.
+            //
+            // MIN_AIRBORNE_THROTTLE assumes the notch it keeps in is a trickle. On the boosted
+            // airframe every autopilot aircraft now carries it is not: setMaxSpeed(3.0) moves the
+            // thrust fade-out in PlaneEntity#tickMotion to maxSpeed * 10 * (push + 0.05), which at
+            // throttle 1 is 1.6875, and the drag curve balances that at 0.93 blocks/tick. Measured
+            // on the rig: a cruise commanded at 0.80 sat at 0.93 with the lever on its floor of 1
+            // for the whole 2000-block leg, because 0.93 *is* what that floor flies. An aircraft
+            // that cannot be asked to go slower than its own minimum notch is not being regulated.
+            //
+            // Safe because the loop regulates horizontal speed, so a sink rate can no longer read as
+            // airspeed and latch the lever shut, and because the stall recovery above re-opens it
+            // the moment the speed falls below MIN_FLYING_SPEED.
+            floor = 0;
         }
 
         if (ticks % AutopilotConfig.THROTTLE_INTERVAL == 0) {
             if (horizontalSpeed < cmdSpeed - AutopilotConfig.SPEED_DEADBAND && throttle < cmdMaxThrottle) {
                 throttle++;
-            } else if (horizontalSpeed > cmdSpeed + AutopilotConfig.SPEED_DEADBAND && throttle > floor) {
+            } else if (horizontalSpeed > cmdSpeed + AutopilotConfig.THROTTLE_CUT_EXCESS) {
+                // Far too fast, not merely a little fast: shut the lever now rather than walking it
+                // down a notch every five ticks. See AutopilotConfig#THROTTLE_CUT_EXCESS for the
+                // measurement — the walk down is worth over a hundred blocks of extra braking
+                // distance, which is exactly the error the deceleration schedule cannot absorb.
+                throttle = floor;
+            } else if (overspeed && throttle > floor) {
                 throttle--;
             }
         }

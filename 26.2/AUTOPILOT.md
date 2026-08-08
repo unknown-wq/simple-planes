@@ -38,7 +38,10 @@ that input from the autopilot when no player is aboard. See §7.
   envelope: `altitude error → commanded vertical speed → commanded flight path angle → commanded
   pitch attitude → pitch control`.
 * **Speed** — proportional on the throttle notch, adjusted every 5 ticks so the lever does not
-  chatter.
+  chatter, with two exceptions at the ends: below `MIN_FLYING_SPEED` the lever slams fully open on
+  the spot, and more than `THROTTLE_CUT_EXCESS` (0.20 b/t) above the commanded speed it shuts to its
+  floor in one step. Both exist because a notch every 5 ticks is 50 ticks from end to end, and the
+  aircraft does not always have 50 ticks. See [Flying the speed it was told](#flying-the-speed-it-was-told).
 * **Bank** — follows the heading error, capped at 25°, given up as the speed decays (a banked turn
   needs `1/cos(bank)` times the lift of level flight, and a slow aircraft has none to spare), and
   forced to zero for landing and ground roll.
@@ -67,15 +70,102 @@ it at throttle 0. Airspeed along the wing is what keeps the wings working, so th
 regulated.
 
 **Idle is an airbrake, not neutral.** `tickMotion` multiplies the whole drag polynomial by
-`brakesMul = 5` at throttle 0. The descent and approach phases are allowed to use it — it is the only
-way to slow down on an 8° slope, and without it the aircraft arrived on short final at 0.94 b/t
-against a commanded 0.40, floated, and went around three times. Everywhere else `MIN_AIRBORNE_THROTTLE`
-keeps one notch in. Below `MIN_FLYING_SPEED` (0.32 b/t) the lever goes fully open **on the spot**
-rather than one notch per 5 ticks, which would take 25 ticks the aircraft does not have. And while
-the aircraft is manoeuvring — bank over 8° or heading error over 15° — the loop may not reduce power
-at all: a turn costs energy and is the last moment to be closing the throttle.
+`brakesMul = 5` at throttle 0. It is the only way this airframe slows down, so `MIN_AIRBORNE_THROTTLE`
+is a floor on *needed* power only: it applies while the aircraft is at or below its commanded speed
+and is dropped the moment it is above it. Below `MIN_FLYING_SPEED` (0.32 b/t) the lever goes fully
+open **on the spot** rather than one notch per 5 ticks, which would take 25 ticks the aircraft does
+not have. And while the aircraft is manoeuvring — bank over 8° or heading error over 15° — the loop
+may not *reduce* power: a turn costs energy and is the last moment to be closing the throttle.
 
 All tuning lives in one file: `autopilot/AutopilotConfig.java`.
+
+### Flying the speed it was told
+
+Every route, sortie and inbound aircraft carries a booster and `setMaxSpeed(3.0)`. That is capability,
+not a command — but two rules in the throttle loop turned it into one, and both had to go.
+
+**The manoeuvre rule raised the floor to full power.** "Do not reduce power in a turn" was written as
+`floor = cmdMaxThrottle`. On the unboosted airframe it was written for, that was the same thing as
+holding station at 5. On a boosted one it is a demand for throttle 10. Measured on an argument-free
+sortie: the 93° turn off the departure runway put the lever on 10 and the aircraft climbed away at
+**2.18 b/t against a commanded 0.70**, then took another 45 ticks to wind back down. The rule now
+holds whatever the loop had already chosen, which is what it always meant.
+
+**The floor itself was a cruise setting.** `tickMotion` fades thrust out towards
+`maxSpeed × 10 × (push + 0.05)`, which at throttle 1 and `maxSpeed = 3.0` is 1.6875 — and the drag
+curve balances that at about 1.0 b/t. So `MIN_AIRBORNE_THROTTLE = 1` *was* the minimum speed of the
+aircraft. Measured: a cruise commanded at 0.80 sat at **0.93 for a whole 2000-block leg** with the
+lever pinned on its floor, with no way to go slower. The floor now applies only while the aircraft is
+short of its commanded speed.
+
+Each throttle notch has its own equilibrium on this airframe, and that is what the loop is choosing
+between:
+
+| notch | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| settles at (b/t) | 1.01 | 1.35 | 1.59 | 1.79 | 1.98 | 2.15 | 2.33 | 2.49 | 2.66 | 2.82 |
+
+Measured on the rig after the fix, straight and level:
+
+| commanded | before | after | lever |
+|---|---|---|---|
+| 0.40 | 0.93 | **0.43** | dithering 0/1 |
+| 0.50 | 0.93 | **0.52** | dithering 0/1 |
+| 1.20 | — | **1.23** | 1 |
+| 2.60 (the default) | — | **2.58–2.61** | dithering 8/9 |
+| 2.80 (the maximum) | — | **2.78–2.83** | pinned at 10 |
+
+### The default is fast
+
+`CRUISE_SPEED` is **2.60 b/t**, not the old 0.80. The booster was fitted to route aircraft so it
+would be used.
+
+It is 2.60 rather than the airframe's absolute 2.80 because of the table above: notch 9 settles at
+2.66 and notch 10 at 2.82, so a commanded 2.80 sits on the stop with nothing left to regulate with —
+the number is accepted rather than flown. 2.60 sits inside the band, so the aircraft holds the speed
+it was given and keeps a notch in hand for a climb or a turn. Both fly and both land; only one of
+them is being controlled.
+
+The climb is flown at `max(CLIMB_SPEED, cruise speed)`. Climbing at a fixed 0.70 and then being told
+to fly 2.60 means spending the climb braking against a speed you are about to be asked for again, and
+the climb rate is capped by `MAX_CLIMB_RATE` rather than by thrust, so there is nothing to trade.
+
+`route`, `flight` and `inbound` all take an optional trailing `speed` in blocks per tick, clamped to
+0.40–2.80 by `AutopilotConfig.clampCruiseSpeed`. The range is deliberately wider than the argument
+accepts errors for: asking for 9 gets 2.80 and a launch line saying so, rather than a syntax error.
+
+### Slowing down in time
+
+A fast cruise is only useful if the aircraft can still land at the end of it, and the approach is
+tuned around arriving at `APPROACH_SPEED`. `AutopilotMath.speedSchedule` therefore sheds the energy
+*before* the descent, over the distance the drag curve needs, and `PlaneAutopilot.cruiseSpeedSchedule`
+applies it on the final leg only — an intermediate waypoint is a turn, not an arrival.
+
+The model integrates `tickMotion` exactly at throttle 0: **2.80 → 0.50 b/t is 158 blocks and 124
+ticks**, which a straight tick-loop simulation agrees with to the block. Two things it does not model,
+both since corrected:
+
+* **It assumes the throttle is already shut.** From a cruise at throttle 10 the lever needs 50 ticks
+  to get there, and 50 ticks at nearly cruise speed is another ~110 blocks. Measured straight-in from
+  2.80, the modelled 158 came out as **270 blocks / 180 ticks**, and the aircraft was still doing
+  1.4 b/t at the waypoint it was braking for. Hence `THROTTLE_CUT_EXCESS`.
+* **It assumes level flight.** The real bleed is flown while giving up cruise altitude, and that
+  descent puts energy back in. Measured on a descending segment: 1.49 → 0.49 b/t took 102 blocks
+  against a modelled 76, a ratio of 1.34 — which is `DECELERATION_MARGIN` (1.35) almost exactly.
+
+The claim that "with the floor at 1 the same deceleration needs 800 blocks" is **wrong**, and wrong in
+a way worth recording: 800 is the drag-only figure with the thrust left out. With one notch still in,
+the boosted airframe does not decelerate to `APPROACH_SPEED` slowly — it does not get there at all,
+because throttle 1 balances the drag curve at ~1.0 b/t and simply holds it.
+
+### Sequencing waypoints at speed
+
+`WAYPOINT_ARRIVAL_RADIUS` was a fixed 30 blocks. An aircraft cannot turn inside its own turn radius,
+which is `v / yawRate` with `tickYaw` clamping the yaw rate to 2.5°/tick: 18 blocks at 0.80 b/t, but
+**64 blocks at 2.80**, so a fast aircraft physically could not get within 30 of a waypoint and would
+orbit it instead of sequencing. The radius is now `max(30, v / yawRate)`. Verified on a 3000-block
+out-and-back at 2.80: the aircraft advanced its waypoint and rolled into the turnback in one pass,
+`legs=1/2`, no orbit.
 
 ### Thrust direction
 
@@ -152,9 +242,19 @@ out, dropping the wand or stashing it in a chest.
 
 ### Runway Survey Tool
 
+Two modes, switched with **sneak + right-click the air**; the tooltip says which one it is in.
+
+*Survey mode:*
+
 * **Right-click one threshold, then the other** — surveys the strip between them and registers it.
-* **Sneak + right-click** — cancel a half-marked runway.
-* **Right-click the air** — list registered airfields.
+* **Sneak + right-click a block** — cancel a half-marked runway.
+
+*Parking mode:*
+
+* **Right-click a block** — mark it as a parking spot on the nearest airfield (§4b).
+* **Sneak + right-click a block** — remove the marked spot nearest that block.
+
+**Right-click the air** in either mode browses the airfields, nearest first.
 
 Mark the two **centreline ends** (not opposite corners), which is what makes the runway heading
 exact. The survey reports:
@@ -184,7 +284,7 @@ IDLE ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─►
 | `TAXI` | Ground steering from the parking spot to the departure threshold at 0.20 speed, elevator neutral |
 | `TAKEOFF` | Full power, ground steering on the runway heading, elevator aft, rotate at 0.35 speed, wings level |
 | `CLIMB` | Climb to cruise altitude on the first waypoint's bearing |
-| `CRUISE` | Fly waypoints, terrain-following, advancing on arrival within 30 blocks |
+| `CRUISE` | Fly waypoints, terrain-following, advancing within `max(30, turn radius)`, bleeding speed for the arrival |
 | `STRIKE` | Hold 100 above the ground, then dive at the target — see [The attack run](#the-attack-run) |
 | `DESCENT` | Fly to the initial approach fix, 300 blocks out at circuit height |
 | `APPROACH` | Track the extended centreline and capture the glide slope |
@@ -351,9 +451,135 @@ An aircraft reserves the runway when it commits to the approach and releases it 
 go-around, or when it is destroyed. A second aircraft arriving at a busy field enters `HOLD` and
 orbits the approach fix at circuit height until the runway frees up.
 
-**Which end to land on** is chosen by counting approach obstacles at both ends; ties go to the
-uphill direction, because landing uphill shortens the roll-out. There is no wind — Minecraft has no
-wind API, so runway selection deliberately ignores it rather than inventing one.
+**Which end to land on** is chosen from the approach obstacle counts **recorded by the survey**;
+ties go to the uphill direction, because landing uphill shortens the roll-out. There is no wind —
+Minecraft has no wind API, so runway selection deliberately ignores it rather than inventing one.
+
+It used to recount both funnels at the moment the aircraft committed, and that chose exactly wrongly.
+`TerrainScanner.surfaceHeight` returns `UNKNOWN_HEIGHT` for a column in an unloaded chunk, and an
+unknown column was *skipped* rather than counted — so an unloaded funnel scored **zero obstacles and
+won**. `resolveLanding` runs while the aircraft is still hundreds of blocks out, when the far end's
+approach is precisely the part of the world nobody has loaded, so the aircraft systematically chose
+the end it could not see. On flat ground that cost about 50 seconds of flying past the field and
+turning back; on hilly ground it picks the end with the hill in it.
+
+The survey runs with the chunks loaded — `/autopilot survey` insists on a loaded position — so its
+counts are the trustworthy ones and are now persisted on the `Airfield` and used directly. An
+airfield stored before they were recorded still measures live, but that fallback counts an unknown
+column **as an obstacle**: "not loaded" must never be the cheapest answer.
+
+Verified on the rig with a 15-block wall in the 36 approach funnel: the survey recorded `36 -> 4,
+18 -> 0` and preferred 18, and an aircraft arriving from 1500 blocks away with both funnels unloaded
+flew past the field, turned back and landed on **18**.
+
+---
+
+## 4a. The airfield browser
+
+`/autopilot airfields` used to print a flat list. It is now a browser, and every part of it works
+from the server console — that is how it is tested.
+
+**Sorted by distance from whoever asked**, with a bearing. A player gets distances from where they
+are standing; the console and command blocks have no position of their own, so the source origin
+(the world spawn) is used and the header names it, because an unlabelled "2.7km" is worse than
+useless.
+
+```
+2 airfields, nearest first, from 0, 0 (world origin):
+  airfield-1 36/18  180x25  662 blocks brg 081  parking 2
+  airfield-2 36/18  66x25  2.7km brg 089  reserved by #1
+```
+
+The list carries only what decides whether you want to open one: size, distance, bearing, marked
+parking, who has it reserved (`RunwayOccupancy.holder`), and `TOO SHORT` if an aircraft cannot use
+it. The full survey — slope, roughness, threshold elevations, approach obstacle counts, preferred
+landing direction, parking spots and their state — is one click away in `airfields info`, because
+twenty airfields' worth of that is not something anyone reads in chat.
+
+**Interactive, and degrades to plain text.** The airfield name runs `airfields info`, coordinates
+copy to the clipboard, `[show in world]` runs `airfields show`, which reuses the survey tool's own
+particle highlight. `AutopilotOutput.component` flattens components to their string for a console,
+so every row is written to read correctly without any of that — a click event is never the only
+place a value appears.
+
+**Localised without breaking the rig.** A dedicated server resolves translatable components through
+`Language`, which only ever loads `/assets/minecraft/lang/en_us.json` out of the vanilla jar — a
+mod's lang files are client assets and are never on that path, so a plain `Component.translatable`
+prints its raw key in `console.log`. Everything user-visible here goes through `AutopilotText.tr`,
+which is `translatableWithFallback`: a client renders the translation, the console renders the
+English compiled in beside the key.
+
+### How much runway an aircraft actually needs
+
+`MIN_USABLE_RUNWAY_LENGTH` is **30 blocks**, and take-off is not what sets it. Simulating
+`tickOnGround` from a standstill to `ROTATE_SPEED`, where `dragMul` is multiplied by
+`20 × (3 − blockFriction)` — 48x on grass — gives a ground roll of 3.8 blocks at throttle 5 and
+**1.9 at the booster's throttle 10**, and the roll-out from touchdown speed is 2.1. The landing is
+the constraint, and within the landing it is the *aiming*, not the braking: the aircraft flies at a
+point `TOUCHDOWN_AIM_OFFSET` (12) blocks down the strip and may float past it in the flare. Hence
+`(12 + 3) × 2`, the doubling covering a committed go-around that lands long.
+
+A field shorter than that is marked `TOO SHORT` in the list, warned about by the survey, and
+**refused at the command** rather than discovered by an aircraft in the air — `flight` checks both
+ends, `inbound` checks the destination.
+
+Verified on the user's case, a 66×25 field alongside a 183×21: a full sortie at the 2.60 default
+landed on the 66-block runway **1 block down**, and one flown at the 2.80 maximum landed 3 blocks
+down. 66 is not marginal; it is more than twice what is needed.
+
+### Management
+
+`rename` and `remove` both refuse while an aircraft holds the runway — a flight in progress carries
+the destination by name, in its flight plan, its reservation and the line it will print when it
+lands.
+
+Surveying the same strip twice used to accumulate `airfield-1`, `airfield-2`, … on top of each
+other, with no way to tell them apart and no way to delete either. A survey whose two thresholds
+both land within 12 blocks of a registered pair, in either order, now **replaces** that airfield and
+keeps its name and its parking spots — re-marking a threshold that was a few blocks out is the
+normal way to correct a survey, not a way to create a second field.
+
+---
+
+## 4b. Marked parking
+
+Where an aircraft parks before it taxis used to be derived at spawn time by probing the ground beside
+the threshold. That heuristic is still there and is still the fallback, but a player can now **mark**
+the spots, the same way they mark a runway.
+
+The **Runway Survey Tool** has two modes; sneak + right-click the air switches between them, and the
+tooltip says which one it is in. In parking mode, right-click marks a spot on the nearest airfield
+and sneak + right-click removes the one nearest the click. A mode on the existing tool rather than a
+fourth item in the creative tab: an apron only means anything beside a runway that has already been
+surveyed, so it is the second half of the same job.
+
+Spots live on the `Airfield` record and persist in `SavedData` with the rest of the survey. The
+codec field is optional with an empty default, so every airfield surveyed before this existed loads
+unchanged and simply uses the derived apron.
+
+**Marked spots are validated, not trusted** — the whole point is to stop an aircraft being put
+somewhere it cannot leave. `Airfield.parkingSpotProblem` refuses, with the reason, when the spot is:
+
+* further than `PARKING_MAX_TAXI_DISTANCE` (64) from the nearest threshold — the taxi is a straight
+  line with no obstacle avoidance, so every block of it has to be level and clear
+* on ground that is unknown or absent
+* more than `PARKING_MAX_ELEVATION_DIFFERENCE` (2) off the runway elevation — the ground handling
+  cannot taxi up or down a step
+* separated from the threshold by anything that is not level all the way
+* within `PARKING_SPOT_CLEARANCE` (5) of a spot that is already marked, or past `MAX_PARKING_SPOTS` (8)
+
+A spot on the strip itself is accepted with a warning rather than refused; it is what the fallback
+does anyway when nothing beside the runway is level.
+
+**More than one spot per airfield**, deliberately. `Airfield.parkingPosition` tries them in the order
+they were marked and takes the first that is both still usable *for this departure threshold* — which
+end is the departure end is chosen per flight by `bestEnd`, so it is re-checked rather than assumed —
+and not already occupied by another aircraft. So the first spot is the normal departure position and
+the rest are where a queue forms behind it. Verified: two sorties launched a second apart parked at
+`671, -59, 11` and `639, -59, 4`, the two marked spots, rather than on top of each other.
+
+Anything that fails re-validation drops through to the next spot and finally to the derived apron, so
+a marked spot can never strand an aircraft that would otherwise have flown.
 
 ---
 
@@ -385,7 +611,7 @@ you want a reliable one.
 
 | Data | Where | Survives restart |
 |---|---|---|
-| Airfields | `SavedData` per dimension, `data/simpleplanes/airfields.dat` | **Yes** |
+| Airfields, including marked parking spots | `SavedData` per dimension, `data/simpleplanes/airfields.dat` | **Yes** |
 | In-progress route flight | Plane entity NBT, via `FlightPlan.CODEC` | **Yes** |
 | Half-drawn route / half-marked runway | Data component on the item | **Yes** |
 | Runway reservations | In memory | No — and correctly so, they are re-derived on load |
@@ -430,15 +656,26 @@ server console, a command block or a datapack function. A player is an optional 
 makes relative coordinates (`~ ~ ~`) work and decides which side an attack run comes in from.
 
 ```
-/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]  launch an attack run
-/autopilot route <x y z> <x y z>                 fly A -> B -> A and land
-/autopilot flight <from> <to>                    full sortie between two registered airfields
-/autopilot inbound <x y z> <airfield>            one-way arrival into a named airfield
+/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]
+                                                 launch an attack run
+/autopilot route <x y z> <x y z> [speed]         fly A -> B -> A and land
+/autopilot flight <from> <to> [speed]            full sortie between two registered airfields
+/autopilot inbound <x y z> <airfield> [speed]    one-way arrival into a named airfield
 /autopilot survey <x y z> <x y z>                survey a runway between two thresholds
-/autopilot airfields                             list registered airfields
 /autopilot status                                full telemetry for every autopilot aircraft
 /autopilot stop                                  stop every autopilot aircraft in this dimension
+
+/autopilot airfields                             browse, nearest first
+/autopilot airfields info <airfield>             the full survey of one field
+/autopilot airfields show <airfield>             draw it in world with particles
+/autopilot airfields rename <airfield> <name>    rename it
+/autopilot airfields remove <airfield>           delete it
+/autopilot airfields park <airfield> <x y z>     mark a parking spot
+/autopilot airfields unpark <airfield> <x y z>   remove the marked spot nearest that point
 ```
+
+`speed` is the cruise speed in blocks per tick, clamped to 0.40-2.80. Omitted, it is
+`CRUISE_SPEED` — see [The default is fast](#the-default-is-fast).
 
 `flight` and `inbound` take airfield **names** (tab-completed from the registered list, quoted
 because names contain a hyphen), so they need no block-position argument at all and cannot be
@@ -599,6 +836,13 @@ world cannot double-count either.
   ticket keeps a bubble loaded around the aircraft itself, which covers the normal case.
 * **Route legs are fixed at 2** (out and back) from the wand. Use `/autopilot flight` or
   `/autopilot inbound` for a one-way sortie, or the `FlightPlan` API for more.
+* **The cruise speed is a cruise speed.** The approach, flare and landing gates are tuned around
+  `APPROACH_SPEED` and never inherit it; the aircraft sheds the difference on the final cruise leg.
+  A route whose last leg is shorter than the deceleration distance will arrive at the descent still
+  fast and rely on the descent to finish the job.
+* **There is no taxiway network.** Marked parking makes the *start* of the taxi a human decision;
+  the taxi itself is still a straight line to the threshold, which is why a marked spot is validated
+  along that line and capped at 64 blocks from it.
 * **Taxi is a straight line to the threshold.** There is no taxiway network and no obstacle
   avoidance on the ground: the aircraft steers directly at the lineup point. On a surveyed field with
   a sane parking apron that is enough; it will not thread a hangar.
