@@ -532,11 +532,16 @@ Two measured corrections in that, both of which cost a whole set of go-arounds b
 Measured on the rig, arriving at a runway 8 blocks above the surrounding sea with an 89-block summit
 off the north threshold (`/autopilot inbound … "airfield-1" 2.60`):
 
-| arrival | top of descent → stopped | track | total climb | orbits / go-arounds |
-|---|---|---|---|---|
-| from the north, offset | 67 s → **45 s** | 1587 → 1593 | 2 → 2 | 0 → 0 |
-| from the north, over the summit | 66 s → **38 s** | 1562 → 1599 | 16 → 14 | 0 → 0 |
-| from the north, 172 blocks high | 150 s → **53 s** | 2361 → 2107 | 49 → 3 | 1 → 0 |
+| arrival | top of descent → stopped | track | total climb | turns flown | go-arounds |
+|---|---|---|---|---|---|
+| from the north, offset 150 | 67 s → **47 s** | 1587 → 1600 | 2 → 3 | 0.7 → 0.8 | 0 → 0 |
+| from the north, over the summit | 66 s → **47 s** | 1562 → 1598 | 16 → 11 | 0.9 → 0.9 | 0 → 0 |
+| from the north, 172 blocks high | 150 s → **59 s** | 2361 → 2111 | 49 → 3 | 2.1 → 0.7 | 1 → 0 |
+
+The high arrival is the one to read: it used to fly a 300-block final still 100 blocks above the
+slope, cross the threshold airborne, go around and come back — 2.1 full turns of heading change and
+49 blocks of climb spent on it. It now reads `extended final 450 → 600 → straight in` and lands
+first time.
 
 **Which end to land on** is chosen from the approach obstacle counts **recorded by the survey**;
 ties go to the uphill direction, because landing uphill shortens the roll-out. There is no wind —
@@ -731,13 +736,18 @@ blind — and 116 blocks is 45 ticks against a 60-block turn radius. 40 ticks pu
 two ticket bubbles still overlap (each makes 64 blocks resident; the lead is 104 at cruise speed).
 
 Measured on the rig, arriving down the extended centreline with the summit 89 blocks above the
-runway and clear water 60 blocks west:
+runway and clear water 60 blocks west (`/autopilot inbound 0 -30 -1000 "airfield-1" 2.60`):
 
 | | before | after |
 |---|---|---|
-| highest ground crossed | runway + 59 | runway + 51 |
-| minimum clearance | **15** (below the 22 minimum) | **21–25** |
+| highest ground crossed | runway + 59 | runway + 39 |
+| minimum clearance | **15** (inside the 22-block minimum) | **27** |
 | side chosen | east, into the higher flank | west, over the water |
+| what `status` said | nothing | `plan[around right 20 deg, saves 37 of climb]` |
+
+The control matters as much as the case: on the open superflat the same build prints `plan[direct]`
+for every sample of a 2800-block route and never leaves its track, and a 1-block ridge reads
+`plan[over, 1 to climb]` rather than being detoured around.
 
 **Improvised landings.** With no surveyed airfield in range, `Airfield.flattestHeading` scores 12
 candidate directions around the first waypoint by summed height change and builds a throwaway 80×8
