@@ -11,12 +11,68 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `1212b8578941889c29cdc8004bd200dcf647e0d268f4852a4001291feb252e39` |
+| sha256 | `b63394643313b3baf4b785b2c36dae47826e22b9db557779656753699aaa090e` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
 
 ## Changes in this build
+
+### The runway centreline is the middle of the strip
+
+The survey took the two clicked blocks as the thresholds literally, and a player marks a strip by
+clicking what they can stand on — an edge or a corner. Everything keys off the threshold, so the
+lineup, the aim point, the glide slope, the lateral offset and the landing gates all moved to the
+edge with it. Measured on a 13-wide strip clicked on its left edge: the whole take-off roll ran at
+x = -5.50 against a true middle of 0.50, and the aircraft flew a *perfect* approach onto a line the
+survey had put on the runway edge. Ends are centred independently, because the two easiest corners
+to click are usually on opposite sides and a common shift averages them back to a diagonal.
+
+Airfields already on disk are untouched; `/autopilot airfields resurvey <airfield>` is the migration
+path and the browser says when a field wants it.
+
+### Aircraft park, and taxi in after landing
+
+`TAXI_IN`: after the roll-out the aircraft turns off the strip, runs down an apron lane and parks on
+a marked stand. Before this, six arrivals left six aircraft inside eight blocks of runway, two of
+them resting on the roofs of others, each reporting a clean landing. The runway is released when the
+aircraft is clear of it rather than when it finally stops — measured, physically obstructed **for
+ever** before, **165 ticks** after.
+
+Marking a stand is now required for newly surveyed runways; existing airfields are grandfathered.
+
+### The approach is computed at range and then flown
+
+Nothing was decided at range before: a sortie's last waypoint is the centre of the destination
+runway, so the descent began **51 blocks past the threshold** and every arrival flew an unplanned
+circuit — 1578 blocks of track for a 780-block flight. `ArrivalPlan` now decides at
+`intercept + max(100, 2 x turn radius)`, tests the plan against the airframe's real sink rate and
+turn radius, commits, and replans on named triggers with the reason reported.
+
+| arrival | ticks | track |
+|---|---|---|
+| straight in, 2.60 | 1396 -> **889** | 1578 -> **737** |
+| straight in, 0.40 | 3389 -> **1559** | 1477 -> **736** |
+| wall built after the survey | 2018 -> **1353** | 3 go-arounds -> **0** |
+
+`DeparturePlan` fixes an end-selection bug that was backwards: departures were scored on the end's
+own approach funnel, but a departure climbs out over the *opposite* funnel, so a field with a wall
+off one threshold launched aircraft into it.
+
+### Large and cargo aircraft fly
+
+`type <plane|large|cargo|random>` on `route`, `flight` and `inbound`. The large plane went around on
+**every** attempt before this and nobody had noticed, because nothing but the starter plane had ever
+been dispatched. The cargo plane could not terminate at all: its descent braked on distance to a fix
+it could not reach, so it orbited for 24 000 ticks with no landing, no go-around and no report.
+
+### The approach funnel could not see a wall
+
+Obstacles were sampled one column every 10 blocks straight down the centreline. A 20-block wall
+between two stations counted zero, and so did a clump four blocks to the side. Stone behaved exactly
+like bamboo — this was never a vegetation problem. Each station is now a 5 x 5 cell across the
+funnel.
+
 
 ### Strike tool settings, and departures that wait their turn
 
