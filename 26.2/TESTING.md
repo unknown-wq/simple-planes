@@ -378,6 +378,113 @@ Sum the chord lengths between consecutive `pos=` samples for the distance; the s
 `spd=`. Do not use the straight-line distance between the first and last sample — the aircraft turns
 onto the approach partway through and the chord sum is already an underestimate of the path.
 
+### Recipe: building the "mountain off the threshold" arrival
+
+The route and arrival planner was written against a user's world — a runway at **y = 69** on a spit
+with sea on both sides, a summit at **y = 158** immediately off the north threshold, and open water
+at **y = 61** a short way west. That geometry is reproducible on the superflat, and it has to be:
+this is the one case where "climb over" and "go round" give visibly different answers.
+
+**Work in relative heights.** The superflat's surface is `surfaceHeight = -60` (bedrock −64, dirt
+−63/−62, grass −61), and there is no cheap way to raise a whole ocean to 61. Subtract 129 from every
+one of the user's numbers and the geometry is exact:
+
+| | user's world | on the rig | relative to the runway |
+|---|---|---|---|
+| sea / open ground | 61 | −60 (the superflat itself) | −8 |
+| runway surface | 69 | −52 | 0 |
+| summit | 158 | 37 | +89 |
+
+```sh
+./cmd.sh "forceload add -48 -224 56 56"        # 126 chunks - under the 256 limit
+sleep 8
+# the spit: 25 x 141 x 9 = 31725 blocks, one fill, just under the 32768 limit
+./cmd.sh "fill -12 -61 -90 12 -53 50 minecraft:stone"
+# the mountain: a stepped cone centred (5, -160), half-extents 45 x 55, up to y=36.
+# Emit it 4 layers at a time so each fill stays under the limit and the sides stay conical.
+./cmd.sh "autopilot survey 0 -52 40 0 -52 -70"
+./cmd.sh "forceload remove all"                # fly it with no force-loading, as a real flight is
+```
+
+The survey should report `approach obstacles: 36 -> 0, 18 -> 10` and prefer 36 — the mountain sits
+inside the 200-block funnel of the north threshold, so the *end* choice is already right and what is
+left to test is the path to it. Then:
+
+```sh
+./cmd.sh 'autopilot inbound 0 -30 -1000 "airfield-1" 2.60'   # down the extended centreline
+./cmd.sh 'autopilot inbound -150 -30 -1000 "airfield-1" 2.60' # offset, so the join is a 180
+./cmd.sh 'autopilot inbound 0 120 -900 "airfield-1" 2.60'     # 172 blocks too high
+```
+
+### Recipe: measuring an arrival
+
+Poll `autopilot status` once a second for the whole flight and reduce the log afterwards. One
+second is 20 ticks, which is fine resolution for a track that is 1600 blocks long, and every field
+needed is on the status line already:
+
+```sh
+: > console.log
+./cmd.sh 'autopilot inbound 0 -30 -1000 "airfield-1" 2.60'
+for i in $(seq 1 130); do ./cmd.sh "autopilot status"; sleep 1; done
+```
+
+Then, from consecutive `pos=` samples:
+
+* **track flown** — the sum of the horizontal chords, *not* the straight-line distance; the aircraft
+  turns, and on an arrival it turns a lot.
+* **total climb** — the sum of the positive `y` deltas only. This is the number the whole
+  over-versus-round argument is about, and it is invisible in a peak-altitude figure.
+* **orbits** — the sum of `|Δhdg|` over the flight, divided by 360. An aircraft that flies a clean
+  arrival turns about 0.8 of a circle; 2.1 means it went round something.
+* **minimum clearance** — `agl` while airborne. Below `TERRAIN_CLEARANCE` (22) the aircraft is inside
+  its own margin, which is the failure the side-probe reflex used to produce.
+* **top of descent → wheels stopped** — from the first `descent` sample to the `landed at` line. This
+  is the clock the user actually complains about.
+
+Two traps:
+
+* **`console.log` is not clean UTF-8** once a flight has run (mode names and coordinates are fine,
+  but `grep` will call it a binary file). Use `strings` or read it as bytes.
+* **Poll deduplication matters.** A status command issued twice inside one tick prints the same
+  position twice; drop consecutive identical `pos=` samples before summing anything, or the
+  track comes out short and the climb comes out zero.
+
+### Recipe: several arrivals at once
+
+Four aircraft at one runway is the cheapest way to exercise `HOLD`, the stack separation and the
+tower board together. Watch the argument spacing — `inbound  60 …` with two spaces is parsed as a
+different argument and the command is rejected with `Expected double`, which looks exactly like an
+aircraft that failed to spawn:
+
+```sh
+./cmd.sh 'autopilot inbound -60 -30 -700 "airfield-1" 2.60'
+./cmd.sh 'autopilot inbound 60 -30 -700 "airfield-1" 2.60'
+./cmd.sh 'autopilot inbound -60 -30 700 "airfield-1" 2.60'
+./cmd.sh 'autopilot inbound 60 -30 700 "airfield-1" 2.60'
+sleep 25 && ./cmd.sh "autopilot tower"
+```
+
+Expect losses, and expect them on the unmodified build too — measured there, 3 of 4 aircraft were
+destroyed. Two of those are a mid-air between arrivals converging on the same fix, which nothing in
+the code prevents; see the limitations in `AUTOPILOT.md`. What this test can show is that no two
+aircraft are destroyed *in `HOLD`, at the same altitude, three blocks apart* — that failure is fixed.
+
+### Recipe: comparing a change against the build it replaces
+
+There is no second server and no second world: use one rig and swap the jar.
+
+```sh
+git stash push -u                                   # in the worktree
+JAVA_HOME=/opt/jdk25 /opt/gradle-9.6.1/bin/gradle -p <worktree>/26.2 build --no-daemon --offline
+cp <worktree>/26.2/build/libs/simpleplanes-*.jar /tmp/…/baseline.jar
+git stash pop
+```
+
+Then run the same scripted flights against each jar in turn, restarting the server between them.
+The world, the survey and the terrain are identical, which is the only way the numbers mean
+anything. Keep the baseline jar — you will want it again the first time a "fix" makes something
+worse, and it is how the four-aircraft result above was shown to be pre-existing rather than new.
+
 ### Recipe: a short runway, and refusing one
 
 `MIN_USABLE_RUNWAY_LENGTH` is 18 blocks, so a 16-block strip is the test case for the refusal and an
