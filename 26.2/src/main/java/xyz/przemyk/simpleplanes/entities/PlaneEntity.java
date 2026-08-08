@@ -936,11 +936,7 @@ public class PlaneEntity extends Entity {
         }
 
         boolean speedingUp = true;
-        if (onGroundTicks < 0) {
-            onGroundTicks = 5;
-        } else {
-            onGroundTicks--;
-        }
+        refreshGroundContact();
         float pitch = getGroundPitch();
         if ((isPowered() && getPitchUp() > 0) || isOnWater()) {
             pitch = 0;
@@ -992,6 +988,20 @@ public class PlaneEntity extends Entity {
 
     protected float getGroundPitch() {
         return 5;
+    }
+
+    /**
+     * The ground/air hysteresis counter behind {@link #getOnGround()}. Extracted verbatim from
+     * {@code tickOnGround} so a subclass with its own ground handling — {@link HelicopterEntity} —
+     * can keep the counter running without inheriting the fixed-wing ground roll along with it.
+     * Behaviour is unchanged; see PHYSICS-AUDIT.md issue N4 for the wart it carries.
+     */
+    protected void refreshGroundContact() {
+        if (onGroundTicks < 0) {
+            onGroundTicks = 5;
+        } else {
+            onGroundTicks--;
+        }
     }
 
     /**
