@@ -56,4 +56,17 @@ public class AutopilotComponents {
             .persistent(Codec.INT)
             .networkSynchronized(ByteBufCodecs.VAR_INT)
             .build());
+
+    /**
+     * Blast strength configured on the strike tool.
+     *
+     * <p>Only the strength: the tool always breaks blocks and never sets fire, which is what it has
+     * always done. Those two are command-only, because cycling three independent settings through
+     * one gesture would be worse than not having them on the item at all.
+     */
+    public static final DataComponentType<Float> STRIKE_BLAST = register("autopilot_strike_blast",
+        DataComponentType.<Float>builder()
+            .persistent(Codec.FLOAT)
+            .networkSynchronized(ByteBufCodecs.FLOAT)
+            .build());
 }

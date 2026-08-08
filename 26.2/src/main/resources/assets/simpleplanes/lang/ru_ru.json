@@ -79,6 +79,7 @@
     "item.simpleplanes.runway_tool": "Инструмент разметки ВПП",
     "simpleplanes.strike_tool_desc": "ПКМ по блоку — направить самолёт на таран",
     "simpleplanes.strike_tool_distance": "Дальность спавна: %s блоков",
+    "simpleplanes.strike_tool_blast": "Сила взрыва: %s",
     "simpleplanes.route_wand_desc": "ПКМ по блокам — точки маршрута, Shift+ПКМ — запуск",
     "simpleplanes.route_wand_waypoints": "Отмечено точек: %s",
     "simpleplanes.runway_tool_desc": "ПКМ по обоим торцам ВПП — снять характеристики",

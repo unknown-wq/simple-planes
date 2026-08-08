@@ -1131,9 +1131,23 @@ public class PlaneEntity extends Entity {
      * <p>A plane with a rider is untouched: its {@code Q_Client} is refreshed every tick from the
      * client that is authoritative for it, so the two quaternions agree and the branch below picks
      * the same one it always did.
+     *
+     * <p><b>The test is {@code getPlayer()}, not {@code getControllingPassenger()}.</b> The question
+     * this branch is really asking is "is there somebody whose client is authoritative and sending
+     * {@code RotationPacket}s", and only a player is ever that. {@link #getControllingPassenger()}
+     * returns the first passenger if it is any {@link LivingEntity}, so a <em>mob</em> aboard used to
+     * select {@code Q_Client} — and a mob is not a pilot and sends nothing, so the quaternion stayed
+     * frozen at the spawn orientation and the frozen-thrust bug came straight back. That is not a
+     * hypothetical: {@link LargePlaneEntity} and {@link CargoPlaneEntity} deliberately mount any
+     * nearby non-player {@code LivingEntity} in their {@code tick()}, so a plane parked near a cow
+     * acquires a passenger by itself. Measured on a 200-block out-and-back with a pig aboard, before
+     * this fix: the flight director commanded heading 236 to bring the aircraft home, the nose
+     * obediently read 236, and the aircraft flew east-north-east instead — the range to the target
+     * grew monotonically 380, 575, 826, 1060, 1287 blocks and it never came back. With the fix the
+     * same flight turns and closes.
      */
     public Vector3f transformPosPhysics(Vector3f relPos) {
-        Quaternionf rotation = getControllingPassenger() == null
+        Quaternionf rotation = getPlayer() == null
             ? getQ(transformQScratch)
             : getQ_Client(transformQScratch);
         EulerAngles angles = toEulerAngles(rotation, transformAngles);

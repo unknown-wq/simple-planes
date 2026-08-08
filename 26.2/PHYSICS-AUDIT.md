@@ -62,11 +62,29 @@ rewritten from the integrated attitude at the end of every `tick()`. Building th
 `Q_Client`, as `getTickPush` originally did, therefore made an unmanned aircraft push in the
 direction it was **spawned** facing regardless of where its nose actually pointed: straight-line
 flight was perfect and every turn silently destroyed the aircraft's energy. `getTickPush` now uses
-`transformPosPhysics`, which picks `Q` when there is no controlling passenger. A ridden plane is
+`transformPosPhysics`, which picks `Q` when there is **no player aboard**. A ridden plane is
 unaffected — its `Q_Client` is refreshed every tick by the authoritative client — so this is
 specifically a fix to the server-simulated path. Measured: a 180° turnback that used to leave the
 aircraft pinned at 0.36 blocks/tick at full throttle now holds 0.75 throughout. See
 `AUTOPILOT.md`, "Thrust direction".
+
+**The predicate is `getPlayer()`, not `getControllingPassenger()`, and the difference is the whole
+bug.** This document and `AUTOPILOT.md` both used to describe the test as "no controlling
+passenger", and the code matched — which was wrong, because
+`PlaneEntity#getControllingPassenger()` returns the first passenger whenever it is any
+`LivingEntity`, not only a `Player`. The question the branch is actually asking is "is there someone
+whose client is authoritative and sending `RotationPacket`s", and only a player is ever that. So a
+**mob** aboard selected `Q_Client`, nothing ever wrote it, and the frozen-thrust bug returned in
+full. That is not hypothetical: `LargePlaneEntity#tick` and `CargoPlaneEntity#tick` deliberately
+call `startRiding` on any nearby non-player `LivingEntity`, so a large plane left near livestock
+acquires a passenger on its own.
+
+Measured on the rig, a 200-block out-and-back with a pig mounted on the aircraft. Before the fix the
+flight director commanded heading 236 to bring it home, the nose read 236 — and the aircraft flew
+east-north-east anyway, with the range to the target growing monotonically 380, 575, 826, 1060,
+1287 blocks until the test was abandoned; it could never return. After the fix the identical flight
+turned back, closed 220 → 176 → 137 → 105 blocks, flew the approach and reported
+`landed at field-26/24, -1969, -60, -2017 (5 blocks down the runway)`.
 
 ### 1.2 Who is authoritative
 

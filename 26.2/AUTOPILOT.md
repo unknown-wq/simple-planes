@@ -97,10 +97,20 @@ pinned there at full throttle**, descending, until it reached the ground — wit
 backwards. That one frozen quaternion is the "spawned aircraft gradually loses speed" report, the
 turnback stall and the failed landing descent, all three.
 
-`PlaneEntity#transformPosPhysics` uses `Q` when there is no controlling passenger and `Q_Client`
+`PlaneEntity#transformPosPhysics` uses `Q` when there is **no player aboard** and `Q_Client`
 otherwise, so a ridden plane is bit-for-bit unchanged. After the fix the same turnback holds
 0.75 → 0.78 → 0.75 with no speed loss at all. `PlaneCollisions#upY` had already documented this exact
 trap for the attitude calculation; the thrust vector had the same bug and nobody had joined the dots.
+
+**A mob is not a pilot.** The predicate was originally `getControllingPassenger() == null`, and
+`getControllingPassenger()` returns the first passenger if it is any `LivingEntity`. A cow or a pig
+aboard therefore selected `Q_Client` — which only a player's `RotationPacket` ever writes — and
+brought the whole frozen-thrust bug straight back. `LargePlaneEntity` and `CargoPlaneEntity` mount
+any nearby non-player `LivingEntity` from their own `tick()`, so this happens by itself. Measured
+with a pig aboard a 200-block out-and-back: commanded heading 236, nose reading 236, and the
+aircraft flying the other way with the range to its target growing 380 → 1287 blocks and never
+coming back. The test is now `getPlayer() == null`, which is exactly "is anyone's client
+authoritative here". See `PHYSICS-AUDIT.md`, "Thrust does not go through it".
 
 ---
 
@@ -118,8 +128,9 @@ All three are in the Simple Planes creative tab.
 
 * **Right-click a block** — spawns an aircraft the configured distance away (default 400 blocks, on
   the far side of you so it runs in past you) and sends it at that block at full throttle.
-* **Right-click the air** — status report.
-* **Sneak + right-click the air** — cycle the spawn distance: 100 → 200 → 400 → 800.
+* **Right-click the air** — status report, including the blast setting.
+* **Sneak + right-click the air** — cycle the spawn distance: 100 → 200 → 400 → 800, and the blast
+  strength one step each time the distance wraps. See [The strike tool](#the-strike-tool).
 
 The aircraft is launched already at attack speed with a booster fitted, cruises the run-in at
 **100 blocks above the ground**, and only then dives — see [The attack run](#the-attack-run).
@@ -419,7 +430,7 @@ server console, a command block or a datapack function. A player is an optional 
 makes relative coordinates (`~ ~ ~`) work and decides which side an attack run comes in from.
 
 ```
-/autopilot strike <x y z> [distance] [bearing]   launch an attack run
+/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]  launch an attack run
 /autopilot route <x y z> <x y z>                 fly A -> B -> A and land
 /autopilot flight <from> <to>                    full sortie between two registered airfields
 /autopilot inbound <x y z> <airfield>            one-way arrival into a named airfield
@@ -438,6 +449,66 @@ runways are usually nowhere near a player.
 derived from wherever the command was issued (the player, or the console's world-spawn origin); if
 that origin sits on top of the target it falls back to a fixed due-south run-in. Given explicitly,
 the whole flight is deterministic and repeatable, which is what makes headless testing useful.
+
+### The warhead
+
+The last three arguments of `strike` decide what happens when the aircraft arrives. They are
+positional and progressively optional, so setting a later one means giving the earlier ones — which
+a repeatable test wants to do anyway.
+
+| Argument | Range | Default | What it does |
+|---|---|---|---|
+| `blast` | 0.0 – 16.0 | **4.0** | Vanilla explosion strength. The damage radius is `2 × blast`. |
+| `blocks` | true / false | **true** | Whether the blast breaks blocks. |
+| `fire` | true / false | **false** | Whether it leaves fires behind. |
+
+The defaults are exactly what a plane has always done, so `/autopilot strike <x y z>` is unchanged.
+
+**Why 16 is the ceiling.** Not taste — cost. `ServerExplosion` casts 1352 rays and then drops every
+block it removed, so the work grows with the volume of the crater, and a bound is what stops a
+mistyped argument stalling the server or eating a build. 16 is four times TNT: a 32-block damage
+radius. Measured on the superflat rig, counting the blocks actually removed from the three
+destructible surface layers:
+
+| Blast | Blocks destroyed | Fires placed |
+|---|---|---|
+| 4.0 (default) | 89 | 0 |
+| 16.0 | 999 | 0 |
+| 8.0, `blocks=false`, `fire=true` | **0** | 145 |
+
+The server stayed comfortable at the ceiling: average 1.3 ms per tick, P95 2.0 ms, P99 6.1 ms
+against the 50 ms budget. Out-of-range values are rejected by the argument parser before anything is
+spawned — `Float must not be more than 16.0: found 99.0` — and `Blast`'s canonical constructor clamps
+as well, so a hand-edited save cannot smuggle a larger one back in through the flight-plan codec.
+
+**`blocks=false` is worth more than a bigger number.** It selects
+`Level.ExplosionInteraction.NONE` instead of `TNT`, which maps to `Explosion.BlockInteraction.KEEP`:
+entities are still hurt and thrown, and not one block moves. That is what makes a strike testable on
+a build you care about.
+
+**Fire is independent of block damage**, which is not obvious and is worth stating because it is the
+combination people want. `ServerExplosion#explode` computes the affected positions *before* it
+consults the interaction, and calls `createFire` outside the `interactsWithBlocks()` guard — so
+`blocks=false fire=true` really does place fire and destroy nothing. Verified above: 145 fires, zero
+blocks removed. Vanilla's `Level#explode` overload that takes a fire flag covers this completely; no
+third-party explosion code was needed or used.
+
+**Persistence.** The warhead is part of `FlightPlan` and goes through its codec, so it survives a
+save — verified by restarting the server with a flight in progress and reading
+`{breaks_blocks: 0b, fire: 1b, power: 12.0f}` back off disk. A blast equal to the default is omitted
+from the NBT entirely (`optionalFieldOf` drops it), so plans written by older builds load unchanged
+and new plans with a default warhead are byte-identical to old ones. Note the standing exception in
+§6: **strike flights are deliberately not persisted at all**, so in practice a non-default warhead
+only reaches disk on a route or sortie.
+
+### The strike tool
+
+The item carries a blast **strength** only, cycled by sneak + right-click: the spawn distance
+advances on every press, and the blast advances one step each time the distance wraps back to the
+start, through 4.0 → 8.0 → 16.0 → 1.0. Both values are printed on every press and both are on the
+tooltip. A held item offers exactly one spare gesture, and spending it on a three-way cycle of
+independent settings would be harder to use than not having them there at all — so `blocks` and
+`fire` stay command-only, and the tool always breaks blocks and never sets fire, as it always has.
 
 `status` is the one to watch while debugging. Per aircraft it prints:
 

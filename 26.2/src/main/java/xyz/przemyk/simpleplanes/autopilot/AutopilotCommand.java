@@ -1,9 +1,12 @@
 package xyz.przemyk.simpleplanes.autopilot;
 
+import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.FloatArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.context.ParsedCommandNode;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -31,7 +34,7 @@ import java.util.List;
  * attack run comes in from.
  *
  * <pre>
- * /autopilot strike &lt;target&gt; [distance] [bearing]
+ * /autopilot strike &lt;target&gt; [distance] [bearing] [blast] [blocks] [fire]
  * /autopilot route &lt;from&gt; &lt;to&gt;
  * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt;
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt;
@@ -62,15 +65,26 @@ public final class AutopilotCommand {
             LiteralArgumentBuilder<CommandSourceStack> root = Commands.literal("autopilot")
                 .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS));
 
+            // strike <target> [distance] [bearing] [blast] [blocks] [fire]
+            //
+            // Positional and progressively optional, which is the shape the subcommand already had.
+            // Every level executes the same method: the optional arguments are read back by name
+            // from the parsed context, so the tree stays flat instead of gaining a lambda per
+            // combination. See optionalInt/optionalFloat/optionalBool below.
             root.then(Commands.literal("strike")
                 .then(Commands.argument("target", BlockPosArgument.blockPos())
-                    .executes(context -> strike(context, AutopilotConfig.STRIKE_SPAWN_DISTANCE, null))
+                    .executes(AutopilotCommand::strike)
                     .then(Commands.argument("distance", IntegerArgumentType.integer(20, 4000))
-                        .executes(context -> strike(context, IntegerArgumentType.getInteger(context, "distance"), null))
+                        .executes(AutopilotCommand::strike)
                         .then(Commands.argument("bearing", IntegerArgumentType.integer(0, 359))
-                            .executes(context -> strike(context,
-                                IntegerArgumentType.getInteger(context, "distance"),
-                                (double) IntegerArgumentType.getInteger(context, "bearing")))))));
+                            .executes(AutopilotCommand::strike)
+                            .then(Commands.argument("blast",
+                                    FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_POWER))
+                                .executes(AutopilotCommand::strike)
+                                .then(Commands.argument("blocks", BoolArgumentType.bool())
+                                    .executes(AutopilotCommand::strike)
+                                    .then(Commands.argument("fire", BoolArgumentType.bool())
+                                        .executes(AutopilotCommand::strike))))))));
 
             root.then(Commands.literal("route")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
@@ -104,13 +118,60 @@ public final class AutopilotCommand {
     }
 
     /**
-     * @param compassBearing explicit run-in bearing in compass degrees, or null to derive one from
-     *                       wherever the command was issued
+     * True when an optional argument was actually supplied on this invocation.
+     *
+     * <p>Brigadier has no notion of a default value: an argument that was not parsed simply is not
+     * in the context, and asking for it throws {@code IllegalArgumentException}. The parsed argument
+     * map is private, but the list of nodes that were actually matched is not, and an argument node
+     * carries its argument name — so walking it is the exception-free way to ask, and it lets one
+     * method serve every level of an optional positional chain.
      */
-    private static int strike(CommandContext<CommandSourceStack> context, int distance,
-                              @Nullable Double compassBearing) throws CommandSyntaxException {
+    private static boolean has(CommandContext<CommandSourceStack> context, String name) {
+        for (ParsedCommandNode<CommandSourceStack> node : context.getNodes()) {
+            if (node.getNode().getName().equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int optionalInt(CommandContext<CommandSourceStack> context, String name, int fallback) {
+        return has(context, name) ? IntegerArgumentType.getInteger(context, name) : fallback;
+    }
+
+    private static float optionalFloat(CommandContext<CommandSourceStack> context, String name, float fallback) {
+        return has(context, name) ? FloatArgumentType.getFloat(context, name) : fallback;
+    }
+
+    private static boolean optionalBool(CommandContext<CommandSourceStack> context, String name, boolean fallback) {
+        return has(context, name) ? BoolArgumentType.getBool(context, name) : fallback;
+    }
+
+    /**
+     * The warhead this strike carries.
+     *
+     * <p>Every field defaults to what an aircraft has always done — {@value Blast#DEFAULT_POWER}
+     * strength, blocks broken, no fire — so an argument-free {@code /autopilot strike} is unchanged.
+     * {@link Blast} clamps the power itself, so the range on the argument is a helpful error message
+     * rather than the actual guard.
+     */
+    private static Blast blastFrom(CommandContext<CommandSourceStack> context) {
+        return new Blast(
+            optionalFloat(context, "blast", Blast.DEFAULT_POWER),
+            optionalBool(context, "blocks", true),
+            optionalBool(context, "fire", false));
+    }
+
+    private static int strike(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         CommandSourceStack source = context.getSource();
         ServerLevel level = source.getLevel();
+        int distance = optionalInt(context, "distance", AutopilotConfig.STRIKE_SPAWN_DISTANCE);
+        // Explicit run-in bearing in compass degrees, or null to derive one from wherever the
+        // command was issued.
+        Double compassBearing = has(context, "bearing")
+            ? (double) IntegerArgumentType.getInteger(context, "bearing")
+            : null;
+        Blast blast = blastFrom(context);
         // getBlockPos, not getLoadedBlockPos. The target of an attack run is by definition hundreds
         // of blocks away and therefore outside anyone's simulation distance, so demanding a loaded
         // position rejected exactly the flights this command exists to fly ("That position is not
@@ -129,16 +190,15 @@ public final class AutopilotCommand {
             return 0;
         }
 
-        // TODO(blast): the command argument that selects strength, block damage and fire is the next
-        // step; until then every strike uses the historic 4.0F TNT warhead.
         PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing,
-            source.getPlayer(), Blast.DEFAULT);
+            source.getPlayer(), blast);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
         }
         source.sendSuccess(() -> Component.literal(
-            AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))), true);
+            AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
+                + " Warhead: " + blast.describe() + "."), true);
         return 1;
     }
 

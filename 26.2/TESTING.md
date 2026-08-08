@@ -104,7 +104,7 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 
 | Command | Use |
 |---|---|
-| `strike <x y z> [distance] [bearing]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test |
+| `strike <x y z> [distance] [bearing] [blast] [blocks] [fire]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test. The last three set the warhead: strength 0–16 (default 4), whether it breaks blocks, whether it sets fire |
 | `route <from> <to>` | point-to-point cruise — the "does it explode for no reason" test |
 | `flight <from> <to>` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
 | `inbound <x y z> <airfield>` | one-way arrival into a named airfield — the landing test, without the departure |
@@ -141,6 +141,62 @@ Every terminal event now goes through `AutopilotFeedback.report`, which logs to 
 there is no owning player — landings, go-arounds (with the reason), runway switches and
 "came down at". Progress chatter still uses `overlay`, which no-ops headlessly. If you add a new
 end-of-flight path, use `report`, or it will be invisible on this rig.
+
+### Recipe: measuring an explosion
+
+Blast strength needs a number, not an impression. The trick is that `fill … replace` reports how
+many blocks it changed, so **refilling the crater counts it**. The superflat has exactly three
+destructible layers — bedrock at −64, dirt at −63/−62, grass at −61 — so a box over `-63 … -61`
+captures the whole crater, and 81×81×3 = 19 683 blocks stays under the 32 768-per-`fill` limit.
+
+```sh
+./cmd.sh "forceload add -2040 -2040 -1960 -1960"      # x1 z1 x2 z2 - easy to transpose, check it
+sleep 4
+./cmd.sh "autopilot strike -2000 -61 -2000 200 0"                    # default warhead
+sleep 22
+./cmd.sh "fill -2040 -63 -2040 -1960 -61 -1960 minecraft:glass replace minecraft:air"
+# -> "Successfully filled 89 block(s)"  == 89 blocks destroyed
+```
+
+Count fires the same way, one layer higher, before counting blocks (fire sits on top of the ground):
+
+```sh
+./cmd.sh "autopilot strike -2000 -61 -2800 200 0 8.0 false true"     # no block damage, incendiary
+./cmd.sh "fill -2040 -60 -2840 -1960 -60 -2760 minecraft:air replace minecraft:fire"
+# -> 145                      fires placed
+./cmd.sh "fill -2040 -63 -2840 -1960 -61 -2760 minecraft:glass replace minecraft:air"
+# -> "No blocks were filled"  nothing destroyed, which is the point of blocks=false
+```
+
+Use a fresh site per shot — craters must not overlap — and `tick query` for the cost: it prints the
+average and the P50/P95/P99 over the last 100 ticks, which is how the 16.0 ceiling was shown to be
+affordable (1.3 ms average, 6.1 ms P99, against a 50 ms budget).
+
+### Recipe: proving something survives a save
+
+`autopilot status` after a restart is **not** proof: a plane in a chunk nobody loads is not ticking
+and not in the entity list, so a perfectly good save looks like a lost aircraft. Two things are
+needed — the aircraft has to be inside a force-loaded region *at shutdown*, and it has to still be
+there when you look.
+
+The trap is that it keeps flying. A routed aircraft covers hundreds of blocks between the `save-all`
+and the `stop`, and leaves any corridor you force-loaded around it. **`tick freeze` pins it**, which
+makes the whole thing deterministic:
+
+```sh
+./cmd.sh "autopilot route -2000 -60 -2000 -1000 -60 -2000"
+sleep 6
+./cmd.sh "tick freeze"
+./cmd.sh 'execute at @e[type=simpleplanes:plane,limit=1] run forceload add ~-32 ~-32 ~32 ~32'
+./cmd.sh "save-all flush"
+./stop.sh && ./start.sh
+./cmd.sh "data get entity @e[type=simpleplanes:plane,limit=1] autopilot.plan.blast"
+# -> Plane has the following entity data: {breaks_blocks: 0b, fire: 1b, power: 12.0f}
+```
+
+`data get entity … autopilot` is also the quick way to see a flight plan without a restart at all —
+it runs the same `addAdditionalSaveData` path — and `data merge entity` runs the read path, so the
+pair round-trips a codec in two commands. Remember `tick unfreeze` afterwards.
 
 ### Recipe: water impact
 
