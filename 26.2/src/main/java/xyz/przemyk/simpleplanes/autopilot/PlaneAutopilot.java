@@ -1,5 +1,6 @@
 package xyz.przemyk.simpleplanes.autopilot;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
@@ -18,6 +19,8 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -76,6 +79,20 @@ public class PlaneAutopilot {
     private int departureHoldTicks;
     /** Set once "waiting for the runway" has been reported, so a long wait says it exactly once. */
     private boolean departureBlockedReported;
+    /** Marked stand this arrival is taxiing to, and standing on once it gets there. */
+    private Airfield.@Nullable ParkingSpot standTarget;
+    /** Legs still to drive on the way to the stand; the last one is the stand itself. */
+    private List<Vec3> taxiInRoute = List.of();
+    /**
+     * Whether the taxi in has left the surveyed rectangle yet.
+     *
+     * <p>A field rather than a test inside {@link #holdsRunway} because that method is called from
+     * {@link RunwayOccupancy} without the aircraft's position to hand, and answering it from a stale
+     * position would be worse than answering it from a flag written by the tick that measured it.
+     */
+    private boolean clearOfRunway;
+    /** Consecutive ticks the taxi in has spent going nowhere. */
+    private int taxiInStalledTicks;
     private @Nullable Vec3 holdFix;
     private double holdAngle;
 
@@ -129,6 +146,10 @@ public class PlaneAutopilot {
         this.departureEnd = null;
         this.departureHoldTicks = 0;
         this.departureBlockedReported = false;
+        this.standTarget = null;
+        this.taxiInRoute = List.of();
+        this.clearOfRunway = false;
+        this.taxiInStalledTicks = 0;
         this.holdFix = null;
         this.anglesInitialised = false;
         this.outcomeReported = false;
@@ -230,6 +251,12 @@ public class PlaneAutopilot {
      * {@link RunwayOccupancy} validates every reservation against this method rather than trusting
      * its map, so a departure that is destroyed, despawned or switched off on the taxiway stops
      * holding the runway without anything having to notice.
+     *
+     * <p>The arrival's end of it is no longer "until the wheels stop". An aircraft that has landed
+     * and is taxiing to a stand goes on holding the strip until it is physically off it — which is
+     * later than the roll-out and much earlier than the end of the taxi, and neither of those is a
+     * mode change. {@link #clearOfRunway} is written by {@code tickTaxiIn} from a real rectangle test
+     * and read here.
      */
     public boolean holdsRunway(String airfieldName) {
         if (!active) {
@@ -239,7 +266,28 @@ public class PlaneAutopilot {
             && departureEnd.airfield().name().equals(airfieldName)) {
             return true;
         }
-        return landingAirfield != null && landingAirfield.name().equals(airfieldName) && mode.usesRunway();
+        if (landingAirfield == null || !landingAirfield.name().equals(airfieldName)) {
+            return false;
+        }
+        return mode.usesRunway() || (mode == AutopilotMode.TAXI_IN && !clearOfRunway);
+    }
+
+    /**
+     * Whether this aircraft has spoken for a marked stand — either taxiing to it or standing on it.
+     *
+     * <p>The half of "is that stand free" that an entity search cannot see. A taxi in takes hundreds
+     * of ticks, and for all of them the aircraft is somewhere between the runway and a square it
+     * fully intends to occupy; without this a second arrival picks the same square and drives into
+     * it. Asked of the live autopilots rather than of a reservation registry, so it cannot outlive
+     * the aircraft — see {@link Airfield#standFree}.
+     */
+    public boolean claimsStand(BlockPos spot) {
+        return active && standTarget != null && spot.equals(standTarget.marked());
+    }
+
+    /** The stand this arrival is taxiing to or standing on, for the status readout and the board. */
+    public @Nullable BlockPos claimedStand() {
+        return standTarget == null ? null : standTarget.marked();
     }
 
     /**
@@ -337,6 +385,7 @@ public class PlaneAutopilot {
             case FINAL -> tickApproach(plane, true);
             case FLARE -> tickFlare(plane);
             case ROLLOUT -> tickRollout(plane);
+            case TAXI_IN -> tickTaxiIn(plane);
             case HOLD -> tickHold(plane);
             case GO_AROUND -> tickGoAround(plane);
             case IDLE -> stop(plane);
@@ -1262,6 +1311,14 @@ public class PlaneAutopilot {
                     // 183-block"), which is not a rule worth writing.
                     + " (" + down + (down == 1 ? " block" : " blocks") + " down the "
                     + Math.round(landingEnd.length()) + "-block runway, " + used + "% used).");
+                // The landing line is printed either way and is unchanged, because it is the
+                // assertion every arrival in this feature is regressed against. What follows it is
+                // the new half: leaving the strip. Only a real landing earns it — an aircraft that
+                // came to rest in the water or fifty blocks off the centreline is not going to taxi
+                // anywhere, and asking it to would turn a clean failure report into a hang.
+                if (beginTaxiIn(plane)) {
+                    return;
+                }
             } else {
                 AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " did not land at "
                     + landingAirfield.name() + "/" + landingEnd.designator() + ": came to rest "
@@ -1271,6 +1328,176 @@ public class PlaneAutopilot {
             // that is on the sea floor is the second thing a false landing report used to hide.
             stop(plane);
         }
+    }
+
+    /**
+     * Chooses a stand and starts the taxi in, or explains why the aircraft is staying where it is.
+     *
+     * <p><b>There are three honest outcomes and none of them is a wait.</b> An aircraft that has just
+     * landed is standing on the one surface every other aircraft at the field needs, so "hold here
+     * until something frees up" is the one answer that must never be given — it is the behaviour this
+     * whole phase exists to remove. So either there is a stand it can reach right now and it goes, or
+     * it stops where it stopped and says so, which is exactly what every build before this one did.
+     *
+     * @return true when the taxi has begun and the flight is continuing
+     */
+    private boolean beginTaxiIn(PlaneEntity plane) {
+        if (landingAirfield == null) {
+            return false;
+        }
+        if (landingAirfield.parkingSpots().isEmpty()) {
+            // Not a failure, and deliberately not a fallback onto the derived apron either: see
+            // Airfield#arrivalStand. Said out loud rather than passed over in silence, because "the
+            // aircraft is sitting on the runway" now has two possible causes and they need telling
+            // apart.
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " stopped on the runway at "
+                + landingAirfield.name() + ": no marked parking. Mark a stand with the Runway Survey"
+                + " Tool in parking mode, or /autopilot airfields park \""
+                + landingAirfield.name() + "\" <x y z>.");
+            return false;
+        }
+        // Every stand resident before any of them is judged. "Is that stand free" is answered partly
+        // by a search for entities standing on it, and an unloaded chunk answers that question
+        // "empty" whatever is parked there — see AutopilotSpawner#loadAirfield for the measured
+        // failure. The aircraft is about to drive onto this ground anyway, and its own rolling ticket
+        // only reaches it once it is nearly there, which is far too late to have decided with.
+        if (plane.level() instanceof ServerLevel serverLevel) {
+            AutopilotSpawner.loadAirfield(serverLevel, landingAirfield);
+        }
+        Airfield.TaxiIn taxi = Airfield.arrivalStand(plane.level(), landingAirfield,
+            plane.position(), plane);
+        if (taxi == null) {
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " stopped on the runway at "
+                + landingAirfield.name() + ": no free stand it can reach from here.");
+            return false;
+        }
+        standTarget = taxi.stand();
+        taxiInRoute = new ArrayList<>(taxi.route());
+        clearOfRunway = false;
+        taxiInStalledTicks = 0;
+        Vec3 stand = taxi.stand().position();
+        AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " vacating "
+            + landingAirfield.name() + "/" + landingEnd.designator() + ", taxiing to the stand at "
+            + Math.round(stand.x) + ", " + Math.round(stand.y) + ", " + Math.round(stand.z)
+            + " via " + taxiInRoute.size() + (taxiInRoute.size() == 1 ? " leg." : " legs."));
+        setMode(plane, AutopilotMode.TAXI_IN);
+        return true;
+    }
+
+    /**
+     * Ground manoeuvring from where the aircraft stopped to the stand it is going to park on.
+     *
+     * <p>The mirror image of {@link #tickTaxi} and flown with the same controls for the same reasons
+     * — throttle capped so it creeps, nosewheel steering, and the elevator held strictly neutral
+     * because {@code tickOnGround} reads a negative pitch input as reverse thrust and a parked plane
+     * rests at a nose-up attitude. There is no taxiway network here, which is why every line it is
+     * about to drive down was checked for level ground before it set off.
+     *
+     * <p><b>Two legs, and the first one is the point of the whole phase.</b> The aircraft turns off
+     * the side of the strip before it heads for the stand — see {@link Airfield#vacatePoint} for the
+     * measurement that made the detour worth its 16 blocks. The runway is given back part way along
+     * the first leg, on a rectangle test against the survey rather than on a distance from anything:
+     * see {@link Airfield#isOnStrip(Vec3, double)} for why no distance answers that question.
+     */
+    private void tickTaxiIn(PlaneEntity plane) {
+        if (standTarget == null || landingAirfield == null) {
+            stop(plane);
+            return;
+        }
+        cmdGroundSteer = true;
+        cmdBankLimit = 0;
+        cmdTerrainFollow = false;
+        cmdSpeed = AutopilotConfig.TAXI_SPEED;
+        cmdMinThrottle = 0;
+        cmdMaxThrottle = AutopilotConfig.TAXI_MAX_THROTTLE;
+        cmdNeutralPitch = true;
+
+        Vec3 stand = standTarget.position();
+        double distance = AutopilotMath.horizontalDistance(plane.position(), stand);
+
+        if (!clearOfRunway
+            && !landingAirfield.isOnStrip(plane.position(), AutopilotConfig.RUNWAY_CLEAR_MARGIN)) {
+            clearOfRunway = true;
+            RunwayOccupancy.release(plane.level(), landingAirfield.name(), plane);
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " is clear of "
+                + landingAirfield.name() + "/" + landingEnd.designator() + " after " + modeTicks
+                + " ticks, " + Math.round(distance) + " blocks still to taxi.");
+        }
+
+        // Sequence the legs. The last one is the stand itself and is never dropped here — reaching it
+        // is what ends the taxi, below — so this only ever advances past the turn-off and the apron
+        // run.
+        while (taxiInRoute.size() > 1
+            && AutopilotMath.horizontalDistance(plane.position(), taxiInRoute.get(0))
+                <= AutopilotConfig.TAXI_IN_ARRIVED_RADIUS) {
+            taxiInRoute.remove(0);
+        }
+        cmdHeading = AutopilotMath.headingTo(plane.position(),
+            taxiInRoute.isEmpty() ? stand : taxiInRoute.get(0));
+
+        if (distance <= AutopilotConfig.TAXI_IN_ARRIVED_RADIUS) {
+            // On the stand. Stop chasing the square — the throttle goes to zero and the aircraft
+            // rolls the last fraction of a block off its own momentum, exactly as the roll-out does.
+            cmdSpeed = 0;
+            cmdMaxThrottle = 0;
+            plane.setThrottle(0);
+            if (plane.getDeltaMovement().length() < AutopilotConfig.ROLLOUT_STOP_SPEED) {
+                finishTaxiIn(plane, true, distance);
+            }
+            return;
+        }
+
+        // Stuck, or taking implausibly long. Both end the flight where it stands rather than leaving
+        // an aircraft grinding against something for the rest of the session with a status line that
+        // reads exactly like a healthy taxi.
+        if (plane.getDeltaMovement().horizontalDistance() < AutopilotConfig.TAXI_IN_STALLED_SPEED) {
+            taxiInStalledTicks++;
+        } else {
+            taxiInStalledTicks = 0;
+        }
+        if (taxiInStalledTicks > AutopilotConfig.TAXI_IN_STALLED_TICKS
+            || modeTicks > AutopilotConfig.TAXI_IN_TIMEOUT) {
+            // Stopped within a stand's own clearance counts as parked on it, not as stuck short of
+            // it. PARKING_SPOT_CLEARANCE is what "occupying this stand" means everywhere else — it
+            // is the box standFree searches and the spacing two marked spots must keep — so an
+            // aircraft inside it is on the stand as far as anything else is concerned, and calling
+            // that a failure would leave the square looking free while an aircraft sat on it.
+            //
+            // It is reachable because the turn-in is the shortest leg of the route and the nosewheel
+            // is the slowest control: 90 degrees of ground steering takes 30 ticks and 6 blocks at
+            // TAXI_SPEED, so on a 4-block final leg the aircraft swings past and hunts. Measured on
+            // the rig, exactly once in a dozen arrivals: "stopped short of its stand, 3 blocks to
+            // go", 3.8 blocks from the centre of a stand it had plainly reached.
+            finishTaxiIn(plane, distance <= AutopilotConfig.PARKING_SPOT_CLEARANCE, distance);
+        }
+    }
+
+    /** Ends a taxi in, on the stand or short of it, and says which. */
+    private void finishTaxiIn(PlaneEntity plane, boolean onStand, double distance) {
+        String where = Math.round(plane.getX()) + ", " + Math.round(plane.getY())
+            + ", " + Math.round(plane.getZ());
+        if (onStand) {
+            // Remembered from here rather than from the start of the taxi, and the two halves are
+            // deliberately different mechanisms: claimsStand covers an aircraft on its way and is
+            // derived from the live set, this covers one that has arrived and outlives both the
+            // flight director and the chunk. See StandOccupancy.
+            if (standTarget.marked() != null) {
+                StandOccupancy.take(plane.level(), landingAirfield.name(), standTarget.marked(), plane);
+            }
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " parked at "
+                + landingAirfield.name() + ", " + where + " (stand "
+                + (standTarget.marked() == null ? "?" : standTarget.marked().toShortString())
+                + ", " + modeTicks + " ticks from the runway).");
+        } else {
+            // Deliberately not "landed": the landing line has already been printed and was true. This
+            // one is about the taxi, and an aircraft that stops short of its stand is still off the
+            // runway, which is most of what the phase was for.
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " stopped short of its stand at "
+                + landingAirfield.name() + ", " + where + " (" + Math.round(distance)
+                + " blocks to go, " + (clearOfRunway ? "clear of the runway" : "STILL ON THE RUNWAY")
+                + ").");
+        }
+        stop(plane);
     }
 
     /**
@@ -1745,14 +1972,20 @@ public class PlaneAutopilot {
         }
         mode = next;
         modeTicks = 0;
-        if (landingAirfield != null && !next.usesRunway()) {
+        // Both reservations are released the moment the aircraft stops being entitled to them, and
+        // the entitlement is asked of holdsRunway rather than re-derived from the mode here — the
+        // same method RunwayOccupancy validates against, so the two cannot disagree. That is also
+        // why entering TAXI_IN does not drop the strip: holdsRunway keeps it until the rectangle
+        // test in tickTaxiIn says the aircraft is actually off the runway, which is neither the mode
+        // change nor the end of the taxi.
+        //
+        // The departure's mirror image is unchanged: the strip is given back on the CLIMB entry at
+        // TAKEOFF_CLEAR_HEIGHT. Releasing eagerly rather than waiting for the flight to end is what
+        // lets the next sortie out of the same field while this one is still on its way.
+        if (landingAirfield != null && !holdsRunway(landingAirfield.name())) {
             RunwayOccupancy.release(plane.level(), landingAirfield.name(), plane);
         }
-        // The departure's mirror image: the strip is given back the moment the aircraft leaves the
-        // phases that need it, which is the CLIMB entry at TAKEOFF_CLEAR_HEIGHT. Releasing eagerly
-        // here rather than waiting for the flight to end is what lets the next sortie out of the
-        // same field while this one is still on its way to the destination.
-        if (departureEnd != null && !next.holdsDepartureRunway()) {
+        if (departureEnd != null && !holdsRunway(departureEnd.airfield().name())) {
             RunwayOccupancy.release(plane.level(), departureEnd.airfield().name(), plane);
         }
         AutopilotFeedback.mode(owner, plane, next);
@@ -1809,6 +2042,17 @@ public class PlaneAutopilot {
             builder.append(" rwy=").append(landingAirfield == null ? "?" : landingAirfield.name())
                 .append('/').append(landingEnd.designator());
         }
+        // A taxiing aircraft that reads like a stopped one is undebuggable, and on the ground almost
+        // every other field on this line is the same for both — position barely moves, agl is 0, the
+        // throttle dithers around 1. So the taxi says where it is going, how far is left and, in one
+        // word, whether the runway behind it is free yet.
+        if (mode == AutopilotMode.TAXI_IN && standTarget != null) {
+            Vec3 stand = standTarget.position();
+            builder.append(String.format(" stand=%.0f,%.0f,%.0f to_go=%.0f rwy_%s",
+                stand.x, stand.y, stand.z,
+                AutopilotMath.horizontalDistance(position, stand),
+                clearOfRunway ? "clear" : "held"));
+        }
         if (goArounds > 0) {
             builder.append(" go-arounds=").append(goArounds);
         }
@@ -1828,6 +2072,12 @@ public class PlaneAutopilot {
         }
         if (plan.kind() == FlightPlan.Kind.STRIKE) {
             return plan.strikeTargetVec();
+        }
+        // Once the aircraft is taxiing in, the threshold it landed on is behind it and the stand is
+        // what it is steering at; showing the runway here would put a growing dist= on a status line
+        // that is meant to say how nearly the flight is over.
+        if (mode == AutopilotMode.TAXI_IN && standTarget != null) {
+            return standTarget.position();
         }
         if (landingEnd != null && (mode == AutopilotMode.DESCENT || mode == AutopilotMode.HOLD
             || mode == AutopilotMode.GO_AROUND || mode.usesRunway())) {
@@ -1887,6 +2137,17 @@ public class PlaneAutopilot {
         ValueInput child = childOptional.get();
         Optional<FlightPlan> planOptional = child.read("plan", FlightPlan.CODEC);
         if (planOptional.isEmpty()) {
+            return;
+        }
+        // A saved taxi in is not resumed at all, and unlike TAXI and PARKED it is not promoted to
+        // TAKEOFF either — that would send an aircraft that has already completed its flight back
+        // down the runway. Everything the flight was for has happened: it landed, the landing was
+        // reported and the runway was given back. Losing the last leg of a taxi leaves the aircraft
+        // standing on level ground beside its runway, which is a worse parking job than it asked for
+        // and a perfectly good place to be. The stand and the route are flight-director state and
+        // were never written to disk.
+        if (AutopilotMode.byName(child.getStringOr("mode", AutopilotMode.CRUISE.getName()))
+            == AutopilotMode.TAXI_IN) {
             return;
         }
         if (!AutopilotRegistry.canActivateAnother()) {

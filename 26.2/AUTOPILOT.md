@@ -261,6 +261,12 @@ Two modes, switched with **sneak + right-click the air**; the tooltip says which
 **Click anywhere on each end** — a corner is fine. The survey finds the middle of the strip for
 itself; see [The centreline is the middle of the strip](#the-centreline-is-the-middle-of-the-strip).
 The survey reports:
+A survey that registers a **new** runway switches the tool into parking mode by itself, because a
+runway with nowhere to park is not a finished airfield — see
+[A surveyed runway is not finished until a stand is marked](#a-surveyed-runway-is-not-finished-until-a-stand-is-marked).
+
+Mark the two **centreline ends** (not opposite corners), which is what makes the runway heading
+exact. The survey reports:
 
 * length, measured width, slope in degrees
 * both thresholds with their elevation and compass heading, and how far the thresholds had to move
@@ -278,7 +284,7 @@ The survey reports:
 ## 3. The state machine
 
 ```
-IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
+IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► TAXI_IN ─► IDLE
                              │          ▲         │  ▲                 │
                              │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
                              └──► STRIKE (one-way attack run, no landing)
@@ -288,6 +294,7 @@ IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► 
 |---|---|
 | `PARKED` | Stationary on the parking spot, throttle shut, running the departure clock down and then asking for the runway |
 | `TAXI` | Ground steering from the parking spot to the departure threshold at 0.20 speed, elevator neutral |
+| `TAXI_IN` | Ground steering from where the aircraft stopped, off the strip and on to a marked stand — see [Taxiing in](#4d-taxiing-in-runway--stand) |
 | `TAKEOFF` | Full power, ground steering on the runway heading, elevator aft, rotate at 0.35 speed, wings level |
 | `CLIMB` | Climb to cruise altitude on the first waypoint's bearing |
 | `CRUISE` | Fly waypoints, terrain-following, advancing within `max(30, turn radius)`, bleeding speed for the arrival |
@@ -296,7 +303,7 @@ IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► 
 | `APPROACH` | Track the extended centreline and capture the glide slope |
 | `FINAL` | As above, plus the landing gates are enforced |
 | `FLARE` | Nose up 4°, throttle closed, wings level |
-| `ROLLOUT` | Throttle closed, ground steering, until the aircraft stops |
+| `ROLLOUT` | Throttle closed, ground steering, until the aircraft stops — then either the taxi in or the end of the flight |
 | `HOLD` | Orbit the approach fix at circuit height until the runway frees up |
 | `GO_AROUND` | Full power, climb to circuit height, then rejoin via `HOLD` |
 
@@ -1063,14 +1070,17 @@ are standing; the console and command blocks have no position of their own, so t
 useless.
 
 ```
-2 airfields, nearest first, from 0, 0 (world origin):
+3 airfields, nearest first, from 0, 0 (world origin):
   airfield-1 36/18  180x25  662 blocks brg 081  parking 2
+  airfield-3 36/18  91x25  1.7km brg 088  NO PARKING
   airfield-2 36/18  66x25  2.7km brg 089  reserved by #1
 ```
 
 The list carries only what decides whether you want to open one: size, distance, bearing, marked
-parking, who has it reserved (`RunwayOccupancy.holder`), and `TOO SHORT` if an aircraft cannot use
-it. The full survey — slope, roughness, threshold elevations, approach obstacle counts, preferred
+parking, who has it reserved (`RunwayOccupancy.holder`), `TOO SHORT` if an aircraft cannot use it,
+and `NO PARKING` if it was surveyed under the stand rule and nobody has finished the job. Those last
+two are the same red for the same reason: both are states in which a sortie is refused, and a browser
+that shows a refusal as an absence gets blamed for the refusal. The full survey — slope, roughness, threshold elevations, approach obstacle counts, preferred
 landing direction, parking spots and their state — is one click away in `airfields info`, because
 twenty airfields' worth of that is not something anyone reads in chat.
 
@@ -1176,11 +1186,261 @@ the rest are where a queue forms behind it. Verified: two sorties launched a sec
 Anything that fails re-validation drops through to the next spot and finally to the derived apron, so
 a marked spot can never strand an aircraft that would otherwise have flown.
 
+Two of those rules had to change once arrivals started taxiing in and *staying* on stands, because
+both were written when every aircraft that ever stood on one was a departure about to leave it:
+
+* **The taxi distance is re-checked against the departure threshold**, not just against the nearest
+  one. A spot is validated when it is marked against whichever threshold it is closer to; which end
+  a sortie departs from is chosen per flight by `bestEnd`, so a stand 14 blocks behind one threshold
+  of a 183-block strip is 169 blocks from the other. Once the two nearer stands were occupied, a
+  departure took that one and spent the whole `TAXI_TIMEOUT` crawling to the threshold before
+  departing on `could not line up cleanly`. It now drops through.
+* **There is no "least bad" stand any more.** `markedParkingPosition` used to remember the first
+  *occupied* spot and return it when nothing was free, on the reasoning that known-good ground beats
+  a derived apron. With arrivals parked for good on those squares that reasoning spawns an aircraft
+  inside another one — measured, once the third stand was ruled out by the rule above. It now falls
+  through to the derived apron, and the derived candidates are checked for an aircraft standing on
+  them as well, which they never were: the apron is a fixed offset from the threshold, so every
+  departure from that end picks the same square.
+
 A marked spot is now also somewhere an aircraft **waits** rather than merely somewhere it appears:
 `PARKED` sits there for the ordered delay and then for as long as the runway is busy. That makes the
 "more than one spot" rule load-bearing instead of cosmetic — with two spots marked, two sorties
 ordered seconds apart wait on different squares while the first one uses the strip, and each is
 listed under the field on `/autopilot tower` with what it is waiting for.
+
+### A surveyed runway is not finished until a stand is marked
+
+Marking parking used to be optional, and an airfield with none fell back to an apron derived from the
+terrain — the heuristic that used to park aircraft in a hole. It is now **required**, and the
+requirement is carried by a stored flag rather than by "has this field got any spots", for one
+reason: a field surveyed before the rule existed also has no spots, and it has to go on working
+exactly as it did.
+
+`Airfield.requiresStands` is `Codec.BOOL.optionalFieldOf("requires_stands", false)`. An **absent key
+means grandfathered**, which is what every airfield already on disk is; only a survey run by this
+build writes `true`. Verified by reading the NBT of a world with all three cases in it — the two
+airfields surveyed by the previous build carry no such key at all after loading, saving and even
+being *re-surveyed*, and the one surveyed by this build carries it:
+
+```
+airfield-1  name threshold_a threshold_b width parking obstacles_a obstacles_b
+airfield-3  name threshold_a threshold_b width parking obstacles_a obstacles_b requires_stands
+```
+
+Four things follow from the flag, and none of them touches a grandfathered field:
+
+* **The survey says the job is not done**, in the report, with the next gesture spelled out:
+  `NOT FINISHED: no parking marked … Next: sneak + right-click the air to put the Runway Survey Tool
+  into parking mode, then right-click beside the runway. Or: /autopilot airfields park "airfield-3"
+  <x y z>`.
+* **The tool puts itself into parking mode** after such a survey. It is the same gesture sequence
+  either way and the report has just said in words what the tool does silently; re-surveying a field
+  that already has stands leaves the mode alone.
+* **The browser marks it `NO PARKING`**, in red, in the same column and the same tone as `TOO SHORT`,
+  and `airfields info` prints the whole instruction.
+* **Sorties are refused at the command**, at both ends — `flight` checks the departure and the
+  destination, `inbound` checks the destination. Refused rather than warned, and for the reason
+  `TOO SHORT` is: a field with no stand is one an aircraft departs from a square nobody surveyed and
+  arrives at by stopping on the landing area, which is the exact defect this feature exists to
+  remove, so completing the flight and leaving the mess behind is not an outcome worth having. It
+  costs nothing to obey — the refusal names the one command that fixes it.
+
+**Re-surveying never changes the grandfathering.** A fresh survey sets the flag; a survey that
+replaces a registered airfield keeps whatever that airfield had, alongside its name and its spots.
+Re-marking a threshold that was a few blocks out is how a player *fixes* a runway, not how they opt
+into a new requirement, and converting a working field into one whose sorties are refused would be
+exactly the silent reinterpretation this design exists to avoid.
+
+**Taxiing in is not gated on the flag.** Any field with a marked stand gets it, grandfathered or not;
+any field without one keeps the old behaviour and says so. The flag decides only who is nagged and
+who is refused.
+
+---
+
+## 4d. Taxiing in: runway → stand
+
+After `ROLLOUT` the aircraft used to simply stop wherever it stopped, and the flight ended there —
+on the runway. Measured on the rig before this change, six arrivals into one 183-block field:
+
+```
+654,-60,-47   654,-60,-44   654,-60,-42   654,-60,-39   654,-58.2,-45   654,-58.2,-41
+```
+
+Six aircraft inside eight blocks of runway, two of them **resting on the roofs of the others** at
+`y = -58.2`, and every one of them reporting `landed at airfield-1/36 … 21% used` as though the
+arrival had been tidy — `LANDING_ELEVATION_TOLERANCE` is 3 blocks, so a plane parked on another plane
+is still "on the runway surface". The runway reservation was released correctly each time; what was
+never released was the runway.
+
+`TAXI_IN` is the arrival's ground phase. It is entered from the roll-out stop when — and only when —
+the landing was real (`landingProblem` is null, so an aircraft that came to rest in the water or
+fifty blocks off the centreline never taxis anywhere) and the field has a marked stand it can reach.
+
+### The route is three straight legs
+
+There is still no taxiway network, and this is not a path search. It is: turn off the side of the
+strip, run down the apron, turn in. Both of the first two legs were forced by a measurement.
+
+**Turning off first, rather than heading straight for the stand.** A stand beside the *far* threshold
+of a 183-block runway is 150 blocks from where an arrival stops, and the straight line to it runs
+down the strip for most of that. Measured: the aircraft would still have been holding the runway 545
+ticks after touchdown, against 794 ticks for the whole arrival it is meant to improve on. Turning off
+sideways costs about 16 blocks of extra track — 80 ticks at `TAXI_SPEED` — and clears the landing
+surface in that time instead.
+
+**Running down the apron rather than cutting across it.** Stands are normally marked in a row, and a
+straight line from the runway to the far one goes through the near one, where an aircraft is very
+likely to be standing. Measured on the two-stand rig with the direct route: two arrivals seconds
+apart, the second correctly picked the further stand because the nearer was claimed, drove at it and
+came to rest **against the first aircraft, 18 blocks short**. The middle leg is now flown one
+`PARKING_SPOT_CLEARANCE` outboard of the outermost stand on that side — a taxiway lane in everything
+but name — and the aircraft turns in only when it is abeam its own stand. It costs 64 ticks on the
+183-block field (356 → 420) and converts that failure into two aircraft on two stands.
+
+A stand that is not off to one side at all — marked off the end of the runway, or on the strip itself
+— gets neither leg and is driven at directly. Every leg of whatever route comes out is checked for
+level ground every 2 blocks before the aircraft is committed to it, by the same
+`taxiPathIsRollable` a departure's spot is validated with, and a lane that fails falls back to the
+direct line rather than costing the aircraft its stand.
+
+### The runway comes back when the aircraft is off it
+
+Not when it stops, and not on the mode change. `AutopilotMode.usesRunway()` deliberately does **not**
+include `TAXI_IN`; `PlaneAutopilot.holdsRunway` keeps the reservation while the mode is `TAXI_IN` and
+a flag written by the tick that measured it says the aircraft is still on the strip.
+
+**"Clear" is a rectangle test against the survey, not a distance.** No distance answers this question.
+Measured from the threshold the aircraft gets *further away* the whole time it is still on the
+runway; measured from the centre it can be nearer after turning off than it was on the centreline.
+`Airfield.isOnStrip(Vec3, margin)` uses the two coordinates the survey actually measured — how far
+along and how far across — grown by `RUNWAY_CLEAR_MARGIN` (3) so that "clear" means the whole
+aircraft is off rather than its centre being on the edge. It is the same pair of numbers the landing
+report is written in.
+
+Measured on the rig, one arrival into a 183-block field at 2.60, identical approach either way:
+
+| | before | after |
+|---|---|---|
+| mode ticks: `approach` / `final` / `flare` / `rollout` | 626 / 947 / 1365 / 1412 | 626 / 947 / 1365 / 1412 — identical |
+| landing report | `654, -60, -47 (38 blocks down the 183-block runway, 21% used)` | identical |
+| flight ends | t = 1420, **on the runway** | t = 1841, on the stand at `672, -61, -8` |
+| runway **reserved** | 626 → 1420 = **794 ticks** | 626 → 1577 = **951 ticks** |
+| runway **physically obstructed** | 1412 → **for ever** | 1412 → 1577 = **165 ticks** |
+
+Not one tick of the arrival moved: the approach, the gates, the flare and the roll-out are untouched,
+and the landing line is the same to the block. The reservation is 157 ticks longer and that is the
+honest trade — it now covers the part of the taxi that is genuinely on the strip, which nothing used
+to cover at all. What used to end with an aircraft parked on the landing area for the rest of the
+session ends with it parked on a stand 43 blocks away.
+
+### Two aircraft must not want the same stand
+
+`Airfield.parkingPosition` already skipped occupied spots, but "occupied" meant *an entity is standing
+there* — which is the only state that existed when every aircraft that ever used a stand was already
+on it. A taxi takes hundreds of ticks, and for all of them the aircraft is somewhere between the
+runway and a square it fully intends to occupy. `PlaneEntity.canBeCollidedWith` is unconditionally
+true, so two arrivals that pick the same square meet on it.
+
+`Airfield.standFree` therefore asks three questions, and only the first of them existed before.
+
+**1. Is anything standing on it.** The entity search. Unchanged.
+
+**2. Is anything on its way to it.** `PlaneAutopilot.claimsStand`, **derived from the live autopilots**
+rather than kept in a reservation registry, for the reason `RunwayOccupancy.activeCount` is derived —
+a reservation with its own lifetime leaks one for every aircraft that goes away without running its
+release path, which is what happens on every crash. An aircraft destroyed mid-taxi stops claiming its
+stand in the same tick it stops existing. Both ends use this test, so a *departure* is not spawned
+onto a stand an arrival is taxiing to either: verified on the rig, with #51 taxiing to the stand at
+`672, -61, -8` a sortie ordered out of the same field was parked at `673, -59, 7`, the other stand.
+
+**3. Is one remembered as standing on it, in a chunk nobody has loaded.** This one is
+`StandOccupancy`, and it is the test that only shows up once you stop force-loading the rig.
+
+> A parked aircraft has no autopilot, so it renews no chunk ticket. Forty ticks after it arrives its
+> chunk unloads, the entity is written to disk and removed from the level, and every search of that
+> square comes back empty. Measured with no force-loading at all: two sorties into one field with
+> three stands, the first parked, the second landed 550 ticks later, searched the same square, found
+> nothing and taxied on top of it. The identical pair of flights *with* the field force-loaded picked
+> two different stands — which is the whole diagnosis in one pair of runs, and the reason this failure
+> was invisible for the first half of the work: `forceload` hid it.
+>
+> Loading the chunk before asking is not enough either. Block data comes back from `getChunk`
+> synchronously; entities do not, so a search run in the tick a chunk is pulled in still finds an
+> empty stand. (Loading the airfield's stands is still worth doing and is now part of
+> `AutopilotSpawner.loadAirfield`, because the *ground* test needs it — a stand in an unloaded chunk
+> reads as "no ground there" and gets skipped, which was silently costing departures their marked
+> apron.)
+>
+> So a stand is remembered from the moment an aircraft finishes taxiing onto it, by UUID, and the
+> record is believed **unless the level can actually see the square**: `ServerLevel.areEntitiesLoaded`
+> is exactly the vanilla predicate for "have this chunk's entities been deserialised", so the entity
+> search is only trusted where it means something. Where it is not, the answer is *taken* — the same
+> rule this feature already applies to unknown terrain, that "not loaded" must never be the cheapest
+> answer. A stand nobody can look at costs one aircraft a taxi in, and it stops on the runway and says
+> so; a stand wrongly called free costs two aircraft.
+>
+> It self-heals in the one way it has to: the first look at a loaded, empty square forgets the record,
+> so an aircraft a player flies away does not leave its stand blocked for the session. It is
+> runtime-only, like `RunwayOccupancy`, and a restart forgets everything — after which the plain
+> entity search is back in charge and is right whenever the chunk happens to be loaded. That is a real
+> hole and it is the cheap side of the trade; the alternative is persisting an occupancy that nothing
+> can validate on load.
+
+Measured end to end with **no force-loading**, three stands marked at one field, four arrivals:
+
+```
+#1 parked at airfield-2, 2673, -60, -178 (stand 2672, -61, -178, 343 ticks from the runway)
+#2 parked at airfield-2, 2673, -60, -6   (stand 2672, -61, -8,   930 ticks from the runway)
+#4 parked at airfield-2, 2673, -60, 7    (stand 2672, -61, 6,    487 ticks from the runway)
+#8 stopped on the runway at airfield-2: no free stand it can reach from here.
+```
+
+Three aircraft, three stands, one each; the fourth had nowhere to go and said so. All four alive.
+
+### What it does when it cannot
+
+Four outcomes, all of them reported, none of them a wait. An aircraft that has just landed is
+standing on the one surface every other aircraft at the field needs, so "hold here until something
+frees up" is the one answer that must never be given.
+
+| Situation | What happens | The line |
+|---|---|---|
+| No marked parking at all (grandfathered field) | Stops where it landed, exactly as every build before this | `stopped on the runway at airfield-2: no marked parking. Mark a stand with the Runway Survey Tool in parking mode, or /autopilot airfields park "airfield-2" <x y z>.` |
+| Every stand taken, or none reachable over level ground | Stops where it landed | `stopped on the runway at airfield-3: no free stand it can reach from here.` |
+| Blocked or stuck part way (100 ticks under `TAXI_IN_STALLED_SPEED`, or `TAXI_IN_TIMEOUT` = 2400 ticks) | Ends the flight where it stands | `stopped short of its stand at airfield-1, 679, -60, -24 (18 blocks to go, clear of the runway)` |
+| Stand marked **on the strip** | One leg, no turn-off; the reservation is held to the end of the taxi, because an aircraft parked on the strip really is occupying it | `taxiing to the stand at 1655, -60, -59 via 1 leg` and then `parked at airfield-3` |
+
+The stuck case was exercised deliberately by leaving a hulk on the apron lane: the taxiing aircraft
+came to rest against it at 0.2 blocks/tick, both aircraft finished at full health, the flight ended
+with the line above, and the tower board read `airfield-1 36/18 FREE` — the strip had been given back
+156 ticks earlier. "Clear of the runway" versus "STILL ON THE RUNWAY" is spelled out in that message
+because it is the only thing about a failed taxi that matters to anyone else.
+
+### Watching it happen
+
+`/autopilot status` gains three fields on a taxiing aircraft, because on the ground almost every
+other field on the line reads the same as a stopped one:
+
+```
+#46 taxi_in pos=2668,-60,-153 agl=0 hdg=088 spd=0.18 thr=3 want[hdg=088 alt=-60 spd=0.20]
+    tgt=2673,-60,-8 dist=145 rwy=airfield-2/18 stand=2673,-60,-8 to_go=145 rwy_held plan[straight in]
+```
+
+`rwy_held` becomes `rwy_clear` on the tick the rectangle test passes. `tgt`/`dist` follow the stand
+rather than the threshold the aircraft has already crossed.
+
+The tower board grows a section, and the aircraft moves into it at the moment it stops being the
+runway's occupant, which is exactly when it would otherwise have vanished off the board while still
+trundling across the field:
+
+```
+> autopilot tower
+3 runways in this dimension, 0 occupied, 0 holding, 0 waiting to depart, 1 taxiing in.
+airfield-2  36/18  FREE      no traffic
+  taxiing to a stand (runway already released):
+    #46 arrival 18, taxi_in, 0:30, 57 blocks to the stand [straight in]
+```
 
 ---
 
@@ -1270,11 +1530,14 @@ you want a reliable one.
 | Data | Where | Survives restart |
 |---|---|---|
 | Airfields, including marked parking spots | `SavedData` per dimension, `data/simpleplanes/airfields.dat` | **Yes** |
+| Whether an airfield is held to the stand rule | `requires_stands` on the airfield, optional, default false | **Yes** — an absent key means grandfathered |
+| The stand an arrival is taxiing to, and the legs to it | Flight director only | No — see §9; a reloaded `TAXI_IN` simply stays parked where it is |
 | In-progress route flight | Plane entity NBT, via `FlightPlan.CODEC` | **Yes** |
 | Departure delay *ordered* | Plane entity NBT, `departure_delay` on the plan | **Yes** |
 | Departure delay *remaining* | Flight director only | No — a reloaded `PARKED` becomes `TAKEOFF`, see §9 |
 | Half-drawn route / half-marked runway | Data component on the item | **Yes** |
 | Runway reservations | In memory | No — and correctly so, they are re-derived on load |
+| Which stands have an aircraft parked on them | In memory (`StandOccupancy`) | No — a restart falls back to the entity search; see §4d |
 | Strike flights | Not written | No — see below |
 
 Strike flights are deliberately **not** persisted. `addAdditionalSaveData` also backs
@@ -1831,9 +2094,33 @@ world cannot double-count either.
   `APPROACH_SPEED` and never inherit it; the aircraft sheds the difference on the final cruise leg.
   A route whose last leg is shorter than the deceleration distance will arrive at the descent still
   fast and rely on the descent to finish the job.
-* **There is no taxiway network.** Marked parking makes the *start* of the taxi a human decision;
-  the taxi itself is still a straight line to the threshold, which is why a marked spot is validated
-  along that line and capped at 64 blocks from it.
+* **There is no taxiway network.** Marked parking makes both ends of a taxi a human decision, and the
+  arrival's taxi in has three fixed legs (off the strip, down the apron, in to the stand) rather than
+  one — but there is still no route search, no obstacle avoidance and nothing that reads a path a
+  player has built. Every leg is validated for level ground before the aircraft sets off; nothing
+  validates it against *entities*, which is why an aircraft can still come to rest against a hulk
+  someone left on the apron and has a stall timeout for exactly that.
+* **A taxi in holds one of the 24 traffic slots for the length of the taxi**, which on a 183-block
+  field with the stands beside the far threshold is about 950 ticks. Before this change the flight
+  ended at the roll-out, so a busy field now carries more concurrent autopilots than it used to for
+  the same number of sorties.
+* **A stand marked on the strip keeps the runway reserved for the whole taxi.** Correctly — an
+  aircraft standing there is standing on the landing area — but it means the one placement the
+  validation accepts with a warning is also the one that gets no benefit from the early release.
+* **A restart during a taxi in abandons it.** `PlaneAutopilot.load` does not restore `TAXI_IN`: the
+  stand and the legs to it were never written to disk, and promoting it the way `TAXI` and `PARKED`
+  are promoted would send an aircraft that has already completed its flight back down the runway.
+  The aircraft stays where it stands, off the runway, and the flight is over. That is a worse parking
+  job than it asked for, not a lost aircraft.
+* **Nothing re-parks an aircraft that stopped on the runway.** All three "cannot taxi in" outcomes
+  end the flight where the aircraft is; there is no retry when a stand later frees up, and no
+  dispatcher to notice. `/autopilot tower` shows the strip as free — because the *reservation* is —
+  while an aircraft is physically sitting on it.
+* **Stand occupancy does not survive a restart.** `StandOccupancy` is in memory, so after a restart a
+  stand with an aircraft parked on it in an unloaded chunk reads as free until something loads it. A
+  sortie ordered in that window can be spawned on top of a parked aircraft, exactly as it could
+  before this feature existed. Persisting it would mean writing an occupancy nothing can validate on
+  load, which is a different and worse failure.
 * **There is no runway sequencing.** One reservation per airfield, now taken by departures as well
   as arrivals, but still no queue behind it: waiting aircraft re-poll every 20 ticks and whoever
   polls first is next, so a long-waiting aircraft can be passed over and the order between two

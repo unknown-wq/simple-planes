@@ -110,7 +110,20 @@ public class RunwayToolItem extends Item {
             return InteractionResult.CONSUME;
         }
 
-        AirfieldReport.surveyAndRegister(AutopilotOutput.toPlayer(player), serverLevel, anchor, clicked);
+        Airfield surveyed = AirfieldReport.surveyAndRegister(
+            AutopilotOutput.toPlayer(player), serverLevel, anchor, clicked);
+        // The survey is only half the job now, so the tool puts itself into the half that is left
+        // rather than telling the player to change mode and hoping they do. It is the same gesture
+        // sequence either way — the tool is already in hand and the next click is a parking click —
+        // and the report immediately above has just said in words what this does silently.
+        //
+        // Only for a runway that is actually unfinished: re-surveying a field that already has stands
+        // marked, or one from before the rule, leaves the tool exactly where the player left it.
+        if (surveyed.standsMissing()) {
+            stack.set(AutopilotComponents.PARKING_MODE, true);
+            AutopilotFeedback.warn(player, "Parking mode: now right-click beside the runway to mark"
+                + " where aircraft park. " + surveyed.name() + " is not usable until you do.");
+        }
         return InteractionResult.CONSUME;
     }
 
