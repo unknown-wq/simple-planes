@@ -41,9 +41,12 @@ import java.util.Map;
  *       <em>landing</em> at, so an aircraft taxiing or rolling for take-off holds nothing and the
  *       strip it is using reads FREE. That is today's behaviour, and the board shows it rather than
  *       papering over it.</li>
- *   <li><b>No runway end in use.</b> Which of the two ends an arrival picked is private to the
- *       flight director; the board prints the designator pair the airfield has.</li>
  * </ul>
+ *
+ * <p>Each aircraft's row does carry the end it picked and a one-phrase account of how it intends to
+ * get there ({@code straight in}, {@code extended final 600}, {@code orbit to lose 120},
+ * {@code around left 30 deg}). Both come from the flight director's own state rather than being
+ * re-derived here, so the board cannot describe an arrival differently from the way it is flown.
  */
 public final class TowerBoard {
 
@@ -173,20 +176,33 @@ public final class TowerBoard {
         return lines;
     }
 
-    /** {@code #12 arrival, final, 0:14, 288 blocks out} — the same shape for every role. */
+    /**
+     * {@code #12 arrival 09, final, 0:14, 288 blocks out [straight in]} — the same shape for every
+     * role.
+     *
+     * <p>The trailing bracket is the flight director's own account of the arrival: which geometry it
+     * chose and why. It is the answer to "why is that aircraft circling", which is the question a
+     * board full of holding traffic exists to raise, and it comes from the aircraft rather than
+     * being re-derived here, so the board cannot disagree with it.
+     */
     private static Component trafficLine(PlaneEntity plane, @Nullable Airfield airfield, boolean withElapsed) {
         PlaneAutopilot autopilot = plane.getAutopilot();
+        String end = autopilot == null ? null : autopilot.landingDesignator();
         // Every reservation today belongs to an aircraft landing at that field; there is no
         // departure clearance, so nothing else can appear here.
         MutableComponent line = Component.literal("#" + plane.getId() + " ")
             .append(text("arrival", "arrival"))
-            .append(Component.literal(", " + (autopilot == null ? "?" : autopilot.getMode().getName())));
+            .append(Component.literal((end == null ? "" : " " + end)
+                + ", " + (autopilot == null ? "?" : autopilot.getMode().getName())));
         if (withElapsed) {
             line.append(Component.literal(", " + TowerWatch.elapsed(plane)));
         }
         Double distance = distanceTo(plane, airfield);
         if (distance != null) {
             line.append(Component.literal(", ")).append(text("blocks_out", "%s blocks out", Math.round(distance)));
+        }
+        if (autopilot != null) {
+            line.append(Component.literal(" [")).append(autopilot.planComponent()).append(Component.literal("]"));
         }
         return line;
     }

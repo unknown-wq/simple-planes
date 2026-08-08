@@ -287,8 +287,17 @@ public final class AutopilotConfig {
      * How far ahead of the aircraft a second ticket is placed, in ticks of travel. Loading the
      * ground it is about to fly over both keeps it ticking and gives the terrain scanner real
      * heightmaps to read instead of the "unknown, hold altitude" fallback.
+     *
+     * <p>40 rather than 20, because deciding to go <em>round</em> something needs more warning than
+     * deciding to climb over it. At {@link #CRUISE_SPEED} a 20-tick lead put the far edge of the
+     * loaded area about 116 blocks ahead — half of {@link #SCAN_DISTANCE}, so the profile was blind
+     * over its outer half — and 116 blocks is 45 ticks, against a turn radius of 60 blocks at that
+     * speed. The aircraft could see the ridge but not in time to fly beside it. 40 ticks puts the
+     * edge near 170 blocks and is still an overlap rather than a gap: each ticket makes chunks
+     * resident for {@link #CHUNK_TICKET_RADIUS} = 4 chunks, i.e. 64 blocks, so the two bubbles meet
+     * as long as the lead is under 128 blocks — 104 at cruise speed.
      */
-    public static final int CHUNK_TICKET_LEAD_TICKS = 20;
+    public static final int CHUNK_TICKET_LEAD_TICKS = 40;
 
     // ---- terrain safety ----
     /** Minimum clearance kept above the highest terrain ahead. */
@@ -303,6 +312,42 @@ public final class AutopilotConfig {
     /** Cruise altitude used when a flight plan does not specify one. */
     public static final double DEFAULT_CRUISE_ALTITUDE = 110.0;
 
+    // ---- lateral route planning (see RoutePlanner) ----
+    /**
+     * How many blocks of track one block of climb is worth, when deciding between climbing over
+     * terrain and going round it.
+     *
+     * <p>A block of height at {@link #MAX_CLIMB_ANGLE} costs {@code 1/tan(18 deg)} = 3.1 blocks of
+     * track, and every block bought to cross a ridge is given back on the far side at the same rate.
+     * Six is that round trip. Deliberately no larger: this exists to stop an arrival buying 90
+     * blocks of height to cross a summit a 60-block sidestep clears, not to make the aircraft
+     * detour around every hummock.
+     */
+    public static final double CLIMB_TRACK_COST = 6.0;
+    /** Ticks between route searches. The result is held between them, so this is the whole cost. */
+    public static final int ROUTE_PLAN_INTERVAL = 20;
+    /** Largest heading offset the search will consider, in degrees. */
+    public static final double ROUTE_PLAN_MAX_DEVIATION = 60.0;
+    /** Spacing of the candidate headings, in degrees. */
+    public static final double ROUTE_PLAN_DEVIATION_STEP = 10.0;
+    /** Terrain samples taken along each candidate heading. */
+    public static final int ROUTE_PLAN_SAMPLES = 8;
+    /**
+     * Loaded ground, in blocks, needed ahead before a deviation is planned at all. Below this the
+     * aircraft cannot see far enough for a sidestep to mean anything and the heightmap terrain
+     * following — which holds altitude over ground it cannot see — is the safer behaviour.
+     */
+    public static final double ROUTE_PLAN_MIN_HORIZON = 80.0;
+    /**
+     * How much cheaper a deviation must be before it is taken, in blocks of equivalent track, and
+     * the bonus a side already being flown keeps. Both are the same number because they are the same
+     * idea: do not leave the direct track, or swap sides halfway round an obstacle, for a margin
+     * that is inside the noise of an 8-sample profile.
+     */
+    public static final double ROUTE_PLAN_COMMIT_MARGIN = 25.0;
+    /** Ticks a chosen deviation is held for before the search may change its mind. */
+    public static final int ROUTE_PLAN_COMMIT_TICKS = 60;
+
     // ---- approach geometry ----
     /**
      * Steeper than a real 3-degree ILS on purpose. These three constants have to agree: the circuit
@@ -316,6 +361,66 @@ public final class AutopilotConfig {
     public static final double FINAL_INTERCEPT_DISTANCE = 300.0;
     /** Circuit height above the runway threshold. */
     public static final double PATTERN_HEIGHT = 45.0;
+    /**
+     * Longest final {@link ArrivalPlan} will extend to, and the step it extends in.
+     *
+     * <p>Extending the intercept is how an aircraft that arrives high gets down without circling: it
+     * joins the same glide slope further out, where the slope is higher and there is more track to
+     * lose the height over. The ceiling exists because the extension is flown on the runway heading,
+     * so a very long one is a long way flown in the wrong direction if the aircraft is coming from
+     * the other side; past that an orbit really is the cheaper answer. At 8 degrees, 900 blocks is
+     * 126 above the threshold, which is more than three times the circuit height.
+     */
+    public static final double MAX_INTERCEPT_DISTANCE = 900.0;
+    public static final double INTERCEPT_EXTENSION_STEP = 150.0;
+    /**
+     * Speed the approach is flown at until it is time to brake for the landing, in blocks/tick.
+     *
+     * <p>The approach used to be flown at {@link #APPROACH_SPEED} from the top of descent, and that
+     * is where the "landings take far too long" report comes from: measured on the rig, a routine
+     * arrival spent <b>65 seconds</b> between top of descent and the flare, covering some 650 blocks
+     * at 0.5 blocks/tick, most of it in a straight line with nothing to do. It is not a stability
+     * requirement — only the flare and the landing gates need the aircraft slow, and they only start
+     * at {@link #FINAL_HANDOVER_DISTANCE}.
+     *
+     * <p>1.20 rather than more: on the {@value #GLIDE_SLOPE_DEGREES}-degree slope the sink rate is
+     * {@code v * tan(8 deg)}, so {@link #MAX_SINK_RATE} caps the useful approach speed at 2.13, and
+     * the deceleration from there to {@link #FINAL_SPEED} needs more than the final leg has. 1.20
+     * sinks at 0.17, holds on throttle notch 1 (measured: commanded 1.20, flew 1.23), and brakes to
+     * final speed inside the handover distance with the margin the schedule already applies.
+     */
+    public static final double APPROACH_TRANSIT_SPEED = 1.20;
+    /**
+     * Distance before the threshold at which the approach hands over to {@code FINAL}: the gates
+     * start being enforced and the aircraft is slowed to {@link #FINAL_SPEED}.
+     */
+    public static final double FINAL_HANDOVER_DISTANCE = 150.0;
+    /**
+     * Distance before the threshold by which the approach must be back at {@link #APPROACH_SPEED},
+     * i.e. flying exactly the profile it flew before the transit speed existed.
+     *
+     * <p>Two measurements pin this down, one at each end.
+     *
+     * <p><b>Why it is not the handover distance.</b> The landing gates are armed the instant
+     * {@code FINAL} begins at {@link #FINAL_HANDOVER_DISTANCE}, and they ask for a settled aircraft:
+     * inside 10 degrees of the runway heading and 12 degrees of bank. An aircraft still braking
+     * there is still banking to hold the centreline and fails the gates on the first tick they are
+     * checked — measured with the deceleration aimed at the handover, four arrivals in a row went
+     * around with "banked 14 deg" or "heading 10 deg off the runway" and none landed.
+     *
+     * <p><b>Why the schedule aims at approach speed and not final speed.</b> Because slower is not
+     * safer here. Aiming the same schedule at {@link #FINAL_SPEED} put the aircraft below the old
+     * profile for the last 240 blocks, where the throttle sits on its floor with the airbrake on,
+     * and three arrivals in a row went around on "sinking 0.46 blocks/tick" against a 0.45 gate.
+     * {@code FINAL} still takes it to final speed over the last 150 blocks, as it always did.
+     */
+    public static final double APPROACH_SETTLED_DISTANCE = 240.0;
+    /**
+     * Heading change, in degrees, past which the approach is flown at {@link #APPROACH_SPEED} rather
+     * than {@link #APPROACH_TRANSIT_SPEED}. A turn of this size has to be flown at a radius the
+     * centreline can absorb; see {@code PlaneAutopilot#speedAtFix}.
+     */
+    public static final double APPROACH_TURN_SLOW_ANGLE = 30.0;
     /** How far down the runway the aircraft aims. */
     public static final double TOUCHDOWN_AIM_OFFSET = 12.0;
     public static final double FLARE_HEIGHT = 4.0;
@@ -334,6 +439,24 @@ public final class AutopilotConfig {
     /** Degrees the hold target advances around the fix each tick (a slow racetrack orbit). */
     public static final double HOLD_TURN_RATE = 1.1;
     public static final int MAX_GO_AROUNDS = 3;
+    /**
+     * Vertical spacing between aircraft orbiting the same fix, in blocks, and how many levels the
+     * stack has before it wraps.
+     *
+     * <p>Planes are hard-colliding entities — {@code PlaneEntity#canBeCollidedWith} is
+     * unconditionally true — so two of them orbiting one fix at one altitude eventually block each
+     * other's {@code move()}, which {@code PlaneCollisions} reads as an impact. Seen in the field:
+     * two aircraft destroyed three blocks apart, at the same altitude, in the same tick window, both
+     * in {@code HOLD}. Deriving the level and the starting angle from the entity id costs nothing
+     * and separates them without needing a sequencer.
+     *
+     * <p>Small on purpose. The stack is bought with height the aircraft has to give back before it
+     * can land, which is the very cost this whole change exists to remove: at 20 blocks a level the
+     * fourth aircraft held 60 blocks above the fix and then could not get down again. 10 blocks is
+     * five times a plane's own height and is separation, not a flight level.
+     */
+    public static final double HOLD_LEVEL_SPACING = 10.0;
+    public static final int HOLD_LEVELS = 4;
 
     // ---- how much runway is actually needed ----
     /*
@@ -371,6 +494,14 @@ public final class AutopilotConfig {
     public static final int SURVEY_MAX_WIDTH = 24;
     public static final int SURVEY_APPROACH_LENGTH = 200;
     public static final int SURVEY_APPROACH_STEP = 10;
+    /**
+     * What one flagged column in an approach funnel is worth, in blocks of track, when an arrival
+     * chooses which end to land on. Large on purpose: a column poking through the glide slope is a
+     * go-around or a hillside, and no amount of saved detour is worth flying at one.
+     */
+    public static final double APPROACH_OBSTACLE_COST = 400.0;
+    /** Tie-break bonus for landing uphill, in blocks of track. Decides a level choice, buys nothing. */
+    public static final double UPHILL_END_BONUS = 40.0;
     /** Extra clearance an obstacle must leave under the approach path to not be flagged. */
     public static final double SURVEY_OBSTACLE_MARGIN = 3.0;
 

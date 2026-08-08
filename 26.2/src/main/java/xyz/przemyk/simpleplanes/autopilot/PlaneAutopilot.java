@@ -1,5 +1,6 @@
 package xyz.przemyk.simpleplanes.autopilot;
 
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.util.Mth;
@@ -57,6 +58,10 @@ public class PlaneAutopilot {
     public static final double STRIKE_HIT_RADIUS = 8.0;
 
     private final TerrainScanner scanner = new TerrainScanner();
+    /** Decides between climbing over the terrain ahead and going round it. See {@link RoutePlanner}. */
+    private final RoutePlanner router = new RoutePlanner();
+    /** How the arrival is being flown and why; null until the aircraft starts down. */
+    private @Nullable ArrivalPlan arrival;
     private @Nullable Airfield landingAirfield;
     private @Nullable RunwayEnd landingEnd;
     /** Runway this sortie departs from, resolved once at launch; null for an airborne launch. */
@@ -196,6 +201,11 @@ public class PlaneAutopilot {
         this.owner = owner;
     }
 
+    /** Designator of the runway end this arrival has settled on, or null before it has chosen one. */
+    public @Nullable String landingDesignator() {
+        return landingEnd == null ? null : landingEnd.designator();
+    }
+
     /** True while this aircraft is entitled to keep a runway reservation. */
     public boolean holdsRunway(String airfieldName) {
         return active && landingAirfield != null && landingAirfield.name().equals(airfieldName) && mode.usesRunway();
@@ -315,19 +325,46 @@ public class PlaneAutopilot {
     }
 
     /**
-     * Raises the commanded altitude to clear the terrain profile ahead and, if the ridge cannot be
-     * out-climbed in the distance available, nudges the heading towards the lower side. This is the
-     * whole obstacle-avoidance story: no search, no pathfinding, just "climb over it, and if you
-     * cannot, go around the low end".
+     * Keeps the aircraft clear of the terrain ahead, by climbing over it or by going round it —
+     * whichever is cheaper.
+     *
+     * <p>The climb half is unchanged: the commanded altitude is raised to the heightmap profile plus
+     * {@link AutopilotConfig#TERRAIN_CLEARANCE}. What is new is that going round is now a decision
+     * rather than a reflex. {@link RoutePlanner} scores a handful of candidate headings against
+     * flying straight on and returns an offset only when the deviation genuinely costs less than the
+     * climb; over open ground it returns zero and this is exactly the old behaviour.
+     *
+     * <p>The planner only runs when there is something to run for — terrain above the altitude this
+     * leg would otherwise be flown at, or a deviation already in progress — so flat terrain costs
+     * nothing at all. {@code TerrainScanner#avoidanceBias} remains as the fallback for the case the
+     * planner declines to answer, which is ground it cannot see; it never over-rides a planned
+     * deviation.
      */
     private void applyTerrainFollowing(PlaneEntity plane) {
         if (!cmdTerrainFollow) {
+            router.reset();
             return;
         }
+        double legAltitude = cmdTargetAltitude;
         double safeAltitude = scanner.safeAltitude();
         if (safeAltitude != TerrainScanner.UNKNOWN_HEIGHT && safeAltitude > cmdTargetAltitude) {
             cmdTargetAltitude = safeAltitude;
         }
+
+        // Run the search when there is terrain to answer for — and also whenever a deviation is
+        // already being flown, because that is the only thing that ever clears one. The scanner
+        // profile follows the aircraft's actual heading, so once it is round the obstacle the ground
+        // ahead looks clear, and "only plan when the ground ahead is high" would leave the offset
+        // latched on for the rest of the leg.
+        boolean terrainAhead = safeAltitude != TerrainScanner.UNKNOWN_HEIGHT && safeAltitude > legAltitude;
+        if (terrainAhead || router.deviating()) {
+            router.update(plane.level(), plane.position(), legAltitude, cmdHeading, ticks);
+        }
+        if (router.deviating()) {
+            cmdHeading += router.headingOffset();
+            return;
+        }
+
         int bias = scanner.avoidanceBias(plane.position().y);
         if (bias != 0) {
             cmdHeading += bias * AutopilotConfig.AVOID_HEADING_BIAS;
@@ -647,23 +684,56 @@ public class PlaneAutopilot {
         setMode(plane, AutopilotMode.DESCENT);
     }
 
+    /**
+     * The run down to the point where the final approach is joined.
+     *
+     * <p>Two things here used to be constants and are now decisions, and both were costing whole
+     * minutes on the clock the user actually watches — the one from arriving overhead to the wheels
+     * stopping.
+     *
+     * <p><b>Where the final is joined.</b> Not a fixed 300 blocks at circuit height any more; see
+     * {@link ArrivalPlan}. An aircraft that arrives high joins the same glide slope further out
+     * instead of pressing on, crossing the threshold airborne and going around, which on the rig
+     * turned a 66-second arrival into a 150-second one.
+     *
+     * <p><b>The speed.</b> This leg used to be flown at {@link AutopilotConfig#APPROACH_SPEED} from
+     * the first tick, which is 0.5 blocks/tick for however many hundred blocks the fix happens to
+     * be away — measured at 31 seconds of straight-line flying on an ordinary arrival, and it is
+     * worse than merely slow: the flight path angle is capped, so the sink rate available is
+     * {@code v * tan(12 deg)}, and flying slowly is what makes an aircraft unable to get down. It is
+     * now the same deceleration schedule the cruise uses, aimed at
+     * {@link AutopilotConfig#APPROACH_TRANSIT_SPEED} at the fix, so the aircraft arrives braked
+     * rather than spending the whole leg braked.
+     */
     private void tickDescent(PlaneEntity plane) {
         if (!resolveLanding(plane)) {
             stop(plane);
             return;
         }
-        Vec3 initialFix = landingEnd.approachPoint(
-            AutopilotConfig.FINAL_INTERCEPT_DISTANCE, AutopilotConfig.PATTERN_HEIGHT);
+        boolean free = RunwayOccupancy.isFree(plane.level(), landingAirfield.name(), plane);
+        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, plane.position(), free);
+        announceArrival(plane, planned);
+
+        Vec3 initialFix = planned.interceptFix();
         cmdHeading = AutopilotMath.headingTo(plane.position(), initialFix);
         cmdTargetAltitude = initialFix.y;
-        cmdSpeed = AutopilotConfig.APPROACH_SPEED;
+        double toFix = AutopilotMath.horizontalDistance(plane.position(), initialFix);
+        cmdSpeed = AutopilotMath.speedSchedule(cruiseSpeed(),
+            speedAtFix(cmdHeading, landingEnd.landingHeading()),
+            toFix / AutopilotConfig.DECELERATION_MARGIN);
         // Idle is allowed from here to the ground: throttle 0 puts brakesMul = 5 on the drag
         // polynomial, and that airbrake is the only way to slow down on an 8-degree slope. It is
         // safe now that the throttle loop regulates horizontal speed rather than total speed, so a
         // sink rate can no longer masquerade as airspeed and latch the lever shut.
         cmdMinThrottle = 0;
 
-        if (AutopilotMath.horizontalDistance(plane.position(), initialFix) < 50) {
+        if (planned.entry().circling()) {
+            holdFix = initialFix;
+            setMode(plane, AutopilotMode.HOLD);
+            return;
+        }
+
+        if (toFix < arrivalRadius(plane) + 20) {
             if (RunwayOccupancy.tryOccupy(plane.level(), landingAirfield.name(), plane)) {
                 setMode(plane, AutopilotMode.APPROACH);
             } else {
@@ -672,6 +742,48 @@ public class PlaneAutopilot {
                 setMode(plane, AutopilotMode.HOLD);
             }
         }
+    }
+
+    /**
+     * Records the arrival plan and says so once, when it changes. Reported rather than whispered:
+     * "why is it circling" is precisely the question a headless log has to be able to answer, and
+     * the reason phrase is the answer.
+     */
+    private void announceArrival(PlaneEntity plane, ArrivalPlan planned) {
+        boolean changed = arrival == null || arrival.entry() != planned.entry()
+            || Math.abs(arrival.interceptDistance() - planned.interceptDistance()) > 1.0;
+        arrival = planned;
+        if (changed) {
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " arrival at "
+                + landingAirfield.name() + "/" + planned.end().designator() + ": " + planned.reason() + ".");
+        }
+    }
+
+    /** The cruise speed this flight was ordered to fly, or the default for a plan-less aircraft. */
+    private double cruiseSpeed() {
+        return plan == null ? AutopilotConfig.CRUISE_SPEED : plan.cruiseSpeed();
+    }
+
+    /**
+     * How fast the aircraft may arrive at the point where it joins the final, given the turn it has
+     * to make there.
+     *
+     * <p>The turn radius is {@code v / yawRate}, so a 180-degree join — which is what an arrival
+     * from the far side of the field always is — displaces the aircraft {@code 2v / yawRate}
+     * sideways before it rolls out. Measured on the rig when the approach transit speed was applied
+     * regardless: the aircraft reached the fix at 1.91 blocks/tick, swung 87 blocks off the
+     * centreline coming round, was still 12 blocks off and 15 degrees skewed at the gate, and went
+     * around — which cost far more than the speed saved. At approach speed the same turn displaces
+     * 11 blocks and rolls out on the line.
+     *
+     * <p>An aircraft that is already pointing more or less down the runway has no such turn to fly,
+     * which is the common case and the one the transit speed exists for.
+     */
+    private static double speedAtFix(double headingToFix, double runwayHeading) {
+        double turn = Math.abs(AutopilotMath.angleDelta(headingToFix, runwayHeading));
+        return turn > AutopilotConfig.APPROACH_TURN_SLOW_ANGLE
+            ? AutopilotConfig.APPROACH_SPEED
+            : AutopilotConfig.APPROACH_TRANSIT_SPEED;
     }
 
     /**
@@ -684,7 +796,7 @@ public class PlaneAutopilot {
             return;
         }
         if (!RunwayOccupancy.tryOccupy(plane.level(), landingAirfield.name(), plane)) {
-            holdFix = landingEnd.approachPoint(AutopilotConfig.FINAL_INTERCEPT_DISTANCE, AutopilotConfig.PATTERN_HEIGHT);
+            holdFix = interceptFix();
             setMode(plane, AutopilotMode.HOLD);
             return;
         }
@@ -698,9 +810,25 @@ public class PlaneAutopilot {
         // Intercept the centreline: bigger offset means a bigger cut, capped so it never turns away.
         double interceptCut = Mth.clamp(-lateral * 1.2, -40.0, 40.0);
         cmdHeading = runwayHeading + interceptCut;
-        cmdTargetAltitude = Math.min(landingEnd.glideSlopeAltitude(distanceToThreshold),
-            threshold.y + AutopilotConfig.PATTERN_HEIGHT);
-        cmdSpeed = isFinal ? AutopilotConfig.FINAL_SPEED : AutopilotConfig.APPROACH_SPEED;
+        // Levelled off at the height the plan joins the slope at, then down the slope. The cap used
+        // to be the fixed circuit height, which is the same thing whenever the plan is a standard
+        // 300-block final and is what stopped an extended one from working: an aircraft joining 700
+        // blocks out was ordered down to circuit height immediately and then had to fly the rest of
+        // the final level, arriving at the threshold exactly as high as before.
+        cmdTargetAltitude = landingEnd.glideSlopeAltitude(
+            Math.min(distanceToThreshold, interceptDistance()));
+        // Slow enough to land, and no sooner than that. The approach was flown at APPROACH_SPEED end
+        // to end, which is 0.5 blocks/tick for as much as 700 blocks of straight line; the schedule
+        // is the same measured drag model the cruise brakes with, aimed at approach speed by
+        // APPROACH_SETTLED_DISTANCE so the aircraft has stopped manoeuvring before the gates arm.
+        //
+        // The transit speed is for tracking the centreline, not for capturing it: while there is
+        // still a real cut on, the turn radius is what decides whether the aircraft rolls out on the
+        // line or overshoots it into a go-around. Same rule as the join, for the same reason.
+        cmdSpeed = isFinal ? AutopilotConfig.FINAL_SPEED
+            : AutopilotMath.speedSchedule(speedAtFix(cmdHeading, runwayHeading), AutopilotConfig.APPROACH_SPEED,
+                (distanceToThreshold - AutopilotConfig.APPROACH_SETTLED_DISTANCE)
+                    / AutopilotConfig.DECELERATION_MARGIN);
         cmdBankLimit = isFinal ? 8 : 18;
         cmdTerrainFollow = false;
         cmdMaxDescentAngle = AutopilotConfig.GLIDE_SLOPE_DEGREES * 2.0;
@@ -728,7 +856,7 @@ public class PlaneAutopilot {
         }
 
         if (!isFinal) {
-            if (distanceToThreshold < 150) {
+            if (distanceToThreshold < AutopilotConfig.FINAL_HANDOVER_DISTANCE) {
                 setMode(plane, AutopilotMode.FINAL);
             }
             return;
@@ -831,17 +959,44 @@ public class PlaneAutopilot {
         }
     }
 
+    /**
+     * Orbit the fix, either because someone else has the runway or because the aircraft is still too
+     * high for any final. Leaves the moment that reason stops being true — an orbit is a way of
+     * spending height or time, never a stage of the arrival.
+     *
+     * <p>Aircraft are separated in the stack by entity id: the level and the starting angle both
+     * come from it. Planes are hard-colliding entities, so several of them orbiting one fix at one
+     * altitude eventually block each other's {@code move()}, which {@code PlaneCollisions} correctly
+     * reads as an impact — seen in the field as two aircraft destroyed three blocks apart, at the
+     * same altitude, in the same tick, both in this mode. This is separation, not sequencing: there
+     * is still no queue, and whichever aircraft next polls a free runway takes it.
+     */
     private void tickHold(PlaneEntity plane) {
         Vec3 fix = holdFix != null ? holdFix : plane.position();
+        if (modeTicks <= 1) {
+            // Start each aircraft at its own point on the circle as well as at its own level, so two
+            // that happen to share a level are on opposite sides of it rather than in formation.
+            holdAngle = plane.getId() * 137.0;
+        }
         holdAngle += AutopilotConfig.HOLD_TURN_RATE;
         Vec3 orbitPoint = AutopilotMath.pointAlong(fix, holdAngle, AutopilotConfig.HOLD_RADIUS);
         cmdHeading = AutopilotMath.headingTo(plane.position(), orbitPoint);
-        cmdTargetAltitude = fix.y;
+        int level = Math.floorMod(plane.getId(), AutopilotConfig.HOLD_LEVELS);
+        cmdTargetAltitude = fix.y + level * AutopilotConfig.HOLD_LEVEL_SPACING;
         cmdSpeed = AutopilotConfig.APPROACH_SPEED;
         cmdBankLimit = AutopilotConfig.MAX_BANK;
 
-        if (ticks % 20 == 0 && landingAirfield != null
-            && RunwayOccupancy.isFree(plane.level(), landingAirfield.name(), plane)) {
+        if (ticks % 20 != 0 || landingAirfield == null || landingEnd == null) {
+            return;
+        }
+        if (!RunwayOccupancy.isFree(plane.level(), landingAirfield.name(), plane)) {
+            return;
+        }
+        // Free runway. Rejoin as soon as some final — extended if need be — can absorb whatever
+        // height is left, which for an aircraft that only ever held for traffic is immediately.
+        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, plane.position(), true);
+        if (!planned.entry().circling()) {
+            announceArrival(plane, planned);
             setMode(plane, AutopilotMode.DESCENT);
         }
     }
@@ -864,6 +1019,8 @@ public class PlaneAutopilot {
 
     private void goAround(PlaneEntity plane, String reason) {
         goArounds++;
+        // The plan that produced this approach did not work, so it is not carried into the next one.
+        arrival = null;
         // report(), not overlay(): a headless sortie has no owning player, and a landing that never
         // happens is exactly the thing that needs to say why.
         AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " going around ("
@@ -1129,6 +1286,31 @@ public class PlaneAutopilot {
         }
     }
 
+    /** Where this arrival joins the glide slope, falling back to the standard final geometry. */
+    private double interceptDistance() {
+        return arrival == null ? AutopilotConfig.FINAL_INTERCEPT_DISTANCE : arrival.interceptDistance();
+    }
+
+    private Vec3 interceptFix() {
+        return arrival != null ? arrival.interceptFix()
+            : landingEnd.approachPoint(AutopilotConfig.FINAL_INTERCEPT_DISTANCE, AutopilotConfig.PATTERN_HEIGHT);
+    }
+
+    /**
+     * The one-phrase account of what this aircraft has decided and why, for {@code /autopilot status}
+     * and the tower board. A path planner whose reasoning is invisible is one nobody can debug.
+     */
+    public Component planComponent() {
+        boolean enRoute = mode == AutopilotMode.CRUISE || mode == AutopilotMode.CLIMB
+            || mode == AutopilotMode.STRIKE;
+        return !enRoute && arrival != null ? arrival.describe() : router.describe();
+    }
+
+    /** {@link #planComponent()} as plain text, for {@code /autopilot status}. */
+    public String planPhrase() {
+        return planComponent().getString();
+    }
+
     private double groundBelow(PlaneEntity plane) {
         Vec3 position = plane.position();
         int surface = TerrainScanner.surfaceHeight(plane.level(), position.x, position.z);
@@ -1170,7 +1352,10 @@ public class PlaneAutopilot {
             AutopilotFeedback.overlay(owner, "Plane #" + plane.getId() + ": no airfield, improvising a landing");
         }
         landingAirfield = airfield;
-        landingEnd = airfield.bestEnd(level);
+        // The aircraft's own position is part of the choice now: two ends with equally clean funnels
+        // are not equal when one of them is behind the aircraft. Obstacles still dominate — see
+        // Airfield#bestEnd — so this cannot trade a clear approach for a shorter one.
+        landingEnd = airfield.bestEnd(level, plane.position());
         plan.setAirfieldName(airfield.name());
         return true;
     }
@@ -1223,6 +1408,9 @@ public class PlaneAutopilot {
         if (plan != null && plan.kind() == FlightPlan.Kind.ROUTE) {
             builder.append(" legs=").append(plan.legsFlown()).append('/').append(plan.maxLegs());
         }
+        // Last, and always present: what the path planner decided and why. Without it a status line
+        // shows an aircraft turning or circling with no way to tell a plan from a malfunction.
+        builder.append(" plan[").append(planPhrase()).append(']');
         return builder.toString();
     }
 
