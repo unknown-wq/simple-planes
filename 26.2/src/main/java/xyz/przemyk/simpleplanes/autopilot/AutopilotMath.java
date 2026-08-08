@@ -45,6 +45,11 @@ public final class AutopilotMath {
         return compass < 0 ? compass + 360.0 : compass;
     }
 
+    /** Inverse of {@link #compassHeading}: Minecraft yaw for an aviation compass heading. */
+    public static double yawFromCompass(double compassHeading) {
+        return compassHeading - 180.0;
+    }
+
     /**
      * Whole-degree compass heading for a readout. Rounding {@link #compassHeading} on its own prints
      * north as 360, which is not a heading anyone writes.

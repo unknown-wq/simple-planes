@@ -73,13 +73,42 @@ public class AutopilotComponents {
     /**
      * Blast strength configured on the strike tool.
      *
-     * <p>Only the strength: the tool always breaks blocks and never sets fire, which is what it has
-     * always done. Those two are command-only, because cycling three independent settings through
-     * one gesture would be worse than not having them on the item at all.
+     * <p>Three separate components rather than one {@link Blast} component, because a tool that a
+     * player is already carrying has a bare float stored under this key: adding fields beside it
+     * keeps those tools working, where changing its type would silently reset them to the default.
+     * Each is absent until set, and absence means the historic default.
      */
     public static final DataComponentType<Float> STRIKE_BLAST = register("autopilot_strike_blast",
         DataComponentType.<Float>builder()
             .persistent(Codec.FLOAT)
             .networkSynchronized(ByteBufCodecs.FLOAT)
+            .build());
+
+    /** Whether the tool's blast breaks blocks. Absent means it does, as it always has. */
+    public static final DataComponentType<Boolean> STRIKE_BLOCKS = register("autopilot_strike_blocks",
+        DataComponentType.<Boolean>builder()
+            .persistent(Codec.BOOL)
+            .networkSynchronized(ByteBufCodecs.BOOL)
+            .build());
+
+    /** Whether the tool's blast starts fires. Absent means it does not, as it always has. */
+    public static final DataComponentType<Boolean> STRIKE_FIRE = register("autopilot_strike_fire",
+        DataComponentType.<Boolean>builder()
+            .persistent(Codec.BOOL)
+            .networkSynchronized(ByteBufCodecs.BOOL)
+            .build());
+
+    /**
+     * Fixed run-in bearing, in compass degrees, for the strike tool.
+     *
+     * <p>Absent — the normal state — means the run-in is worked out from where the player is
+     * standing, so the aircraft passes them on its way to the target. Setting it pins the direction
+     * the aircraft arrives from regardless of where the order is given, which is what makes a
+     * repeatable test out of a strike.
+     */
+    public static final DataComponentType<Integer> STRIKE_BEARING = register("autopilot_strike_bearing",
+        DataComponentType.<Integer>builder()
+            .persistent(Codec.INT)
+            .networkSynchronized(ByteBufCodecs.VAR_INT)
             .build());
 }
