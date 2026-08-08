@@ -140,6 +140,17 @@ public final class AirfieldBrowser {
         output.component(AutopilotText.tr("detail.preferred", "  preferred landing direction %s",
             airfield.bestEnd(level).designator()));
 
+        // Where an arrival will actually put its wheels, and how much of the strip that leaves. The
+        // aim point is derived from the length rather than fixed, so a player who has just built a
+        // long runway has no other way to find out where the aircraft is going to touch down, and
+        // "it lands on the very edge" was a real complaint about the version that always did.
+        double aim = endA.aimOffset();
+        output.component(AutopilotText.tr("detail.touchdown",
+            "  touchdown aim %s blocks in, stopping by about %s of %s",
+            String.format("%.0f", aim),
+            String.format("%.0f", aim + AutopilotConfig.LANDING_STOP_RESERVE),
+            String.format("%.0f", airfield.length())));
+
         // What actually decides whether a sortie may be launched into this field.
         if (isUsable(airfield)) {
             output.component(AutopilotText.tr("detail.usable",
@@ -244,10 +255,12 @@ public final class AirfieldBrowser {
      *
      * <p>Take-off is not the constraint and the arithmetic says so: the ground roll to
      * {@link AutopilotConfig#ROTATE_SPEED} is 3.8 blocks at throttle 5 and 1.9 at the booster's
-     * throttle 10, and the roll-out from touchdown speed is 2.1. The landing is the constraint, and
-     * within the landing it is not the braking but the aiming — the aircraft flies at a point
-     * {@link AutopilotConfig#TOUCHDOWN_AIM_OFFSET} blocks down the strip and may float past it in
-     * the flare. See {@link AutopilotConfig#MIN_USABLE_RUNWAY_LENGTH}.
+     * throttle 10, and the roll-out from touchdown speed is 1.2 measured on the rig. The landing is
+     * the constraint, and within the landing it is not the braking but the aiming — the aircraft
+     * flies at a point {@link RunwayEnd#aimOffset()} blocks down the strip, which on the shortest
+     * usable strip is {@link AutopilotConfig#TOUCHDOWN_AIM_MIN}, and needs
+     * {@link AutopilotConfig#LANDING_STOP_RESERVE} behind it. See
+     * {@link AutopilotConfig#MIN_USABLE_RUNWAY_LENGTH}.
      */
     public static boolean isUsable(Airfield airfield) {
         return airfield.length() >= AutopilotConfig.MIN_USABLE_RUNWAY_LENGTH;

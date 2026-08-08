@@ -376,6 +376,16 @@ public final class AutopilotConfig {
      * initial approach fix far above the glide slope and has to dive at it. At 8 degrees and 300
      * blocks the slope sits at 42, just under the 45-block circuit height, so the descent is
      * continuous and the aircraft captures the slope from slightly above.
+     *
+     * <p>The slope now ends {@link RunwayEnd#aimOffset()} blocks <em>past</em> the threshold, so at
+     * the fix it is {@code tan(8) * (300 + aimOffset)} — 47.8 on a runway long enough to earn the
+     * full {@link #TOUCHDOWN_AIM_MAX}, which is above the circuit height rather than below it. That
+     * reverses the capture: {@code tickApproach} takes the {@code min} of the slope and the circuit
+     * height, so the aircraft holds 45 for the first 36 blocks of the approach and the slope comes
+     * down to meet it. Level flight for 36 blocks at approach speed is 72 ticks and measures as
+     * nothing — every arrival in the table in AUTOPILOT.md flew it — but it is the reason the
+     * numbers in the paragraph above no longer add up exactly, and the reason not to "fix" that by
+     * raising {@link #PATTERN_HEIGHT}, which is also the holding altitude.
      */
     public static final double GLIDE_SLOPE_DEGREES = 8.0;
     /** Distance before the threshold at which the aircraft joins the final approach course. */
@@ -442,10 +452,82 @@ public final class AutopilotConfig {
      * centreline can absorb; see {@code PlaneAutopilot#speedAtFix}.
      */
     public static final double APPROACH_TURN_SLOW_ANGLE = 30.0;
-    /** How far down the runway the aircraft aims. */
-    public static final double TOUCHDOWN_AIM_OFFSET = 12.0;
     public static final double FLARE_HEIGHT = 4.0;
     public static final double FLARE_PITCH = 4.0;
+
+    /*
+     * ---- where on the runway the aircraft is aiming ----
+     *
+     * There used to be a single TOUCHDOWN_AIM_OFFSET of 12 blocks here, and it did not do what its
+     * name said. Only the corridor raycast ever read it; RunwayEnd#glideSlopeAltitude put the
+     * bottom of the glide slope on the threshold itself, and the flare fired on height above the
+     * threshold. So the aircraft was aimed at the threshold, floated 17 blocks past it in the flare
+     * and stopped there. Measured on the rig before this change, on a 183x25 field at four
+     * commanded speeds, threshold crossing height / touchdown / stop, in blocks down the runway:
+     *
+     *   0.40  +0.89   3.4   4.6      2.60  +0.28   1.4   2.6
+     *   1.20  +0.92   4.0   5.2      2.80  +0.36   1.5   2.8
+     *
+     * Three per cent of a 183-block runway, and the aircraft crossed its threshold less than a
+     * block up. That is the wrong side to keep the margin on: overshooting a 183-block strip costs
+     * nothing, undershooting it puts the aircraft in whatever lies before the threshold.
+     *
+     * The offset is now a real aim point that the glide slope, the flare and the go-around gate all
+     * reference, and it scales with the runway, because the trade it settles is between undershoot
+     * margin (aim further in) and overrun margin (aim shorter) and only a long runway has both to
+     * spend. A fifth of the strip, floored and capped, and never so far in that the roll-out would
+     * run off the far end.
+     */
+    /**
+     * Fraction of the runway the aircraft aims down, before the floor, cap and stopping reserve
+     * below are applied. A fifth: the far four fifths are the overrun margin, which is the direction
+     * that costs nothing, and the near fifth is the undershoot margin, which is the direction that
+     * destroys aircraft.
+     */
+    public static final double TOUCHDOWN_AIM_FRACTION = 0.20;
+    /**
+     * Shortest aim offset used on any runway. About a plane length: even on a strip with nothing to
+     * spare there is no reason to aim at the very first block, because the block before it is not
+     * runway at all.
+     */
+    public static final double TOUCHDOWN_AIM_MIN = 6.0;
+    /**
+     * Longest aim offset used on any runway, so a 500-block strip does not aim 100 blocks in.
+     *
+     * <p>Aiming further costs almost nothing measurable — the aircraft simply crosses the threshold
+     * {@code tan(GLIDE_SLOPE_DEGREES) * offset} higher, 5.6 blocks of commanded slope at this value
+     * and 7.6 measured, the difference being the altitude cascade's steady-state lag — but it stops
+     * buying anything once the undershoot margin is comfortably larger than the terrain error the
+     * approach can have, and the corridor raycast is aimed at this point, so putting it far down the
+     * strip makes it a weaker test of the ground short of the threshold.
+     */
+    public static final double TOUCHDOWN_AIM_MAX = 40.0;
+    /**
+     * Runway kept in hand beyond the aim point, in blocks. Everything that happens after the
+     * aircraft passes its aim point has to fit in here.
+     *
+     * <p>Measured, not guessed. Across thirteen arrivals on seven runway lengths (18 to 300 blocks)
+     * at commanded 0.40, 1.20, 2.60 and 2.80, the touchdown fell 0.8 to 5.2 blocks past the aim
+     * point and the roll-out from touchdown speed to a stop was 1.1-1.3 blocks <em>every single
+     * time</em> — the brakes are not the variable, the float is. Worst case measured from the aim
+     * point to the wheels stopping: 6.4 blocks. Twelve is that with the factor of two
+     * {@link #LANDING_LENGTH_NEEDED} used to carry, which covers an aircraft that arrives fast
+     * because it committed rather than went around.
+     */
+    public static final double LANDING_STOP_RESERVE = 12.0;
+
+    /**
+     * How far down a runway of this length the aircraft aims its touchdown.
+     *
+     * <p>The last clamp is what makes the rule safe on a short strip: a fifth of 183 blocks is 37,
+     * but a fifth of a 40-block strip is 8, and no length may ever produce an aim point with less
+     * than {@link #LANDING_STOP_RESERVE} of runway behind it.
+     */
+    public static double touchdownAimOffset(double runwayLength) {
+        double wanted = Math.min(Math.max(TOUCHDOWN_AIM_FRACTION * runwayLength, TOUCHDOWN_AIM_MIN),
+            TOUCHDOWN_AIM_MAX);
+        return Math.max(0.0, Math.min(wanted, runwayLength - LANDING_STOP_RESERVE));
+    }
 
     // ---- what counts as having landed ----
     /*
@@ -519,15 +601,30 @@ public final class AutopilotConfig {
     /** Runway consumed by a departure: the parked position plus the roll to rotation, with margin. */
     public static final double TAKEOFF_LENGTH_NEEDED = PARKING_ON_RUNWAY_OFFSET + 4.0 * 2.0;
     /**
-     * Runway consumed by an arrival: the aircraft aims {@link #TOUCHDOWN_AIM_OFFSET} blocks in,
-     * may float past it in the flare, and then needs its roll-out. Doubled, because a go-around
-     * that is committed rather than flown again lands long.
+     * Runway consumed by an arrival on the shortest strip the aim rule is willing to use: the
+     * aircraft aims {@link #TOUCHDOWN_AIM_MIN} blocks in and needs {@link #LANDING_STOP_RESERVE}
+     * behind that to float, touch and stop.
+     *
+     * <p>This used to be {@code (TOUCHDOWN_AIM_OFFSET + 3) * 2} = 30, and the doubling was covering
+     * for the fact that the aim offset in it was not the distance the aircraft actually flew to:
+     * the aircraft aimed at the threshold and stopped 3 blocks in, so 30 blocks of runway was being
+     * demanded to do something that fitted in 5. The reserve is now measured (see
+     * {@link #LANDING_STOP_RESERVE}) and already carries its own factor of two, so the doubling is
+     * gone with the fiction that needed it.
      */
-    public static final double LANDING_LENGTH_NEEDED = (TOUCHDOWN_AIM_OFFSET + 3.0) * 2.0;
+    public static final double LANDING_LENGTH_NEEDED = TOUCHDOWN_AIM_MIN + LANDING_STOP_RESERVE;
     /**
      * Shortest runway the autopilot will call usable. Reported by the airfield browser and checked
      * before a sortie is launched, so a field that cannot be flown out of is refused at the command
      * rather than discovered by an aircraft in the air.
+     *
+     * <p><b>This dropped from 30 to 18</b> when the aim point became real, and that is a behaviour
+     * change on airfields that are already stored: a surveyed 24-block strip that the browser used
+     * to mark {@code TOO SHORT} and refuse sorties into is now usable. Nothing persisted is
+     * reinterpreted — an {@link Airfield} stores its two thresholds and derives the length from
+     * them, so no saved number changes meaning — but a world can gain flyable airfields across this
+     * update without anything being re-surveyed. Verified on the rig at 18, 20 and 24 blocks; see
+     * AUTOPILOT.md, "How much runway an aircraft actually needs".
      */
     public static final double MIN_USABLE_RUNWAY_LENGTH =
         Math.max(TAKEOFF_LENGTH_NEEDED, LANDING_LENGTH_NEEDED);
