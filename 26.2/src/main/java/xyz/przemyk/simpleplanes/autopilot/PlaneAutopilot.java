@@ -374,18 +374,29 @@ public class PlaneAutopilot {
         double ground = groundBelow(plane);
         String runway = "";
         if (landingEnd != null) {
-            double heading = landingEnd.landingHeading();
+            double runwayHeading = landingEnd.landingHeading();
             runway = String.format(" thr_y=%.1f dthr=%.1f lat=%.1f", landingEnd.threshold().y,
-                -AutopilotMath.alongTrack(landingEnd.threshold(), heading, position),
-                AutopilotMath.lateralOffset(landingEnd.threshold(), heading, position));
+                -AutopilotMath.alongTrack(landingEnd.threshold(), runwayHeading, position),
+                AutopilotMath.lateralOffset(landingEnd.threshold(), runwayHeading, position));
         }
+        // hdg/cmdhdg/roll are here because every lateral defect this feature has had is invisible
+        // without them. A heading used to be recoverable only by differencing two pos= samples, and
+        // that gives the track rather than where the nose points — while the landing gates are
+        // written about the nose. It also cannot separate "not tracking the command" from "tracking
+        // a command that is wrong", which is exactly the distinction the cargo approach turned on:
+        // the aircraft was holding its commanded heading to the degree, and the command was 40
+        // degrees off the runway.
+        double heading = Mth.wrapDegrees(plane.getYRot());
         LOGGER.info(String.format(
             "trace #%d t=%d %s pos=%.1f,%.2f,%.1f agl=%.2f gnd=%.1f landable=%b vs=%+.3f spd=%.3f"
-                + " thr=%d og=%b water=%b cmdalt=%.1f%s",
+                + " thr=%d og=%b water=%b hdg=%.1f cmdhdg=%.1f roll=%+.1f cmdalt=%.1f%s",
             plane.getId(), ticks, mode.getName(), position.x, position.y, position.z,
             position.y - ground, ground, landableBelow(plane),
             plane.getDeltaMovement().y, plane.getDeltaMovement().horizontalDistance(),
-            plane.getThrottle(), plane.getOnGround(), plane.isOnWater(), cmdTargetAltitude, runway));
+            plane.getThrottle(), plane.getOnGround(), plane.isOnWater(),
+            heading < 0 ? heading + 360 : heading, Mth.wrapDegrees(cmdHeading) < 0
+                ? Mth.wrapDegrees(cmdHeading) + 360 : Mth.wrapDegrees(cmdHeading),
+            Mth.wrapDegrees(plane.rotationRoll), cmdTargetAltitude, runway));
     }
 
     /**
