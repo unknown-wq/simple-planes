@@ -24,6 +24,12 @@ public final class AirfieldReport {
      * {@code airfield-2} sitting on top of each other with no way to tell them apart and — before
      * the browser gained {@code remove} — no way to delete either. The name and any marked parking
      * spots are carried over, because they are the parts a human chose.
+     *
+     * <p><b>Re-surveying also carries over whether the field is held to the stand rule.</b> A fresh
+     * survey sets it; a re-survey keeps whatever the registered airfield had. Otherwise correcting a
+     * threshold that was a few blocks out on a world that predates the rule would silently convert a
+     * working field into one whose sorties are refused — a re-survey is how a player fixes a runway,
+     * not how they opt into a new requirement.
      */
     public static Airfield surveyAndRegister(AutopilotOutput output, ServerLevel level, BlockPos first, BlockPos second) {
         AutopilotSavedData data = AutopilotSavedData.get(level);
@@ -32,7 +38,8 @@ public final class AirfieldReport {
 
         Airfield airfield = existing == null
             ? surveyed.withName(uniqueName(data))
-            : surveyed.withName(existing.name()).withParkingSpots(existing.parkingSpots());
+            : surveyed.withName(existing.name()).withParkingSpots(existing.parkingSpots())
+                .withRequiredStands(existing.requiresStands());
         data.put(airfield);
         if (existing != null) {
             output.line("Re-surveyed " + airfield.name() + ", replacing the previous measurement.");
@@ -100,9 +107,22 @@ public final class AirfieldReport {
             + ", " + endB.designator() + " -> " + obstaclesB
             + " (of " + (AutopilotConfig.SURVEY_APPROACH_LENGTH / AutopilotConfig.SURVEY_APPROACH_STEP) + " samples)");
         output.line("  preferred landing direction: " + best.designator());
-        output.line(airfield.parkingSpots().isEmpty()
-            ? "  no marked parking; departures use the apron derived from the survey"
-            : "  marked parking spots: " + airfield.parkingSpots().size());
+        if (!airfield.parkingSpots().isEmpty()) {
+            output.line("  marked parking spots: " + airfield.parkingSpots().size());
+        } else if (airfield.standsMissing()) {
+            // The survey is not the end of the job any more, so it does not print as though it were.
+            // Two lines: what is missing, and the exact next gesture — the tool is already in the
+            // player's hand, and the command form is here because this same report is what the
+            // headless rig reads.
+            output.warn("  NOT FINISHED: no parking marked. A runway with nowhere to park is one an"
+                + " aircraft departs from a square nobody surveyed and lands on with nowhere to go,"
+                + " so sorties to and from " + airfield.name() + " are refused until a stand exists.");
+            output.line("  Next: sneak + right-click the air to put the Runway Survey Tool into"
+                + " parking mode, then right-click beside the runway. Or:"
+                + " /autopilot airfields park \"" + airfield.name() + "\" <x y z>");
+        } else {
+            output.line("  no marked parking; departures use the apron derived from the survey");
+        }
         if (!AirfieldBrowser.isUsable(airfield)) {
             output.warn(String.format("  warning: only %.0f blocks long, and an aircraft needs %.0f"
                     + " to land. Sorties into it will be refused.",

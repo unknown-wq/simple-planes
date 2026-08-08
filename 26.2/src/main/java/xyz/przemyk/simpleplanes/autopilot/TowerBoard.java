@@ -1,5 +1,6 @@
 package xyz.przemyk.simpleplanes.autopilot;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerLevel;
@@ -63,11 +64,12 @@ public final class TowerBoard {
 
     /** Everything the board knows about one runway. */
     private record Stand(String name, @Nullable Airfield airfield, @Nullable PlaneEntity occupant,
-                         List<PlaneEntity> holding, List<PlaneEntity> waiting, List<PlaneEntity> inbound) {
+                         List<PlaneEntity> holding, List<PlaneEntity> waiting, List<PlaneEntity> inbound,
+                         List<PlaneEntity> taxiingIn) {
 
         static Stand of(ServerLevel level, String name, @Nullable Airfield airfield) {
             return new Stand(name, airfield, RunwayOccupancy.holder(level, name),
-                new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+                new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
     }
 
@@ -85,21 +87,25 @@ public final class TowerBoard {
         int occupied = 0;
         int holding = 0;
         int waiting = 0;
+        int taxiing = 0;
         for (Stand stand : stands) {
             if (stand.occupant() != null) {
                 occupied++;
             }
             holding += stand.holding().size();
             waiting += stand.waiting().size();
+            taxiing += taxiingIn(stand).size();
         }
-        lines.add(text("summary", "%s runways in this dimension, %s occupied, %s holding, %s waiting to depart.",
-            stands.size(), occupied, holding, waiting));
+        lines.add(text("summary", "%s runways in this dimension, %s occupied, %s holding,"
+                + " %s waiting to depart, %s taxiing in.",
+            stands.size(), occupied, holding, waiting, taxiing));
 
         int width = nameColumn(stands);
         for (Stand stand : stands) {
             lines.add(standLine(stand, width));
             lines.addAll(holdingLines(stand));
             lines.addAll(waitingLines(stand));
+            lines.addAll(taxiingLines(stand));
         }
         return lines;
     }
@@ -133,6 +139,7 @@ public final class TowerBoard {
             }
             lines.addAll(holdingLines(stand));
             lines.addAll(waitingLines(stand));
+            lines.addAll(taxiingLines(stand));
             if (!stand.inbound().isEmpty()) {
                 lines.add(indent(2, text("inbound_header", "inbound:")));
                 for (PlaneEntity plane : sortedByDistance(stand.inbound(), stand.airfield())) {
@@ -209,6 +216,38 @@ public final class TowerBoard {
     }
 
     /**
+     * Aircraft that have landed here and are driving to a stand.
+     *
+     * <p>Listed separately from the occupant because they stop being the occupant part way along:
+     * the strip is released the moment the aircraft is clear of the surveyed rectangle, and the
+     * taxi carries on for as long again afterwards. Without this section such an aircraft would
+     * disappear off the board while still trundling across the field, which is precisely the state
+     * an aerodrome board is for.
+     */
+    private static List<Component> taxiingLines(Stand stand) {
+        List<PlaneEntity> taxiing = taxiingIn(stand);
+        if (taxiing.isEmpty()) {
+            return List.of();
+        }
+        List<Component> lines = new ArrayList<>();
+        lines.add(indent(2, text("taxiing_header", "taxiing to a stand (runway already released):")));
+        for (PlaneEntity plane : sortedByWait(taxiing)) {
+            lines.add(indent(4, trafficLine(plane, stand, true)));
+        }
+        return lines;
+    }
+
+    /**
+     * The taxiing aircraft that are not already on the runway's own row. One that has not left the
+     * strip yet <em>is</em> the occupant, and printing it twice would read as two aircraft.
+     */
+    private static List<PlaneEntity> taxiingIn(Stand stand) {
+        List<PlaneEntity> taxiing = new ArrayList<>(stand.taxiingIn());
+        taxiing.remove(stand.occupant());
+        return taxiing;
+    }
+
+    /**
      * {@code #12 arrival 09, final, 0:14, 288 blocks out [straight in]} — the same shape for every
      * role, arrival or departure.
      *
@@ -234,11 +273,20 @@ public final class TowerBoard {
         // What an aircraft on the ground is waiting for, and a distance for one that is not. A wait
         // that cannot say which of the two gates it is behind reads exactly like a hang.
         int held = autopilot == null ? -1 : autopilot.departureHoldTicks();
+        BlockPos toStand = autopilot != null && autopilot.getMode() == AutopilotMode.TAXI_IN
+            ? autopilot.claimedStand() : null;
         if (held > 0) {
             line.append(Component.literal(", "))
                 .append(text("wait_clock", "%s on the clock", TowerWatch.clock(held)));
         } else if (held == 0) {
             line.append(Component.literal(", ")).append(text("wait_runway", "waiting for the runway"));
+        } else if (toStand != null) {
+            // Distance to the stand, not to the field. An aircraft that has landed is by definition
+            // at the field, so "0 blocks out" is both true and useless; how far it still has to
+            // drive is the number that says whether the taxi is progressing.
+            line.append(Component.literal(", ")).append(text("to_stand", "%s blocks to the stand",
+                Math.round(AutopilotMath.horizontalDistance(plane.position(),
+                    new Vec3(toStand.getX() + 0.5, plane.position().y, toStand.getZ() + 0.5)))));
         } else if (!departure) {
             Double distance = distanceTo(plane, stand.airfield());
             if (distance != null) {
@@ -272,6 +320,8 @@ public final class TowerBoard {
                 stand.holding().add(traffic.plane());
             } else if (traffic.role() == TowerWatch.Role.WAITING) {
                 stand.waiting().add(traffic.plane());
+            } else if (traffic.role() == TowerWatch.Role.TAXIING_IN) {
+                stand.taxiingIn().add(traffic.plane());
             }
             // An occupant is not recorded here: the occupant on the row always comes from
             // RunwayOccupancy.holder(), so the board and the aircraft cannot be looking at two

@@ -83,6 +83,12 @@ public final class AirfieldBrowser {
         if (!airfield.parkingSpots().isEmpty()) {
             line.append(AutopilotText.tr("browser.parking_count", "  parking %s",
                 airfield.parkingSpots().size()).withStyle(ChatFormatting.AQUA));
+        } else if (airfield.standsMissing()) {
+            // As loud as TOO SHORT and for the same reason: both are states in which a sortie is
+            // refused, and a browser that shows a refusal as an absence is a browser that gets
+            // blamed for the refusal. Only a field surveyed under the rule can be in this state.
+            line.append(AutopilotText.tr("browser.no_parking", "  NO PARKING")
+                .withStyle(ChatFormatting.RED));
         }
 
         PlaneEntity holder = RunwayOccupancy.holder(level, airfield.name());
@@ -201,9 +207,20 @@ public final class AirfieldBrowser {
 
     private static void parkingLines(AutopilotOutput output, Level level, Airfield airfield) {
         if (airfield.parkingSpots().isEmpty()) {
-            output.component(AutopilotText.tr("detail.parking_none",
-                "  no marked parking; a departure uses the apron worked out from the survey")
-                .withStyle(ChatFormatting.GRAY));
+            // Two different states, and they used to print the same line. A field surveyed under the
+            // stand rule is unfinished and its sorties are refused; a field from before it exists is
+            // grandfathered and works exactly as it always did. Saying so is the difference between
+            // "your survey is not done" and "this is how it has always been".
+            output.component(airfield.standsMissing()
+                ? AutopilotText.tr("detail.parking_missing",
+                    "  NO PARKING MARKED: this runway is not finished. Mark at least one stand with"
+                        + " the Runway Survey Tool in parking mode, or /autopilot airfields park"
+                        + " \"%s\" <x y z>. Sorties to and from it are refused until you do.",
+                    airfield.name()).withStyle(ChatFormatting.RED)
+                : AutopilotText.tr("detail.parking_none",
+                    "  no marked parking; a departure uses the apron worked out from the survey and"
+                        + " an arrival stops on the runway")
+                    .withStyle(ChatFormatting.GRAY));
             return;
         }
         output.component(AutopilotText.tr("detail.parking_header", "  parking spots (%s):",
@@ -214,8 +231,8 @@ public final class AirfieldBrowser {
             if (problem != null) {
                 line.append(AutopilotText.tr("detail.parking_problem", "  UNUSABLE: %s", problem)
                     .withStyle(ChatFormatting.RED));
-            } else if (!Airfield.isParkingSpotFree(level,
-                new Vec3(spot.getX() + 0.5, spot.getY(), spot.getZ() + 0.5))) {
+            } else if (!Airfield.standFree(level, airfield,
+                new Vec3(spot.getX() + 0.5, spot.getY(), spot.getZ() + 0.5), spot, null)) {
                 line.append(AutopilotText.tr("detail.parking_occupied", "  occupied")
                     .withStyle(ChatFormatting.YELLOW));
             } else {
@@ -277,6 +294,32 @@ public final class AirfieldBrowser {
             String.format("%.0f", AutopilotConfig.MIN_USABLE_RUNWAY_LENGTH));
     }
 
+    /**
+     * The refusal message for a runway with no stand marked beside it, or null when it has one — or
+     * when it predates the rule.
+     *
+     * <p><b>Refused rather than warned</b>, and refused at the command rather than discovered by an
+     * aircraft on the ground, which is the same choice {@link #usabilityRefusal} makes and for
+     * stronger reasons now than when it was made. A field with no stand is a field an aircraft
+     * departs from a square nobody looked at and arrives at by stopping on the landing area — that
+     * is the exact defect this feature exists to remove, so completing the flight and leaving the
+     * mess behind is not an outcome worth having. It also costs nothing to obey: the refusal names
+     * the one command that fixes it, and marking a stand takes one right-click.
+     *
+     * <p>It cannot break a world that already works. Only an airfield surveyed under the rule carries
+     * {@link Airfield#requiresStands()}, and nothing on disk does; see the codec.
+     */
+    public static @Nullable Component standsRefusal(Airfield airfield) {
+        if (!airfield.standsMissing()) {
+            return null;
+        }
+        return AutopilotText.tr("browser.refuse_no_parking",
+            "%s has no parking marked, so an aircraft has nowhere to start from and nowhere to taxi"
+                + " to after landing. Mark a stand beside the runway with the Runway Survey Tool in"
+                + " parking mode, or /autopilot airfields park \"%s\" <x y z>.",
+            airfield.name(), airfield.name());
+    }
+
     // ------------------------------------------------------------------ management
 
     public static boolean remove(AutopilotOutput output, ServerLevel level, String name) {
@@ -292,6 +335,10 @@ public final class AirfieldBrowser {
             return false;
         }
         data.remove(name);
+        // The stand memory is keyed by airfield name, so a name that goes away has to take its
+        // records with it — otherwise re-surveying the same ground under a fresh name inherits
+        // nothing while the old name keeps stands nobody can reach reserved for the session.
+        StandOccupancy.forget(level, name);
         output.component(AutopilotText.tr("manage.removed", "Removed airfield %s.", name)
             .withStyle(ChatFormatting.GREEN));
         return true;
@@ -326,6 +373,7 @@ public final class AirfieldBrowser {
         }
         data.remove(from);
         data.put(airfield.withName(to));
+        StandOccupancy.forget(level, from);
         output.component(AutopilotText.tr("manage.renamed", "Renamed %s to %s.", from, to)
             .withStyle(ChatFormatting.GREEN));
         return true;

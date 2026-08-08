@@ -265,6 +265,59 @@ public final class AutopilotConfig {
     public static final int MAX_PARKING_SPOTS = 8;
     /** Ticks a taxi may take before the aircraft gives up and departs from where it stands. */
     public static final int TAXI_TIMEOUT = 900;
+
+    // ---- taxi in (arrival: runway -> stand) ----
+    /**
+     * How far an arriving aircraft will taxi to reach a marked stand.
+     *
+     * <p>Deliberately much larger than {@link #PARKING_MAX_TAXI_DISTANCE}, and it is the same
+     * geometry seen from the other end. That constant bounds a stand's distance from the
+     * <em>nearest threshold</em>, which is what a departure standing on the stand cares about. An
+     * arrival is not at a threshold: it stops wherever it stopped, which on a long strip is most of
+     * a runway length away from the far end's apron. The honest bound is therefore
+     * {@code PARKING_MAX_TAXI_DISTANCE + runway length}, and 256 covers a 183-block field — the
+     * longest the rig flies — with room to spare. Every block of it is still checked for level
+     * ground before the aircraft sets off, so the cap is a sanity bound rather than the safety test.
+     */
+    public static final double TAXI_IN_MAX_DISTANCE = 256.0;
+    /**
+     * How close to the stand counts as being on it, in blocks.
+     *
+     * <p>Not zero, and not {@link #TAXI_LINEUP_RADIUS} either. The nosewheel steering cannot hold a
+     * point to better than a block or two at {@link #TAXI_SPEED}, and an aircraft that keeps chasing
+     * a square it is already standing on hunts across it — the same failure {@code tickTaxi} stops
+     * chasing the lineup point for. Two blocks is inside {@link #PARKING_SPOT_CLEARANCE}, so an
+     * aircraft that stops on this radius is still unambiguously on its own stand and not on a
+     * neighbouring one.
+     */
+    public static final double TAXI_IN_ARRIVED_RADIUS = 2.0;
+    /**
+     * Margin, in blocks, added to the surveyed runway rectangle when asking whether an aircraft has
+     * left it. Roughly a plane's own footprint, so "clear" means the whole aircraft is off the strip
+     * rather than its centre being exactly on the edge.
+     */
+    public static final double RUNWAY_CLEAR_MARGIN = 3.0;
+    /**
+     * Ticks a taxi in may take before the aircraft gives up and stops where it is.
+     *
+     * <p>Sized on the job rather than copied from {@link #TAXI_TIMEOUT}: {@link #TAXI_IN_MAX_DISTANCE}
+     * at {@link #TAXI_SPEED} is 1280 ticks of pure rolling, and the aircraft also has to turn off the
+     * runway and slow down at the end. 2400 is that with most of a minute in hand. There is a timeout
+     * at all — unlike the departure runway gate, which deliberately has none — because an aircraft
+     * stuck on the way to a stand is stuck on the ground with the runway already released, so waiting
+     * for ever costs a traffic slot and produces no outcome line, and giving up produces one.
+     */
+    public static final int TAXI_IN_TIMEOUT = 2400;
+    /**
+     * Ground speed under which a taxi in is judged to have stalled, in blocks/tick.
+     *
+     * <p>A tenth of {@link #TAXI_SPEED}. Below {@code 0.1} {@code PlaneEntity#tickOnGround} applies
+     * its static-friction penalty, which divides the thrust by five, so an aircraft that has been
+     * pushed below this by something in its way is not going to climb back out of it by itself.
+     */
+    public static final double TAXI_IN_STALLED_SPEED = 0.02;
+    /** Ticks below {@link #TAXI_IN_STALLED_SPEED} before a taxi in is declared stuck. */
+    public static final int TAXI_IN_STALLED_TICKS = 100;
     /**
      * Longest departure delay {@code /autopilot flight … delay <seconds>} accepts.
      *
