@@ -13,7 +13,7 @@ to **Minecraft 26.2** (Java 25).
 ![License LGPL-3.0-or-later](https://img.shields.io/badge/License-LGPL--3.0--or--later-lightgrey "License: LGPL-3.0-or-later")
 
 > **Download:** a compiled, ready-to-install jar is committed in
-> **[`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/master/dist/simpleplanes-26.2-5.3.7.jar)** —
+> **[`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/26.2/dist/simpleplanes-26.2-5.3.7.jar)** —
 > nothing to build, no toolchain needed. Drop it in `mods/` together with Fabric API.
 
 > **Команды:** шпаргалка по всем командам автопилота и инструментам — в
@@ -28,7 +28,7 @@ was built from is in `26.2/`; you only need that if you want to compile it yours
 
 | | |
 |---|---|
-| **Download** | [`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/master/dist/simpleplanes-26.2-5.3.7.jar) (compiled, ready to use) |
+| **Download** | [`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/26.2/dist/simpleplanes-26.2-5.3.7.jar) (compiled, ready to use) |
 | **Minecraft version** | 26.2 |
 | **Mod loader** | Fabric, loader 0.19.3 or newer |
 | **Java version** | 25 |
@@ -46,7 +46,7 @@ Build details and the exact sha256 checksum: [`dist/README.md`](dist/README.md).
    **Java 25**.
 2. Download **[Fabric API](https://modrinth.com/mod/fabric-api)** for 26.2 (0.154.2+26.2 or newer)
    — Simple Planes will not load without it.
-3. Download **[`simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/master/dist/simpleplanes-26.2-5.3.7.jar)**
+3. Download **[`simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/26.2/dist/simpleplanes-26.2-5.3.7.jar)**
    from `dist/`.
 4. Put both jars into the `mods/` folder of your Fabric 26.2 profile — or of your Fabric server.
 5. Launch. Craft a **Plane Workbench** to start building aircraft.
@@ -209,7 +209,7 @@ port-specific bug reports.
 1.21.1; здесь он портирован на загрузчик **Fabric** и на **Minecraft 26.2** (Java 25).
 
 **Скачать готовую сборку:**
-[`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/master/dist/simpleplanes-26.2-5.3.7.jar)
+[`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/26.2/dist/simpleplanes-26.2-5.3.7.jar)
 — это **уже скомпилированный jar**, собирать ничего не нужно. Положите его вместе с
 [Fabric API](https://modrinth.com/mod/fabric-api) (0.154.2+26.2 или новее) в папку `mods/` профиля
 или сервера Fabric 26.2.
