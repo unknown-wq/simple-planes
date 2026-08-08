@@ -6,6 +6,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -106,14 +107,32 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
-     * Where an aircraft is parked before it taxis: beside the runway, clear of the strip, a little
-     * way back from the departure threshold.
+     * Where an aircraft starts a departure, and which way it is facing there.
      *
-     * <p>Falls back to the centreline behind the threshold when the ground alongside is not level
-     * with the runway — an apron is only sensible if there is somewhere flat to put it, and the
-     * surveyed strip itself is the one piece of ground known to be flat.
+     * @param onRunway true when the spot is on the surveyed strip itself rather than off to one side
      */
-    public static Vec3 parkingPosition(Level level, RunwayEnd departure) {
+    public record ParkingSpot(Vec3 position, double heading, boolean onRunway) {}
+
+    /**
+     * Where an aircraft is parked before it taxis: beside the runway, clear of the strip, a little
+     * way back from the departure threshold — but only if there is somewhere flat to put it.
+     *
+     * <p><b>Every candidate off the strip must pass the same elevation test.</b> This used to try
+     * two aprons with a {@code ±2} block tolerance and then, if neither passed, take the ground
+     * straight back from the threshold <em>with no check at all</em>. On a field where the ground
+     * falls away off the end of the runway that put the aircraft in a hole: measured in a user's
+     * world, a runway at elevation 69 with the ground 11 blocks off the end at 64 parked the
+     * aircraft at y=64 and then asked it to taxi 4-5 blocks uphill onto the strip, which the ground
+     * handling has no way to do. The unchecked fallback defeated the very check the branch above it
+     * exists for.
+     *
+     * <p>The last resort is now the runway itself. The survey has already established that the
+     * strip is flat and its elevation is known exactly, so it is the one placement that cannot be
+     * wrong — and a runway departure starts from the threshold anyway. The spot sits inside
+     * {@link AutopilotConfig#TAXI_LINEUP_RADIUS} of the threshold, so the taxi phase goes straight
+     * to lining up instead of trying to roll backwards to a point behind it.
+     */
+    public static ParkingSpot parkingPosition(Level level, RunwayEnd departure) {
         double heading = departure.landingHeading();
         Vec3 threshold = departure.threshold();
         Vec3 behind = AutopilotMath.pointAlong(threshold, heading + 180.0,
@@ -122,15 +141,56 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         double sideways = departure.airfield().width() / 2.0 + AutopilotConfig.PARKING_LATERAL_OFFSET;
         for (double side : new double[] {90.0, -90.0}) {
             Vec3 apron = AutopilotMath.pointAlong(behind, heading + side, sideways);
-            int surface = TerrainScanner.surfaceHeight(level, apron.x, apron.z);
-            if (surface != TerrainScanner.UNKNOWN_HEIGHT && Math.abs(surface - threshold.y) <= 2.0) {
-                return new Vec3(apron.x, surface, apron.z);
+            Vec3 spot = groundedIfLevelWith(level, apron, threshold.y);
+            if (spot != null && taxiPathIsRollable(level, spot, threshold)) {
+                return new ParkingSpot(spot, AutopilotMath.headingTo(spot, threshold), false);
             }
         }
 
-        int surface = TerrainScanner.surfaceHeight(level, behind.x, behind.z);
-        double y = surface == TerrainScanner.UNKNOWN_HEIGHT ? threshold.y : surface;
-        return new Vec3(behind.x, y, behind.z);
+        // Straight back from the threshold — now held to the same tolerance as the aprons.
+        Vec3 straightBack = groundedIfLevelWith(level, behind, threshold.y);
+        if (straightBack != null && taxiPathIsRollable(level, straightBack, threshold)) {
+            return new ParkingSpot(straightBack, AutopilotMath.headingTo(straightBack, threshold), false);
+        }
+
+        // Nothing off the strip qualifies. Park on the strip, facing down it.
+        Vec3 onRunway = AutopilotMath.pointAlong(threshold, heading, AutopilotConfig.PARKING_ON_RUNWAY_OFFSET);
+        return new ParkingSpot(onRunway, heading, true);
+    }
+
+    /**
+     * The surface at {@code probe} as a parking position, or null when it is unknown or not level
+     * with the runway. {@code TerrainScanner.surfaceHeight} reports the first free block, which is
+     * the same convention {@link #pointA()} uses for a threshold, so the two are directly comparable.
+     */
+    private static @Nullable Vec3 groundedIfLevelWith(Level level, Vec3 probe, double runwayElevation) {
+        int surface = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
+        if (surface == TerrainScanner.UNKNOWN_HEIGHT
+            || Math.abs(surface - runwayElevation) > AutopilotConfig.PARKING_MAX_ELEVATION_DIFFERENCE) {
+            return null;
+        }
+        return new Vec3(probe.x, surface, probe.z);
+    }
+
+    /**
+     * Whether the aircraft can actually roll from a parking spot to the threshold.
+     *
+     * <p>A level parking spot is not enough on its own: the taxi is a straight line to the lineup
+     * point with no obstacle avoidance and no ability to climb, so a spot that is level with the
+     * runway but separated from it by a ditch or a step is just as unusable as one in a hole. Every
+     * few blocks along that line has to be level with the runway too.
+     */
+    private static boolean taxiPathIsRollable(Level level, Vec3 from, Vec3 threshold) {
+        double distance = AutopilotMath.horizontalDistance(from, threshold);
+        int steps = (int) Math.ceil(distance / AutopilotConfig.TAXI_PATH_SAMPLE_STEP);
+        for (int i = 1; i < steps; i++) {
+            double t = (double) i / steps;
+            Vec3 probe = new Vec3(from.x + (threshold.x - from.x) * t, 0, from.z + (threshold.z - from.z) * t);
+            if (groundedIfLevelWith(level, probe, threshold.y) == null) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

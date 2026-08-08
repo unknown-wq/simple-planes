@@ -13,6 +13,7 @@ import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
+import xyz.przemyk.simpleplanes.autopilot.Blast;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotConfig;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotFeedback;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotSpawner;
@@ -65,7 +66,9 @@ public class PlaneStrikeToolItem extends Item {
         int distance = getDistance(context.getItemInHand());
         // Run in from the player's side, so the aircraft passes them on the way to the target.
         double bearing = AutopilotSpawner.approachBearingFrom(player.position(), target);
-        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing, player);
+        // TODO(blast): the tool will carry its own blast setting; for now it fires the default warhead.
+        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing, player,
+            Blast.DEFAULT);
         if (plane == null) {
             AutopilotFeedback.warn(player, "Could not create the aircraft.");
             return InteractionResult.CONSUME;

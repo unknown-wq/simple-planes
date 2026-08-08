@@ -11,6 +11,8 @@ import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
 import java.util.Optional;
@@ -432,7 +434,12 @@ public class PlaneAutopilot {
             cmdHeading = AutopilotMath.headingTo(plane.position(), waypoint);
         }
         cmdTargetAltitude = cruiseAltitude;
+        // The climb is flown at climb speed whatever the cruise was ordered at: accelerating and
+        // climbing at the same time just does both slowly, and the cruise leg is where the speed is
+        // wanted. The throttle ceiling is raised here anyway so a boosted aircraft can hold the
+        // climb speed against the extra drag of the climb.
         cmdSpeed = AutopilotConfig.CLIMB_SPEED;
+        cmdMaxThrottle = maxThrottle(plane);
         if (Math.abs(plane.position().y - cmdTargetAltitude) < 8) {
             setMode(plane, AutopilotMode.CRUISE);
         }
@@ -450,9 +457,25 @@ public class PlaneAutopilot {
         }
         cmdHeading = AutopilotMath.headingTo(plane.position(), waypoint);
         cmdTargetAltitude = waypoint.y;
-        cmdSpeed = AutopilotConfig.CRUISE_SPEED;
+        // A route aircraft now carries a booster like a strike does, so the cruise may use the whole
+        // throttle range. Without this the loop would quietly hold the lever at 5 and a fast cruise
+        // would never be reached.
+        cmdMaxThrottle = maxThrottle(plane);
 
-        if (AutopilotMath.horizontalDistance(plane.position(), waypoint) < AutopilotConfig.WAYPOINT_ARRIVAL_RADIUS) {
+        double distanceToWaypoint = AutopilotMath.horizontalDistance(plane.position(), waypoint);
+        cmdSpeed = cruiseSpeedSchedule(plan, distanceToWaypoint);
+
+        // Braking needs the airbrake, and the airbrake is throttle 0: tickMotion multiplies the whole
+        // drag polynomial by brakesMul = 5 there and by 1 everywhere else. Leaving the usual
+        // MIN_AIRBORNE_THROTTLE floor of 1 in place during the bleed would make the deceleration
+        // five times weaker than the model behind cruiseSpeedSchedule assumes — 800 blocks from
+        // 2.80 to 0.50 instead of 158 — so the aircraft would arrive at the descent still fast. The
+        // floor is dropped only while actually decelerating; the rest of the cruise keeps it.
+        if (cmdSpeed < plan.cruiseSpeed() - 1.0E-3) {
+            cmdMinThrottle = 0;
+        }
+
+        if (distanceToWaypoint < arrivalRadius(plane)) {
             boolean routeComplete = plan.advance();
             AutopilotFeedback.overlay(owner, "Plane #" + plane.getId() + ": waypoint reached ("
                 + plan.legsFlown() + "/" + plan.maxLegs() + " legs)");
@@ -460,6 +483,62 @@ public class PlaneAutopilot {
                 beginLanding(plane);
             }
         }
+    }
+
+    /**
+     * The commanded speed for this point on the cruise leg: full cruise speed for most of it, then
+     * a deceleration profile that lands on {@link AutopilotConfig#APPROACH_SPEED} at the last
+     * waypoint, which is where the descent starts.
+     *
+     * <p><b>Why this is a schedule and not a clamp.</b> The approach geometry — an 8-degree glide
+     * slope, the landing gates and a 4-degree flare — is tuned around arriving at approach speed.
+     * Cutting the commanded speed at the moment the mode changes does not produce that: the
+     * aircraft is still doing cruise speed when the glide slope begins and needs roughly
+     * {@link AutopilotMath#decelerationDistance} blocks to shed it, which at 2.80 blocks/tick is
+     * 158 blocks — half the 300-block final intercept, flown high and fast on the slope. So the
+     * energy is shed on the cruise leg, before the descent, over the distance the drag curve
+     * actually needs. Same shape as the strike's dive point, which is derived from the height still
+     * to be lost rather than being a fixed number.
+     *
+     * <p>Only the final leg brakes. An intermediate waypoint is a turn, not an arrival, and slowing
+     * for it would just make the turn worse.
+     */
+    private static double cruiseSpeedSchedule(FlightPlan plan, double distanceToWaypoint) {
+        if (!plan.onFinalLeg()) {
+            return plan.cruiseSpeed();
+        }
+        return AutopilotMath.speedSchedule(plan.cruiseSpeed(), AutopilotConfig.APPROACH_SPEED,
+            distanceToWaypoint / AutopilotConfig.DECELERATION_MARGIN);
+    }
+
+    /**
+     * How close to a waypoint counts as having reached it.
+     *
+     * <p>Fixed at {@link AutopilotConfig#WAYPOINT_ARRIVAL_RADIUS} this was fine at cruise speed and
+     * wrong at attack speed: an aircraft cannot turn inside its own turn radius, which is
+     * {@code v / yawRate}, and {@code tickYaw} clamps the yaw rate to
+     * {@value AutopilotConfig#MAX_YAW_RATE} degrees per tick. At 0.80 blocks/tick that radius is 18
+     * blocks and the fixed 30 covers it; at 2.80 it is 64 blocks, so the aircraft physically cannot
+     * get within 30 of the waypoint and orbits it instead of sequencing. Deriving the radius from
+     * the speed makes the turn possible at any speed and changes nothing at the old one.
+     */
+    private static double arrivalRadius(PlaneEntity plane) {
+        double speed = plane.getDeltaMovement().horizontalDistance();
+        double yawRate = Math.toRadians(AutopilotConfig.MAX_YAW_RATE * plane.autopilotRotationSpeedMultiplier());
+        double turnRadius = speed / Math.max(yawRate, 1.0E-4);
+        return Math.max(AutopilotConfig.WAYPOINT_ARRIVAL_RADIUS, turnRadius);
+    }
+
+    /**
+     * Highest throttle notch this airframe has. A booster raises the ceiling from 5 to 10, and the
+     * autopilot fits one to every aircraft it creates, so this is normally 10 — but a plan loaded
+     * back off disk onto a plane whose booster was removed has to see the real number.
+     */
+    private static int maxThrottle(PlaneEntity plane) {
+        return plane.upgrades.containsKey(
+            SimplePlanesRegistries.UPGRADE_TYPE.getKey(SimplePlanesUpgrades.BOOSTER.get()))
+            ? BoosterUpgrade.MAX_THROTTLE
+            : PlaneEntity.MAX_THROTTLE;
     }
 
     private void tickStrike(PlaneEntity plane) {

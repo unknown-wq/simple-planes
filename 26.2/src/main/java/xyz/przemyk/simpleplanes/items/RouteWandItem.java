@@ -16,6 +16,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.autopilot.Airfield;
+import xyz.przemyk.simpleplanes.autopilot.Blast;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotConfig;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotFeedback;
@@ -158,7 +159,8 @@ public class RouteWandItem extends Item {
             }
         }
 
-        PlaneEntity plane = AutopilotSpawner.launchRoute(level, route, cruiseAltitude, DEFAULT_LEGS, airfieldName, player);
+        PlaneEntity plane = AutopilotSpawner.launchRoute(level, route, cruiseAltitude, DEFAULT_LEGS, airfieldName,
+            player, AutopilotConfig.CRUISE_SPEED, Blast.DEFAULT);
         if (plane == null) {
             AutopilotFeedback.warn(player, "Could not create the aircraft.");
             return InteractionResult.CONSUME;

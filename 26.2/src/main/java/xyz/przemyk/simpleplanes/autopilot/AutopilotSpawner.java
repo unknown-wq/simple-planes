@@ -67,7 +67,8 @@ public final class AutopilotSpawner {
      * @return the aircraft, or null if it could not be created
      */
     public static @Nullable PlaneEntity launchStrike(Level level, BlockPos target, int distance,
-                                                     double approachBearing, @Nullable Player owner) {
+                                                     double approachBearing, @Nullable Player owner,
+                                                     Blast blast) {
         Vec3 targetVec = new Vec3(target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5);
         Vec3 spawn = AutopilotMath.pointAlong(targetVec, approachBearing, distance);
 
@@ -92,9 +93,7 @@ public final class AutopilotSpawner {
         // ceiling from 5 to 10), open the throttle fully and give it its cruise speed at t=0,
         // pointed at the target - otherwise it spends the first seconds of the run accelerating
         // from a standstill and sagging towards the ground while it does.
-        plane.addUpgradeUsingWrench(SimplePlanesItems.BOOSTER.get().getDefaultInstance(),
-            new BoosterUpgrade(plane));
-        plane.setMaxSpeed(STRIKE_MAX_SPEED);
+        fitBooster(plane, STRIKE_MAX_SPEED);
         plane.setThrottle(BoosterUpgrade.MAX_THROTTLE);
         Vec3 run = targetVec.subtract(spawn.x, altitude, spawn.z).normalize();
         plane.setDeltaMovement(run.scale(STRIKE_LAUNCH_SPEED));
@@ -104,8 +103,23 @@ public final class AutopilotSpawner {
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
         // Powered by the autopilot, and never persisted: a strike aircraft is a one-shot weapon.
-        autopilot.start(plane, FlightPlan.strike(target), true, false, owner);
+        autopilot.start(plane, FlightPlan.strike(target, blast), true, false, owner);
         return plane;
+    }
+
+    /**
+     * Fits a booster and raises the speed ceiling.
+     *
+     * <p>Every aircraft the autopilot creates gets one, not just a strike. The booster raises the
+     * throttle ceiling from 5 to 10 and {@code setMaxSpeed} moves the point the thrust fades out at
+     * — neither is a limiter, so this only gives the airframe the capability to fly fast. What it
+     * actually flies is whatever the flight director commands, which for a route is the plan's
+     * cruise speed and defaults to the same {@link AutopilotConfig#CRUISE_SPEED} as before.
+     */
+    private static void fitBooster(PlaneEntity plane, float maxSpeed) {
+        plane.addUpgradeUsingWrench(SimplePlanesItems.BOOSTER.get().getDefaultInstance(),
+            new BoosterUpgrade(plane));
+        plane.setMaxSpeed(maxSpeed);
     }
 
     /**
@@ -145,7 +159,8 @@ public final class AutopilotSpawner {
      */
     public static @Nullable PlaneEntity launchRoute(Level level, List<BlockPos> waypoints,
                                                     int cruiseAltitude, int legs,
-                                                    @Nullable String airfieldName, @Nullable Player owner) {
+                                                    @Nullable String airfieldName, @Nullable Player owner,
+                                                    double cruiseSpeed, Blast blast) {
         if (waypoints.isEmpty()) {
             return null;
         }
@@ -161,24 +176,27 @@ public final class AutopilotSpawner {
         }
         // Launch at flying speed, like a strike. A route aircraft spawned mid-air with zero
         // airspeed has to dive to pick up flying speed, and from a low cruise altitude that dive
-        // ends in the ground.
+        // ends in the ground. Launched at the commanded cruise speed when that is higher, so a fast
+        // route does not spend its first hundred blocks accelerating.
+        fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
         Vec3 run = towards.subtract(start);
         if (run.lengthSqr() > 1.0E-6) {
-            plane.setDeltaMovement(run.normalize().scale(CRUISE_LAUNCH_SPEED));
+            plane.setDeltaMovement(run.normalize().scale(Math.max(CRUISE_LAUNCH_SPEED, cruiseSpeed)));
         }
         // Engine already running. Launched at 0.70 with the throttle shut, the aircraft spent its
         // first seconds slowing down, not speeding up: throttle 0 sets brakesMul = 5 in
         // PlaneEntity#tickMotion, which is a full airbrake, and the autopilot's throttle loop only
         // adds one notch every five ticks — 25 ticks to reach full power. Measured in the field at
         // 0.64 blocks/tick and falling against a commanded 0.80, with the lever still on 2.
-        plane.setThrottle(PlaneEntity.MAX_THROTTLE);
+        plane.setThrottle(BoosterUpgrade.MAX_THROTTLE);
         addToWorld(level, plane);
 
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
         // Powered by the autopilot so a courier aircraft does not need an engine upgrade, and
         // persisted so the route resumes after a restart.
-        autopilot.start(plane, FlightPlan.route(waypoints, cruiseAltitude, legs, airfieldName), true, true, owner);
+        autopilot.start(plane, FlightPlan.route(waypoints, cruiseAltitude, legs, airfieldName, cruiseSpeed, blast),
+            true, true, owner);
         return plane;
     }
 
@@ -194,7 +212,7 @@ public final class AutopilotSpawner {
      * @return the aircraft, or null if it could not be created
      */
     public static @Nullable PlaneEntity launchSortie(ServerLevel level, Airfield departure, Airfield destination,
-                                                     @Nullable Player owner) {
+                                                     @Nullable Player owner, double cruiseSpeed, Blast blast) {
         // The runway is usually nowhere near a player, so its chunks have to exist before anything
         // can be measured on them or spawned into them. Both thresholds, not just the centre: a
         // 183-block runway spans a dozen chunks, and the parking spot sits beyond one of its ends —
@@ -204,17 +222,22 @@ public final class AutopilotSpawner {
         loadAirfield(level, destination);
 
         RunwayEnd departureEnd = Airfield.departureEnd(level, departure);
-        Vec3 parking = Airfield.parkingPosition(level, departureEnd);
-        loadAround(level, parking);
-        // Facing the threshold it is about to taxi to, so the first thing it does is roll forward
-        // rather than pirouette on the spot.
-        double heading = AutopilotMath.headingTo(parking, departureEnd.threshold());
+        Airfield.ParkingSpot parking = Airfield.parkingPosition(level, departureEnd);
+        loadAround(level, parking.position());
+        // The heading comes from the parking spot rather than being derived here. Facing the
+        // threshold is right for an apron, but wrong when the aircraft had to be parked on the strip
+        // itself: from a spot a few blocks down the runway, "face the threshold" points it backwards
+        // down its own departure path.
+        Vec3 position = parking.position();
 
-        PlaneEntity plane = create(level, parking.x, parking.y + 1.0, parking.z, heading);
+        PlaneEntity plane = create(level, position.x, position.y + 1.0, position.z, parking.heading());
         if (plane == null) {
             return null;
         }
-        // Explicitly stationary. No synthetic velocity on a runway departure.
+        // Explicitly stationary. No synthetic velocity on a runway departure. The booster is fitted
+        // all the same — it is the throttle ceiling for the cruise, not a launch aid, and a take-off
+        // roll that starts at zero is unaffected by it.
+        fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
         plane.setDeltaMovement(Vec3.ZERO);
         plane.setThrottle(0);
         addToWorld(level, plane);
@@ -223,8 +246,8 @@ public final class AutopilotSpawner {
         BlockPos aim = BlockPos.containing(destination.centre());
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
-        autopilot.start(plane, FlightPlan.sortie(aim, cruiseAltitude, destination.name(), departure.name()),
-            true, true, owner);
+        autopilot.start(plane, FlightPlan.sortie(aim, cruiseAltitude, destination.name(), departure.name(),
+            cruiseSpeed, blast), true, true, owner);
         return plane;
     }
 
@@ -236,7 +259,7 @@ public final class AutopilotSpawner {
      * out-and-back {@code route} cannot express.
      */
     public static @Nullable PlaneEntity launchInbound(ServerLevel level, Vec3 from, Airfield destination,
-                                                      @Nullable Player owner) {
+                                                      @Nullable Player owner, double cruiseSpeed, Blast blast) {
         loadAround(level, destination.centre());
 
         int cruiseAltitude = Math.max((int) from.y, sortieCruiseAltitude(level, destination, destination));
@@ -250,22 +273,23 @@ public final class AutopilotSpawner {
         }
         // Airborne launch: same reasoning as a route, an aircraft dropped in with no airspeed has to
         // dive to find some and does not always have the height to spare.
+        fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
         Vec3 run = towards.subtract(start);
         if (run.lengthSqr() > 1.0E-6) {
-            plane.setDeltaMovement(run.normalize().scale(CRUISE_LAUNCH_SPEED));
+            plane.setDeltaMovement(run.normalize().scale(Math.max(CRUISE_LAUNCH_SPEED, cruiseSpeed)));
         }
         // Launch with the engine already running. Spawning at flying speed with the throttle shut
         // means throttle 0, and throttle 0 is an airbrake (PlaneEntity#tickMotion multiplies the
         // whole drag polynomial by 5), so the aircraft spent its first seconds losing the speed it
         // was given while the throttle loop crept up one notch every five ticks.
-        plane.setThrottle(PlaneEntity.MAX_THROTTLE);
+        plane.setThrottle(BoosterUpgrade.MAX_THROTTLE);
         addToWorld(level, plane);
 
         BlockPos aim = BlockPos.containing(destination.centre());
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
-        autopilot.start(plane, FlightPlan.sortie(aim, cruiseAltitude, destination.name(), null),
-            true, true, owner);
+        autopilot.start(plane, FlightPlan.sortie(aim, cruiseAltitude, destination.name(), null,
+            cruiseSpeed, blast), true, true, owner);
         return plane;
     }
 

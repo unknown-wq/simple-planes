@@ -37,7 +37,12 @@ public class FlightPlan {
             .forGetter(plan -> plan.cruiseAltitude),
         Codec.STRING.optionalFieldOf("airfield").forGetter(plan -> Optional.ofNullable(plan.airfieldName)),
         BlockPos.CODEC.optionalFieldOf("strike_target").forGetter(plan -> Optional.ofNullable(plan.strikeTarget)),
-        Codec.STRING.optionalFieldOf("departure").forGetter(plan -> Optional.ofNullable(plan.departureAirfield))
+        Codec.STRING.optionalFieldOf("departure").forGetter(plan -> Optional.ofNullable(plan.departureAirfield)),
+        // Both new fields are optional with the historic value as the default, so a flight plan
+        // written by an older build loads unchanged rather than failing the codec.
+        Blast.CODEC.optionalFieldOf("blast", Blast.DEFAULT).forGetter(plan -> plan.blast),
+        Codec.DOUBLE.optionalFieldOf("cruise_speed", AutopilotConfig.CRUISE_SPEED)
+            .forGetter(plan -> plan.cruiseSpeed)
     ).apply(instance, FlightPlan::new));
 
     private final Kind kind;
@@ -50,10 +55,22 @@ public class FlightPlan {
     private String airfieldName;
     private final BlockPos strikeTarget;
     private final String departureAirfield;
+    /** How hard this aircraft goes off when it stops flying. Never null. */
+    private final Blast blast;
+    /**
+     * Commanded speed on the cruise leg, in blocks/tick.
+     *
+     * <p><b>Cruise only.</b> The approach is not flown at this speed and never inherits it: the
+     * glide slope, the landing gates and the flare are all tuned around
+     * {@link AutopilotConfig#APPROACH_SPEED}, and a fast arrival simply cannot be flared. The
+     * aircraft sheds the difference during the last part of the cruise leg, over the distance the
+     * drag curve actually needs — see {@link AutopilotMath#speedSchedule}.
+     */
+    private final double cruiseSpeed;
 
     public FlightPlan(Kind kind, List<BlockPos> waypoints, int index, int direction, int legsFlown, int maxLegs,
                       int cruiseAltitude, Optional<String> airfieldName, Optional<BlockPos> strikeTarget,
-                      Optional<String> departureAirfield) {
+                      Optional<String> departureAirfield, Blast blast, double cruiseSpeed) {
         this.kind = kind;
         this.waypoints = List.copyOf(waypoints);
         this.index = index;
@@ -64,17 +81,22 @@ public class FlightPlan {
         this.airfieldName = airfieldName.orElse(null);
         this.strikeTarget = strikeTarget.orElse(null);
         this.departureAirfield = departureAirfield.orElse(null);
+        this.blast = blast == null ? Blast.DEFAULT : blast;
+        // Clamped here as well as at the command, so a hand-edited save cannot produce an
+        // aircraft that is commanded a speed the airframe cannot fly.
+        this.cruiseSpeed = AutopilotConfig.clampCruiseSpeed(cruiseSpeed);
     }
 
-    public static FlightPlan strike(BlockPos target) {
+    public static FlightPlan strike(BlockPos target, Blast blast) {
         return new FlightPlan(Kind.STRIKE, List.of(), 0, 1, 0, 0,
             (int) AutopilotConfig.DEFAULT_CRUISE_ALTITUDE, Optional.empty(), Optional.of(target),
-            Optional.empty());
+            Optional.empty(), blast, AutopilotConfig.CRUISE_SPEED);
     }
 
-    public static FlightPlan route(List<BlockPos> waypoints, int cruiseAltitude, int maxLegs, String airfieldName) {
+    public static FlightPlan route(List<BlockPos> waypoints, int cruiseAltitude, int maxLegs, String airfieldName,
+                                   double cruiseSpeed, Blast blast) {
         return new FlightPlan(Kind.ROUTE, waypoints, 0, 1, 0, maxLegs, cruiseAltitude,
-            Optional.ofNullable(airfieldName), Optional.empty(), Optional.empty());
+            Optional.ofNullable(airfieldName), Optional.empty(), Optional.empty(), blast, cruiseSpeed);
     }
 
     /**
@@ -90,10 +112,26 @@ public class FlightPlan {
      * @param departureAirfield airfield to taxi out from, or null to launch from where it stands
      */
     public static FlightPlan sortie(BlockPos destination, int cruiseAltitude,
-                                    String destinationAirfield, String departureAirfield) {
+                                    String destinationAirfield, String departureAirfield,
+                                    double cruiseSpeed, Blast blast) {
         return new FlightPlan(Kind.ROUTE, List.of(destination), 0, 1, 0, 1, cruiseAltitude,
             Optional.ofNullable(destinationAirfield), Optional.empty(),
-            Optional.ofNullable(departureAirfield));
+            Optional.ofNullable(departureAirfield), blast, cruiseSpeed);
+    }
+
+    /** How hard this aircraft goes off when it stops flying. */
+    public Blast blast() {
+        return blast;
+    }
+
+    /** Commanded speed on the cruise leg only — see the field comment. */
+    public double cruiseSpeed() {
+        return cruiseSpeed;
+    }
+
+    /** True when the cruise is fast enough that the arrival needs planning rather than just slowing. */
+    public boolean isFastCruise() {
+        return cruiseSpeed > AutopilotConfig.CRUISE_SPEED + 1.0E-3;
     }
 
     /** Airfield this flight taxied out from, or null when it did not start on a runway. */
@@ -179,6 +217,17 @@ public class FlightPlan {
         return maxLegs > 0 && legsFlown >= maxLegs;
     }
 
+    /**
+     * True when reaching the current waypoint ends the route and starts the landing.
+     *
+     * <p>Used to decide where to begin bleeding the cruise speed off. Deliberately conservative:
+     * for the out-and-back case ({@code maxLegs = 2}) this is false on the way out — that waypoint
+     * is a turn, not an arrival — and true on the way back.
+     */
+    public boolean onFinalLeg() {
+        return legsFlown + 1 >= Math.max(1, maxLegs);
+    }
+
     public int legsFlown() {
         return legsFlown;
     }
@@ -198,7 +247,8 @@ public class FlightPlan {
 
     public String describe() {
         if (kind == Kind.STRIKE) {
-            return "strike -> " + (strikeTarget == null ? "?" : strikeTarget.toShortString());
+            return "strike -> " + (strikeTarget == null ? "?" : strikeTarget.toShortString())
+                + ", blast " + blast.describe();
         }
         List<String> parts = new ArrayList<>();
         for (BlockPos pos : waypoints) {
@@ -206,6 +256,7 @@ public class FlightPlan {
         }
         return (departureAirfield == null ? "route [" : "sortie from " + departureAirfield + " [")
             + String.join(" -> ", parts) + "] alt " + cruiseAltitude
+            + String.format(", cruise %.2f", cruiseSpeed)
             + (airfieldName == null ? ", improvised landing" : ", landing at " + airfieldName);
     }
 }

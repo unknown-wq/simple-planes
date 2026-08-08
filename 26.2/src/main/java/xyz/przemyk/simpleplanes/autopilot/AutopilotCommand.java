@@ -129,7 +129,10 @@ public final class AutopilotCommand {
             return 0;
         }
 
-        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing, source.getPlayer());
+        // TODO(blast): the command argument that selects strength, block damage and fire is the next
+        // step; until then every strike uses the historic 4.0F TNT warhead.
+        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing,
+            source.getPlayer(), Blast.DEFAULT);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -156,7 +159,8 @@ public final class AutopilotCommand {
         int cruiseAltitude = AutopilotSpawner.cruiseAltitudeFor(level, waypoints);
         Airfield nearest = AutopilotSavedData.get(level).nearest(from.getX(), from.getZ(), 512);
         PlaneEntity plane = AutopilotSpawner.launchRoute(level, waypoints, cruiseAltitude, 2,
-            nearest == null ? null : nearest.name(), source.getPlayer());
+            nearest == null ? null : nearest.name(), source.getPlayer(),
+            AutopilotConfig.CRUISE_SPEED, Blast.DEFAULT);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -200,7 +204,8 @@ public final class AutopilotCommand {
             return 0;
         }
 
-        PlaneEntity plane = AutopilotSpawner.launchSortie(level, from, to, source.getPlayer());
+        PlaneEntity plane = AutopilotSpawner.launchSortie(level, from, to, source.getPlayer(),
+            AutopilotConfig.CRUISE_SPEED, Blast.DEFAULT);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -237,7 +242,8 @@ public final class AutopilotCommand {
         }
 
         PlaneEntity plane = AutopilotSpawner.launchInbound(level,
-            new Vec3(from.getX() + 0.5, from.getY(), from.getZ() + 0.5), destination, source.getPlayer());
+            new Vec3(from.getX() + 0.5, from.getY(), from.getZ() + 0.5), destination, source.getPlayer(),
+            AutopilotConfig.CRUISE_SPEED, Blast.DEFAULT);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;

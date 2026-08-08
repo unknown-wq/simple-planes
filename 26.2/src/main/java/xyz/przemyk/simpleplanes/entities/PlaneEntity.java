@@ -47,6 +47,7 @@ import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
 import org.joml.Vector3f;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.autopilot.Blast; // autopilot:
 import xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot; // autopilot:
 import xyz.przemyk.simpleplanes.container.ModifyUpgradesContainer;
 import xyz.przemyk.simpleplanes.container.PlaneInventoryContainer;
@@ -483,7 +484,18 @@ public class PlaneEntity extends Entity {
                 getZ(),
                 10, 1, 1, 1, 1);
         }
-        level().explode(this, getX(), getY(), getZ(), 4.0F, Level.ExplosionInteraction.TNT);
+        // autopilot: the warhead is a property of the flight, not a constant. An aircraft with no
+        // flight plan — every plane a player ever built or flew — gets Blast.DEFAULT, which is
+        // 4.0F with TNT block interaction and no fire, i.e. bit-for-bit what this line used to do.
+        Blast blast = Blast.DEFAULT;
+        PlaneAutopilot engaged = getAutopilot();
+        if (engaged != null && engaged.getPlan() != null) {
+            blast = engaged.getPlan().blast();
+        }
+        // The fuller overload, because "does it break blocks" and "does it start fires" are separate
+        // arguments there: the interaction selects the block behaviour (TNT craters and drops, NONE
+        // leaves the world alone and only damages entities) and fire is its own flag.
+        level().explode(this, getX(), getY(), getZ(), blast.power(), blast.fire(), blast.interaction());
     }
 
     protected void dropItem(ServerLevel serverLevel) {
