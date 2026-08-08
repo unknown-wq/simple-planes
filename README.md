@@ -16,6 +16,9 @@ to **Minecraft 26.2** (Java 25).
 > **[`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/master/dist/simpleplanes-26.2-5.3.7.jar)** —
 > nothing to build, no toolchain needed. Drop it in `mods/` together with Fabric API.
 
+> **Команды:** шпаргалка по всем командам автопилота и инструментам — в
+> **[`COMMANDS.md`](COMMANDS.md)**.
+
 ---
 
 ## Download Simple Planes for Minecraft 26.2 (Fabric)

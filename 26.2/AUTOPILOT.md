@@ -218,9 +218,11 @@ All three are in the Simple Planes creative tab.
 
 * **Right-click a block** — spawns an aircraft the configured distance away (default 400 blocks, on
   the far side of you so it runs in past you) and sends it at that block at full throttle.
-* **Right-click the air** — status report, including the blast setting.
+* **Right-click the air** — status report: distance, warhead and run-in bearing.
 * **Sneak + right-click the air** — cycle the spawn distance: 100 → 200 → 400 → 800, and the blast
   strength one step each time the distance wraps. See [The strike tool](#the-strike-tool).
+* `/autopilot tool <distance> [bearing] [blast] [blocks] [fire]` — write the full set of settings,
+  including "do not break blocks", "set fire" and a pinned run-in bearing, onto the tool in hand.
 
 The aircraft is launched already at attack speed with a booster fitted, cruises the run-in at
 **100 blocks above the ground**, and only then dives — see [The attack run](#the-attack-run).
@@ -658,6 +660,8 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
 ```
 /autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]
                                                  launch an attack run
+/autopilot tool <distance> [bearing] [blast] [blocks] [fire]
+                                                 write those settings onto the held strike tool
 /autopilot route <x y z> <x y z> [speed]         fly A -> B -> A and land
 /autopilot flight <from> <to> [speed]            full sortie between two registered airfields
 /autopilot inbound <x y z> <airfield> [speed]    one-way arrival into a named airfield
@@ -683,10 +687,22 @@ because names contain a hyphen), so they need no block-position argument at all 
 refused for pointing at unloaded ground — which is the normal case, not an edge case, since both
 runways are usually nowhere near a player.
 
-`bearing` is the compass direction the attack run comes in *from*, 0–359. Omit it and the bearing is
-derived from wherever the command was issued (the player, or the console's world-spawn origin); if
-that origin sits on top of the target it falls back to a fixed due-south run-in. Given explicitly,
-the whole flight is deterministic and repeatable, which is what makes headless testing useful.
+`bearing` is the compass direction the attack run comes in *from*, 0–359 — where the aircraft is
+placed relative to the target, not the direction it then flies. That is the useful way round,
+because what someone choosing a bearing is picking is which side of the target the run-in passes
+over. Measured against a target at `0 80 0` from 100 blocks:
+
+| `bearing` | Spawned at | Attacks toward |
+|---|---|---|
+| 0 | `1, -99` (north) | south |
+| 90 | `101, 1` (east) | west |
+| 180 | `1, 101` (south) | north |
+| 270 | `-99, 1` (west) | east |
+
+Omit it and the bearing is derived from wherever the command was issued (the player, or the
+console's world-spawn origin); if that origin sits on top of the target it falls back to a fixed
+due-south run-in. Given explicitly, the whole flight is deterministic and repeatable, which is what
+makes headless testing useful.
 
 ### The warhead
 
@@ -741,12 +757,35 @@ only reaches disk on a route or sortie.
 
 ### The strike tool
 
-The item carries a blast **strength** only, cycled by sneak + right-click: the spawn distance
-advances on every press, and the blast advances one step each time the distance wraps back to the
-start, through 4.0 → 8.0 → 16.0 → 1.0. Both values are printed on every press and both are on the
-tooltip. A held item offers exactly one spare gesture, and spending it on a three-way cycle of
-independent settings would be harder to use than not having them there at all — so `blocks` and
-`fire` stay command-only, and the tool always breaks blocks and never sets fire, as it always has.
+Sneak + right-click cycles the two settings that get changed in flight: the spawn distance advances
+on every press, and the blast strength advances one step each time the distance wraps back to the
+start, through 4.0 → 8.0 → 16.0 → 1.0. Both are printed on every press and both are on the tooltip.
+
+The other three settings are reachable, just not through that gesture. A held item offers exactly
+one spare gesture, and cycling five independent settings through it would be worse than not having
+them — so the full set is written onto the tool in hand by a command:
+
+```
+/autopilot tool <distance> [bearing] [blast] [blocks] [fire]
+```
+
+The same arguments in the same order as `strike`, minus the target, because the target of a tool
+strike is whichever block gets right-clicked. This is the one subcommand that requires a player:
+the thing being configured is an item in a hand (main hand first, then off hand).
+
+`bearing` here is optional in a second sense — **-1 unpins it**, restoring the default behaviour of
+working the run-in out from wherever the player is standing so the aircraft passes them on its way
+in. Any pinned bearing makes a tool strike as repeatable as a console one. Arguments left off keep
+their current value rather than resetting to the default, so a second call can change one setting
+without restating the rest.
+
+Every setting lives on the stack as a data component, so it survives logging out, a chest, and
+death. They are four separate components rather than one `Blast` component because tools already in
+players' inventories carry a bare float under the old key: adding fields beside it keeps those
+tools working, where changing the type would silently reset them.
+
+The sneak-cycle deliberately preserves `blocks` and `fire` when it advances the strength — a
+gesture meant for the two numbers must not quietly undo the two settings it does not show.
 
 `status` is the one to watch while debugging. Per aircraft it prints:
 

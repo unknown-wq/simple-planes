@@ -2,6 +2,7 @@ package xyz.przemyk.simpleplanes.items;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import org.jspecify.annotations.Nullable;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -16,6 +17,7 @@ import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
 import xyz.przemyk.simpleplanes.autopilot.Blast;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotConfig;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotFeedback;
+import xyz.przemyk.simpleplanes.autopilot.AutopilotMath;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotSpawner;
 import xyz.przemyk.simpleplanes.autopilot.RunwayOccupancy;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
@@ -32,11 +34,15 @@ import java.util.function.Consumer;
  *   <li>sneak + right-click the air — cycle the spawn distance, and the blast each time it wraps</li>
  * </ul>
  *
- * <p>The tool carries a blast <em>strength</em> only. Whether the blast breaks blocks and whether it
- * sets fire are settable on {@code /autopilot strike} but not here: a held item offers exactly one
- * spare gesture, and spending it on a three-way cycle of independent settings would be harder to use
- * than not having them. The tool's blast always breaks blocks and never sets fire, which is what a
- * strike has always done.
+ * <p><b>Settings.</b> The gesture cycles the two settings anyone changes in flight — spawn distance
+ * and blast strength — because a held item offers exactly one spare gesture and cycling five
+ * independent settings through it would be worse than not having them. The full set, including
+ * whether the blast breaks blocks, whether it sets fire, and a pinned run-in bearing, is written
+ * onto the held tool by {@code /autopilot tool}, which takes the same arguments in the same order as
+ * {@code /autopilot strike}. Every setting is stored on the stack, so it survives logging out.
+ *
+ * <p>Unset means what a strike has always done: {@value Blast#DEFAULT_POWER} strength, blocks
+ * broken, no fire, and a run-in worked out from where the player is standing.
  */
 public class PlaneStrikeToolItem extends Item {
 
@@ -48,15 +54,32 @@ public class PlaneStrikeToolItem extends Item {
         super(properties.stacksTo(1));
     }
 
-    private static int getDistance(ItemStack stack) {
+    public static int getDistance(ItemStack stack) {
         Integer distance = stack.get(AutopilotComponents.STRIKE_DISTANCE);
         return distance == null ? AutopilotConfig.STRIKE_SPAWN_DISTANCE : distance;
     }
 
-    /** Blast the tool is set to. Always block-breaking and never incendiary — see the component. */
-    private static Blast getBlast(ItemStack stack) {
+    /** Blast the tool is set to; each field falls back to the historic default when unset. */
+    public static Blast getBlast(ItemStack stack) {
         Float power = stack.get(AutopilotComponents.STRIKE_BLAST);
-        return power == null ? Blast.DEFAULT : new Blast(power, true, false);
+        Boolean blocks = stack.get(AutopilotComponents.STRIKE_BLOCKS);
+        Boolean fire = stack.get(AutopilotComponents.STRIKE_FIRE);
+        if (power == null && blocks == null && fire == null) {
+            return Blast.DEFAULT;
+        }
+        return new Blast(power == null ? Blast.DEFAULT_POWER : power,
+            blocks == null || blocks, fire != null && fire);
+    }
+
+    /** Pinned run-in bearing in compass degrees, or null to work one out from the player. */
+    public static @Nullable Integer getBearing(ItemStack stack) {
+        return stack.get(AutopilotComponents.STRIKE_BEARING);
+    }
+
+    /** ", bearing 050" for a pinned run-in, or nothing at all when it is worked out per launch. */
+    private static String describeBearing(ItemStack stack) {
+        Integer bearing = getBearing(stack);
+        return bearing == null ? "" : String.format(", bearing %03d", bearing);
     }
 
     /** Next entry in a cycle, wrapping; returns index 0 for a value that is not in the list. */
@@ -86,17 +109,25 @@ public class PlaneStrikeToolItem extends Item {
             return InteractionResult.CONSUME;
         }
 
+        ItemStack stack = context.getItemInHand();
         BlockPos target = context.getClickedPos();
-        int distance = getDistance(context.getItemInHand());
-        // Run in from the player's side, so the aircraft passes them on the way to the target.
-        double bearing = AutopilotSpawner.approachBearingFrom(player.position(), target);
-        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing, player,
-            getBlast(context.getItemInHand()));
+        int distance = getDistance(stack);
+        Integer pinned = getBearing(stack);
+        // Pinned bearing if the tool carries one, otherwise run in from the player's side so the
+        // aircraft passes them on the way to the target.
+        double bearing = pinned != null
+            ? AutopilotMath.yawFromCompass(pinned)
+            : AutopilotSpawner.approachBearingFrom(player.position(), target);
+        Blast blast = getBlast(stack);
+        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing, player, blast);
         if (plane == null) {
             AutopilotFeedback.warn(player, "Could not create the aircraft.");
             return InteractionResult.CONSUME;
         }
-        AutopilotFeedback.success(player, AutopilotSpawner.describeLaunch(plane, target, distance, bearing));
+        // Compass degrees, not the internal yaw: describeLaunch prints the number as a bearing, and
+        // the two conventions are 180 degrees apart.
+        AutopilotFeedback.success(player, AutopilotSpawner.describeLaunch(plane, target, distance,
+            AutopilotMath.compassHeading(bearing)) + " Warhead: " + blast.describe() + ".");
         return InteractionResult.CONSUME;
     }
 
@@ -125,14 +156,17 @@ public class PlaneStrikeToolItem extends Item {
 
             Blast blast = getBlast(stack);
             if ((index + 1) % DISTANCES.length == 0) {
-                blast = new Blast(BLASTS[nextIndex(BLASTS, blast.power())], true, false);
+                // Strength only. The block-breaking and incendiary flags are left exactly as
+                // /autopilot tool set them — a gesture meant for the two numbers must not quietly
+                // undo the two settings it does not show.
+                blast = new Blast(BLASTS[nextIndex(BLASTS, blast.power())], blast.breaksBlocks(), blast.fire());
                 stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
             }
             AutopilotFeedback.info(player, "Strike spawn distance: " + next
-                + " blocks, blast " + blast.describe() + ".");
+                + " blocks, blast " + blast.describe() + describeBearing(stack) + ".");
         } else {
             AutopilotFeedback.info(player, "Spawn distance " + getDistance(stack) + " blocks, blast "
-                + getBlast(stack).describe() + ". "
+                + getBlast(stack).describe() + describeBearing(stack) + ". "
                 + RunwayOccupancy.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS
                 + " autopilot aircraft active.");
         }
@@ -145,6 +179,11 @@ public class PlaneStrikeToolItem extends Item {
         builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_desc"));
         builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_distance", getDistance(stack)));
         builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_blast",
-            String.format("%.1f", getBlast(stack).power())));
+            getBlast(stack).describe()));
+        Integer bearing = getBearing(stack);
+        builder.accept(bearing == null
+            ? Component.translatable(SimplePlanesMod.MODID + ".strike_tool_bearing_auto")
+            : Component.translatable(SimplePlanesMod.MODID + ".strike_tool_bearing",
+                String.format("%03d", bearing)));
     }
 }
