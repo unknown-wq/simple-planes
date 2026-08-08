@@ -216,6 +216,63 @@ public final class AutopilotMath {
         return Math.max(0, brakingDistanceFromRest(from) - brakingDistanceFromRest(to));
     }
 
+    // ------------------------------------------------------------------ what the airframe can do
+
+    /**
+     * Radius of the tightest level turn this aircraft can fly at {@code speed}, in blocks.
+     *
+     * <p>{@code v / yawRate} with the yaw rate in radians per tick, because a turn here is produced
+     * by the yaw control and {@code PlaneEntity#tickYaw} clamps that to
+     * {@value AutopilotConfig#MAX_YAW_RATE} degrees per tick <em>times the airframe's own
+     * {@code getRotationSpeedMultiplier}</em>. That multiplier is the whole reason this is a function
+     * of the aircraft rather than a constant: it is 1.0 on the starter plane, 0.5 on the large one
+     * and 0.2 on the cargo plane, so the same 0.50 blocks/tick approach is an 11.5-block turn on one
+     * airframe and a 57-block turn on another. Every distance the arrival planner reasons in is
+     * ultimately this number.
+     *
+     * @param rotationMultiplier the airframe's {@code getRotationSpeedMultiplier}
+     */
+    public static double turnRadius(double speed, double rotationMultiplier) {
+        double yawRate = Math.toRadians(AutopilotConfig.MAX_YAW_RATE * Math.max(rotationMultiplier, 0.05));
+        return speed / yawRate;
+    }
+
+    /**
+     * Height, in blocks, that can actually be given up over {@code distance} while decelerating from
+     * {@code from} to {@code to} — the flyable descent, not the geometric one.
+     *
+     * <p>The arrival planner used to measure this as {@code distance * tan(MAX_DESCENT_ANGLE)}, which
+     * is a promise the airframe cannot keep at speed. The flight director's altitude cascade clamps
+     * the commanded vertical speed to {@link AutopilotConfig#MAX_SINK_RATE} <em>before</em> it turns
+     * it into a flight path angle, so the gradient actually available is
+     * {@code min(tan(maxAngle), maxSink / v)} and the second term binds whenever the aircraft is
+     * fast: at {@link AutopilotConfig#CRUISE_SPEED} it is 0.115 against the 0.213 of 12 degrees, so
+     * the old figure was nearly <b>twice</b> the height the aircraft could really lose.
+     *
+     * <p>Integrated along the deceleration rather than evaluated at one speed, because neither end
+     * is honest on its own. The aircraft is fast at the start of the run and slow at the end, so the
+     * current speed under-counts the descent by the whole braked part of it and the target speed
+     * over-counts it by the whole fast part. {@link #speedSchedule} is the same profile the descent
+     * leg is flown on, so sampling it is asking the aircraft what it is going to do.
+     */
+    public static double descentAvailable(double from, double to, double distance,
+                                          double maxAngle, double maxSink) {
+        if (distance <= 0) {
+            return 0;
+        }
+        double geometric = Math.tan(Math.toRadians(maxAngle));
+        int samples = 8;
+        double step = distance / samples;
+        double total = 0;
+        for (int i = 0; i < samples; i++) {
+            // Distance still to run at the midpoint of this slice, which is what speedSchedule takes.
+            double remaining = distance - (i + 0.5) * step;
+            double speed = speedSchedule(from, to, remaining / AutopilotConfig.DECELERATION_MARGIN);
+            total += Math.min(geometric, maxSink / Math.max(speed, 1.0E-3)) * step;
+        }
+        return total;
+    }
+
     /**
      * The speed to command right now so that closing the throttle arrives at {@code to} exactly
      * {@code distance} blocks from here — the inverse of {@link #decelerationDistance}.

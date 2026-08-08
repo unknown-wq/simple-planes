@@ -404,6 +404,91 @@ public final class AutopilotConfig {
      */
     public static final double MAX_INTERCEPT_DISTANCE = 900.0;
     public static final double INTERCEPT_EXTENSION_STEP = 150.0;
+
+    /*
+     * ---- deciding the arrival at range, and then flying it ----
+     *
+     * The user's question was "why can't the route to a landing be worked out 200 blocks out, and
+     * then flown". Measured on the rig before this existed, the honest answer was that nothing was
+     * worked out at range at all: a sortie's last waypoint is the *centre of the destination runway*
+     * (AutopilotSpawner#launchInbound), so the cruise flew to the middle of the field and only then
+     * began the arrival — 51 blocks past the threshold on a straight-in down the extended centreline.
+     * From there the aircraft had to fly a complete circuit out to a fix 300 blocks on the approach
+     * side and come back, and the trace shows exactly that: 90 blocks off the centreline at its
+     * widest, 1578 blocks of track flown for a 780-block flight, 1057 ticks from top of descent to
+     * the wheels stopping. None of that was a decision; it was the shape of arriving overhead.
+     *
+     * So the arrival is now decided at a range derived from the aircraft's own geometry, and the
+     * decision is a commitment that is re-checked rather than re-taken.
+     */
+    /**
+     * Turn radii of room to keep beyond the intercept fix when deciding the arrival.
+     *
+     * <p>The join onto the extended centreline is the manoeuvre the decision range has to pay for,
+     * and its worst case is a course reversal, which displaces the aircraft {@code 2 x turnRadius}
+     * sideways before it rolls out. Two radii is that manoeuvre and nothing more; the height and the
+     * speed are dealt with by the final itself, which the fix distance already accounts for.
+     */
+    public static final double ARRIVAL_DECISION_TURN_RADII = 2.0;
+    /**
+     * Floor under the decision range, in blocks, whatever the turn radius works out at.
+     *
+     * <p><b>100 is the user's number, and it belongs here rather than in the rule.</b> At
+     * {@link #CRUISE_SPEED} the starter airframe's turn radius is 59.6 blocks, so two radii is 119
+     * and the floor never binds; at {@link #APPROACH_SPEED} it is 11.5 blocks, two radii is 23, and
+     * without a floor the aircraft would be deciding its arrival from inside the pattern. On the
+     * cargo airframe, whose yaw rate is a fifth, the approach-speed radius is 57 blocks and two of
+     * them are 115 — so 100 blocks is under two turn radii there, which is enough to *verify* a
+     * straight-in and not enough to *repair* a bad entry. That asymmetry is why the rule is derived
+     * from the airframe and 100 is only the floor.
+     */
+    public static final double ARRIVAL_DECISION_FLOOR = 100.0;
+    /**
+     * How far from the destination airfield a flight's last waypoint may be for the arrival to be
+     * allowed to begin before the waypoint is reached.
+     *
+     * <p>A sortie's last waypoint <em>is</em> the field, so flying to it is not a leg of the route,
+     * it is an overfly — and cutting it out is the whole saving. A route's last waypoint is
+     * somewhere the player asked the aircraft to go, so it is flown to as it always was. This is
+     * the test that tells the two apart, and it is deliberately the size of the traffic pattern:
+     * inside the final intercept distance the waypoint is inside the approach the aircraft is about
+     * to fly anyway.
+     */
+    public static final double ARRIVAL_WAYPOINT_IS_THE_FIELD = FINAL_INTERCEPT_DISTANCE;
+    /**
+     * Ticks between re-checks of a committed arrival. The same 20 ticks the runway is polled on and
+     * the corridor raycast is fired on, so the whole arrival re-examines itself once a second.
+     */
+    public static final int ARRIVAL_RECHECK_INTERVAL = 20;
+    /**
+     * How much better a different intercept distance has to be before a committed plan is torn up,
+     * in blocks.
+     *
+     * <p>Without it the plan chatters: measured on the rig on a 172-block-high arrival, the
+     * uncommitted planner announced {@code extended final 600 -> 450 -> 600 -> straight in} in the
+     * space of a second, because {@link #INTERCEPT_EXTENSION_STEP} is a ladder and an aircraft
+     * sitting between two rungs alternates between them. One full step means a replan is a real
+     * change of plan and not a rounding artefact.
+     */
+    public static final double ARRIVAL_REPLAN_MARGIN = INTERCEPT_EXTENSION_STEP;
+    /**
+     * How far above its own profile a committed arrival may be before the plan is torn up, in
+     * blocks.
+     *
+     * <p>Choosing a plan and keeping one are different questions and this is the difference.
+     * {@code ArrivalPlan.decide} picks an entry that closes exactly; {@code ArrivalPlan.closes}
+     * asks whether the entry already being flown is still worth flying, and it is asked again every
+     * second, with the distance still to run shrinking each time. With no slack that test is a
+     * hair-trigger: the rig recorded a perfectly ordinary straight-in tearing itself up into an
+     * extended final five blocks short of its own fix, and back again a second later, because it was
+     * a block and a half high.
+     *
+     * <p>Five blocks is the altitude cascade's steady-state lag with a block in hand — the same lag
+     * that makes the measured threshold crossing 7.6 blocks against a commanded 5.6. It is
+     * deliberately far smaller than anything a landing gate cares about; the gates are unchanged and
+     * still get the last word.
+     */
+    public static final double ARRIVAL_PROFILE_SLACK = 5.0;
     /**
      * Speed the approach is flown at until it is time to brake for the landing, in blocks/tick.
      *
@@ -643,6 +728,37 @@ public final class AutopilotConfig {
     public static final double UPHILL_END_BONUS = 40.0;
     /** Extra clearance an obstacle must leave under the approach path to not be flagged. */
     public static final double SURVEY_OBSTACLE_MARGIN = 3.0;
+
+    /*
+     * ---- deciding the departure before the aircraft rolls ----
+     *
+     * The same idea as the arrival decision above, at the other end of the flight, and it had the
+     * same hole: nothing about where the aircraft was going entered the choice of runway end.
+     * Airfield#departureEnd called bestEnd(level) with no position at all, which answers "which way
+     * would you rather land" — and then the aircraft rolled from that threshold, i.e. climbed out
+     * over the *other* end's funnel, the one bestEnd had just rejected. See DeparturePlan.
+     */
+    /**
+     * How far past the far threshold a climb-out is checked for terrain, in blocks.
+     *
+     * <p>The same {@value #SURVEY_APPROACH_LENGTH} the survey measures an approach funnel over, for
+     * the same reason: it is the distance in which an aircraft on a fixed gradient either clears
+     * what is ahead of it or does not. A departure climbs at {@link #MAX_CLIMB_ANGLE}, so 200 blocks
+     * is 65 blocks of height — more than anything within sight of a strip is going to demand.
+     */
+    public static final int DEPARTURE_CLIMB_OUT_LENGTH = SURVEY_APPROACH_LENGTH;
+    /** Spacing of the climb-out terrain samples, in blocks. */
+    public static final int DEPARTURE_CLIMB_OUT_STEP = SURVEY_APPROACH_STEP;
+    /**
+     * What one blocked column on a climb-out is worth when choosing which way to depart, in blocks
+     * of track.
+     *
+     * <p>The same {@value #APPROACH_OBSTACLE_COST} an arrival pays, and deliberately so: departing
+     * the other way costs at most a turn after take-off, which is a few hundred blocks of track, and
+     * no number of those is worth climbing out at a hillside. Turning the aircraft round is the
+     * cheap answer and this cost is what insists on it.
+     */
+    public static final double DEPARTURE_OBSTACLE_COST = APPROACH_OBSTACLE_COST;
 
     // ---- limits ----
     /** Hard cap on simultaneously active autopilots per server, to bound the tick cost. */

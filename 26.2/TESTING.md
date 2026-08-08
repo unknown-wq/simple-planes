@@ -103,6 +103,31 @@ the aircraft in the world, and test flights all use the same corridor — a park
 line will be rammed by the next one, which registers as a plane-to-plane collision and ends the run
 early with a confusing report. Use `./cmd.sh "kill @e[type=simpleplanes:plane]"`.
 
+**`kill @e` only sees loaded chunks, and that will cost you a whole comparison.** `@e` selects
+entities in chunks that are resident, so after a server restart — which is exactly what swapping the
+jar between a baseline run and an "after" run requires — the aircraft the previous runs parked on the
+runway are invisible to it and survive. The next arrival then lands *on top of one of them* and
+reports
+
+```
+Plane #1 did not land at airfield-1/36: came to rest 4 blocks above the runway surface, at 1, -56, -25.
+```
+
+which reads like a landing bug and is a stale hulk. The trace gives it away: `og=true` with
+`agl=3.60` and `gnd=-60.0`, i.e. standing on something the heightmap cannot see, because entities are
+not in a heightmap. **Force-load the runway before the kill**, every run:
+
+```sh
+./cmd.sh "forceload add -32 -240 32 32"; sleep 3
+./cmd.sh "kill @e[type=simpleplanes:plane]"; sleep 1
+./cmd.sh "forceload remove all"
+```
+
+**`/fill` over 32768 blocks does nothing, quietly enough to fool you.** Building test terrain, a
+`fill` of 41×37×41 = 62 197 blocks prints its refusal and changes not one block — and the next survey
+then reports `approach obstacles: 36 -> 0`, which looks exactly like an obstacle test that has
+disproved itself. Split the fill and re-read the survey line before trusting the run.
+
 `start.sh` keeps a FIFO open on the server's stdin, so `cmd.sh` can feed console commands to a
 running server at any time; `console.log` is the transcript. Command output (`sendSuccess`) is
 printed to the console, so assertions can be made by grepping the log.
@@ -448,6 +473,72 @@ Two traps:
 * **Poll deduplication matters.** A status command issued twice inside one tick prints the same
   position twice; drop consecutive identical `pos=` samples before summing anything, or the
   track comes out short and the climb comes out zero.
+
+### Recipe: is the arrival being planned, or discovered
+
+The question `AUTOPILOT.md` §4d exists to answer, and it is answered by two numbers off the trace and
+one line out of the log. Fly the same arrival on the two jars and compare:
+
+```sh
+./cmd.sh 'autopilot inbound 0 -30 700 "airfield-1" 2.60'
+./cmd.sh "tick sprint 9000"
+strings console.log | grep -E "arrival at|replanning|going around|landed at"
+```
+
+* **Where `DESCENT` is entered.** `grep " descent "` the trace and read the first `dthr=`. Positive is
+  blocks before the threshold; **negative means the arrival began over the runway**, which is what a
+  waypoint-triggered arrival does. Before this work it read `dthr=-51.2`; it now reads about `+415`,
+  and the log says so in as many words: `straight in, decided 415 blocks out`.
+* **Track flown against the direct distance.** Sum the horizontal chords between consecutive `pos=`
+  samples. A straight-in launched 780 blocks out flew **1578** blocks of track when the arrival began
+  overhead and **737** when it is decided at range; the difference is one whole unplanned circuit.
+* **Peak `lat=` while the mode is `approach` or `final`.** Not while it is `descent` — an aircraft
+  legitimately running in from abeam is a long way off the centreline and that is not an excursion.
+  41.8 blocks before, 0.0 after, on the same flight.
+
+`plan[…]` on `/autopilot status` and `replans=N` beside `go-arounds=N` are the same story live.
+
+### Recipe: terrain the survey never saw
+
+The case the replan triggers exist for, and the only one on a flat rig that produces a go-around at
+all. Survey the field **first**, then build the obstacle, so the stored obstacle counts are honest
+about a world that has since changed:
+
+```sh
+./cmd.sh "forceload add -32 -240 32 160"; sleep 4
+./cmd.sh "fill -15 -61 90 15 -40 130 minecraft:stone"     # 21 blocks tall, 90-130 out on the 36 funnel
+./cmd.sh "forceload remove all"
+./cmd.sh 'autopilot inbound 0 -30 700 "airfield-1" 2.60'
+./cmd.sh "tick sprint 30000"
+```
+
+Expect, on a build that only plans overhead, three `going around (n/3): terrain in the approach
+corridor` and then a switch to the other end — 2018 ticks and 2350 blocks of track. On one that
+re-checks its committed plan, one line:
+
+```
+Plane #2 replanning the arrival at airfield-1/18: straight in, decided 529 blocks out (terrain across the 36 glide slope).
+```
+
+1353 ticks, no go-arounds. **Restore the ground afterwards in two fills** — the wall replaced the
+grass layer, so `air` over `-60…-40` and `grass_block` at `-61` — and re-survey if you changed
+anything inside 200 blocks of a threshold.
+
+The departure half of the same test needs the obstacle *where a climb-out actually is*, which is much
+closer in: an aircraft turns on course within about 40 blocks of the far threshold, so a wall 90
+blocks out is never overflown and proves nothing. Put it 20 to 60 blocks off the threshold, survey,
+and send a sortie to a field **in line with the runway** so the departure climbs straight out:
+
+```sh
+./cmd.sh "fill -20 -61 20 20 -25 40 minecraft:stone"      # two fills: one would exceed 32768
+./cmd.sh "fill -20 -61 41 20 -25 60 minecraft:stone"
+./cmd.sh "autopilot survey 0 -60 0 0 -60 -160"            # -> approach obstacles: 36 -> 5, 18 -> 0
+./cmd.sh 'autopilot flight "airfield-1" "airfield-3" 2.60'
+```
+
+`airfield-3` here is a strip 2660 blocks due south. The assertion is one line either way:
+`Plane #100 lost at 19, -27, 19 in climb.` against
+`Plane #4 departure from airfield-1: depart 36, 180 deg turn to course.`
 
 ### Recipe: several arrivals at once
 

@@ -68,10 +68,20 @@ public class PlaneAutopilot {
     private final RoutePlanner router = new RoutePlanner();
     /** How the arrival is being flown and why; null until the aircraft starts down. */
     private @Nullable ArrivalPlan arrival;
+    /** Tick the committed arrival is next re-checked on; see {@link #commitArrival}. */
+    private int nextArrivalCheck;
+    /** How many times the committed arrival has been torn up, for the flight report. */
+    private int replans;
+    /** Approach obstacle count the committed plan was made against, to notice terrain appearing. */
+    private int plannedObstacles;
+    /** Runway end already replanned away from for terrain, so it is only ever said once. */
+    private @Nullable String corridorReplannedFor;
     private @Nullable Airfield landingAirfield;
     private @Nullable RunwayEnd landingEnd;
     /** Runway this sortie departs from, resolved once at launch; null for an airborne launch. */
     private @Nullable RunwayEnd departureEnd;
+    /** Which way this sortie leaves the field and why; null for an airborne launch. */
+    private @Nullable DeparturePlan departurePlan;
     /** Ticks still to sit on the parking spot before the runway is asked for. */
     private int departureHoldTicks;
     /** Set once "waiting for the runway" has been reported, so a long wait says it exactly once. */
@@ -126,7 +136,11 @@ public class PlaneAutopilot {
         this.gatesDisabled = false;
         this.landingAirfield = null;
         this.landingEnd = null;
+        this.arrival = null;
+        this.replans = 0;
+        this.corridorReplannedFor = null;
         this.departureEnd = null;
+        this.departurePlan = null;
         this.departureHoldTicks = 0;
         this.departureBlockedReported = false;
         this.holdFix = null;
@@ -139,8 +153,11 @@ public class PlaneAutopilot {
             setMode(plane, AutopilotMode.STRIKE);
             return;
         }
-        departureEnd = resolveDeparture(plane, flightPlan);
+        departurePlan = resolveDeparture(plane, flightPlan);
+        departureEnd = departurePlan == null ? null : departurePlan.end();
         if (departureEnd != null) {
+            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " departure from "
+                + departureEnd.airfield().name() + ": " + departurePlan.describe().getString() + ".");
             // Always through PARKED, even with no delay ordered: this is where the runway is asked
             // for, and a zero delay simply means the first tick asks for it.
             departureHoldTicks = flightPlan.departureDelayTicks();
@@ -152,13 +169,24 @@ public class PlaneAutopilot {
         }
     }
 
-    /** The runway a ground departure rolls from, or null when the flight starts in the air. */
-    private static @Nullable RunwayEnd resolveDeparture(PlaneEntity plane, FlightPlan plan) {
+    /**
+     * How a ground departure leaves the field, or null when the flight starts in the air.
+     *
+     * <p>Decided here rather than assumed, and decided <em>with the destination</em>: see
+     * {@link DeparturePlan}. It reproduces the choice {@code AutopilotSpawner} already made when it
+     * put the aircraft on its parking spot — the same inputs and the same score — so the aircraft
+     * never taxis to the opposite end from the one it was parked beside.
+     */
+    private static @Nullable DeparturePlan resolveDeparture(PlaneEntity plane, FlightPlan plan) {
         if (plan.departureAirfield() == null || !(plane.level() instanceof ServerLevel serverLevel)) {
             return null;
         }
         Airfield airfield = AutopilotSavedData.get(serverLevel).get(plan.departureAirfield());
-        return airfield == null ? null : Airfield.departureEnd(serverLevel, airfield);
+        if (airfield == null) {
+            return null;
+        }
+        return DeparturePlan.decide(serverLevel, airfield, plan.currentWaypointGround(),
+            plane.autopilotRotationSpeedMultiplier());
     }
 
     /**
@@ -665,6 +693,10 @@ public class PlaneAutopilot {
             beginLanding(plane);
             return;
         }
+        if (arrivalDecisionReached(plane)) {
+            beginLanding(plane);
+            return;
+        }
         cmdHeading = AutopilotMath.headingTo(plane.position(), waypoint);
         cmdTargetAltitude = waypoint.y;
         // A route aircraft now carries a booster like a strike does, so the cruise may use the whole
@@ -847,6 +879,52 @@ public class PlaneAutopilot {
     }
 
     /**
+     * Whether the aircraft has reached the range at which its arrival has to be settled.
+     *
+     * <p>This is the answer to "why can it not work the whole route to a landing out a couple of
+     * hundred blocks away and then fly it". It could not, because it was never asked to: a sortie's
+     * last waypoint is the <em>centre of the destination runway</em>, so the cruise leg ran to the
+     * middle of the field and the arrival began there. Measured on the rig on a straight-in down the
+     * extended centreline, the aircraft entered {@code DESCENT} <b>51 blocks past the threshold</b>,
+     * over the strip, and then flew a full circuit — 90 blocks off the centreline at its widest — to
+     * reach a fix 300 blocks out on the side it had just come from. 1578 blocks of track for a
+     * 780-block flight, and none of it was a decision.
+     *
+     * <p>Three conditions, and the last two exist so that nothing about a <em>route</em> changes:
+     *
+     * <ul>
+     *   <li>this is the last leg, so the flight really does end in a landing;</li>
+     *   <li>the destination is a named airfield that still exists;</li>
+     *   <li>the last waypoint is inside {@link AutopilotConfig#ARRIVAL_WAYPOINT_IS_THE_FIELD} of it,
+     *       i.e. the waypoint <em>is</em> the field. Flying to it is then an overfly rather than a
+     *       leg of the route, and cutting it out is the whole saving. A route wand's last waypoint
+     *       is somewhere a player pointed at and is still flown to, exactly as before.</li>
+     * </ul>
+     *
+     * <p>The range itself is {@link ArrivalPlan#decisionRange}, which is the fix distance plus two
+     * of the aircraft's own turn radii — 419 blocks for the starter airframe at cruise speed. It is
+     * measured to the <em>threshold</em> rather than to the intercept fix because an arrival from
+     * abeam never passes near the fix at all: it would sail past the decision and end up overhead
+     * again, which is the behaviour being removed.
+     */
+    private boolean arrivalDecisionReached(PlaneEntity plane) {
+        if (plan == null || !plan.onFinalLeg() || plan.airfieldName() == null
+            || !(plane.level() instanceof ServerLevel serverLevel)) {
+            return false;
+        }
+        Airfield airfield = AutopilotSavedData.get(serverLevel).get(plan.airfieldName());
+        Vec3 waypoint = plan.currentWaypointGround();
+        if (airfield == null || waypoint == null
+            || AutopilotMath.horizontalDistance(waypoint, airfield.centre())
+                > AutopilotConfig.ARRIVAL_WAYPOINT_IS_THE_FIELD) {
+            return false;
+        }
+        RunwayEnd end = landingEnd != null ? landingEnd : airfield.bestEnd(serverLevel, plane.position());
+        return AutopilotMath.horizontalDistance(plane.position(), end.threshold())
+            <= ArrivalPlan.decisionRange(capability(plane));
+    }
+
+    /**
      * The run down to the point where the final approach is joined.
      *
      * <p>Two things here used to be constants and are now decisions, and both were costing whole
@@ -872,9 +950,7 @@ public class PlaneAutopilot {
             stop(plane);
             return;
         }
-        boolean free = RunwayOccupancy.isFree(plane.level(), landingAirfield.name(), plane);
-        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, plane.position(), free);
-        announceArrival(plane, planned);
+        ArrivalPlan planned = reviewArrival(plane, true);
 
         Vec3 initialFix = planned.interceptFix();
         cmdHeading = AutopilotMath.headingTo(plane.position(), initialFix);
@@ -906,19 +982,159 @@ public class PlaneAutopilot {
         }
     }
 
+    /** What the arrival planner needs to know about this airframe, at this moment. */
+    private static ArrivalPlan.Capability capability(PlaneEntity plane) {
+        return new ArrivalPlan.Capability(plane.position(),
+            plane.getDeltaMovement().horizontalDistance(),
+            plane.autopilotRotationSpeedMultiplier());
+    }
+
     /**
-     * Records the arrival plan and says so once, when it changes. Reported rather than whispered:
-     * "why is it circling" is precisely the question a headless log has to be able to answer, and
-     * the reason phrase is the answer.
+     * Returns the committed arrival, computing it the first time and re-checking it thereafter.
+     *
+     * <p><b>Commit, then verify — not decide every tick.</b> The plan used to be recomputed from
+     * scratch on every tick of the descent, which sounds harmless and is not: the extension ladder
+     * is discrete, so an aircraft sitting between two rungs alternates between them, and the rig
+     * recorded {@code extended final 600 -> 450 -> 600 -> straight in} inside a single second on one
+     * arrival. Worse, nothing was ever committed to, so there was no such thing as a plan failing —
+     * only a different plan appearing, silently, with the aircraft already partway through the last
+     * one.
+     *
+     * <p>It is re-checked rather than frozen, because a committed plan that cannot be revised is the
+     * worse failure of the two. {@link #replanTrigger} lists what may tear one up; anything else
+     * leaves it alone.
      */
-    private void announceArrival(PlaneEntity plane, ArrivalPlan planned) {
-        boolean changed = arrival == null || arrival.entry() != planned.entry()
-            || Math.abs(arrival.interceptDistance() - planned.interceptDistance()) > 1.0;
-        arrival = planned;
-        if (changed) {
-            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " arrival at "
-                + landingAirfield.name() + "/" + planned.end().designator() + ": " + planned.reason() + ".");
+    private ArrivalPlan reviewArrival(PlaneEntity plane, boolean profileToo) {
+        boolean free = RunwayOccupancy.isFree(plane.level(), landingAirfield.name(), plane);
+        ArrivalPlan.Capability me = capability(plane);
+        if (arrival == null) {
+            commitArrival(plane, ArrivalPlan.decide(landingEnd, me, free), null);
+            return arrival;
         }
+        if (ticks < nextArrivalCheck) {
+            return arrival;
+        }
+        nextArrivalCheck = ticks + AutopilotConfig.ARRIVAL_RECHECK_INTERVAL;
+        String trigger = replanTrigger(plane, me, free, profileToo);
+        if (trigger != null) {
+            replans++;
+            // Which end is right is not something an ArrivalPlan can decide — it is handed one — so
+            // the end is re-chosen here, from where the aircraft now is and against whatever terrain
+            // has since become visible. Not once a go-around has happened: goAround() takes the end
+            // over at that point (it switches to the opposite one after MAX_GO_AROUNDS), and a
+            // replan that re-ran bestEnd would hand it straight back and the two would swap the
+            // aircraft between the ends for ever.
+            if (goArounds == 0) {
+                landingEnd = landingAirfield.bestEnd(plane.level(), plane.position());
+            }
+            commitArrival(plane, ArrivalPlan.decide(landingEnd, me, free), trigger);
+        }
+        return arrival;
+    }
+
+    /**
+     * Why the committed arrival has to be torn up, or null to fly the one already decided.
+     *
+     * <p>Three things can invalidate a plan that was sound when it was made, and they are the three
+     * kinds of thing that change underneath an aircraft: the traffic, the terrain, and the aircraft
+     * itself drifting off the profile the plan assumed.
+     *
+     * @param profileToo whether to weigh the profile as well as the traffic and the terrain. False
+     *                   once the aircraft is established on the final and running down the slope:
+     *                   the plan has been executed by then, there is nothing left to choose between,
+     *                   and the authority on whether the approach is good enough to land from is the
+     *                   landing gates. Re-deciding there produced nothing but noise on the rig — a
+     *                   straight-in announcing an extended final five blocks short of its own fix —
+     *                   and would be a second, weaker set of gates besides the real ones.
+     */
+    private @Nullable String replanTrigger(PlaneEntity plane, ArrivalPlan.Capability me, boolean free,
+                                           boolean profileToo) {
+        boolean wasTraffic = arrival.entry() == ArrivalPlan.Entry.TRAFFIC;
+        if (wasTraffic != !free) {
+            return free ? "the runway is free" : "the runway is busy";
+        }
+        // Terrain the survey did not know about — built since, or in a chunk nobody had loaded when
+        // the plan was made. Two probes, because neither answers on its own:
+        //
+        //  - the glide slope itself, raycast from the fix to the aim point. This is the only test
+        //    that *loads* what it looks at, and that is the whole point: the ground under a final is
+        //    exactly the part of the world nobody has generated when the arrival is decided 415
+        //    blocks out, and the heightmap declines to answer for it.
+        //  - the heightmap obstacle count, which is cheap and, once the ray has loaded the ground,
+        //    is what tells the *end choice* which end is now the dirty one.
+        //
+        // Measured with a wall thrown across the 36 funnel after the runway was surveyed: with only
+        // the heightmap probe the plan never changed, because the wall's chunks were still unloaded
+        // every time it was consulted, and the aircraft flew the same approach into the same wall
+        // three times before the go-around counter switched ends for it.
+        // Once per end, and no more. If the replan lands on the same end anyway — an overhang is
+        // invisible to the heightmap, so bestEnd may not agree there is anything wrong — firing
+        // again every second would replan for ever and never change anything. Saying it once and
+        // leaving the corridor raycast in tickApproach to produce the go-around is the honest
+        // outcome: that gate is unchanged and is still the thing that refuses the landing.
+        if (!landingEnd.designator().equals(corridorReplannedFor)
+            && !plannedCorridorClear(plane, landingEnd, arrival.interceptDistance())) {
+            corridorReplannedFor = landingEnd.designator();
+            return "terrain across the " + landingEnd.designator() + " glide slope";
+        }
+        int obstacles = landingAirfield.approachObstacles(plane.level(), landingEnd);
+        if (obstacles > plannedObstacles) {
+            return obstacles + " column" + (obstacles == 1 ? "" : "s")
+                + " now visible in the " + landingEnd.designator() + " approach";
+        }
+        if (!profileToo) {
+            return null;
+        }
+        if (!arrival.closes(me)) {
+            return "the profile no longer closes";
+        }
+        if (arrival.shorterAvailable(me)) {
+            return "a shorter final now closes";
+        }
+        return null;
+    }
+
+    /**
+     * Whether the glide slope this plan would be flown down is clear of terrain.
+     *
+     * <p>Traced along the <em>planned final</em> — from a point on the slope to the aim point — and
+     * not from wherever the aircraft happens to be. That is deliberate: the question the planner is
+     * asking is "is the approach I am about to commit to flyable", which is a property of the
+     * runway and the plan, and a ray from the aircraft would also flag any ridge it is going to
+     * climb over on the way in.
+     *
+     * <p><b>It is the only probe here that loads what it looks at.</b> {@code Level#clip} reads
+     * block states, and {@code Level#getBlockState} generates the chunk if it has to, where every
+     * heightmap probe in this feature returns {@code UNKNOWN_HEIGHT} instead. That is what makes it
+     * worth its cost — and the cost is bounded on purpose: the trace starts no further out than
+     * {@link AutopilotConfig#FINAL_INTERCEPT_DISTANCE}, so an extended final 900 blocks long is
+     * checked over its last 300 rather than over all of it. Those are the blocks that matter, since
+     * the slope is lowest there, and it keeps the first call to about twenty chunks whatever the
+     * plan. Later calls trace the same fixed line over ground that is by then resident.
+     */
+    private boolean plannedCorridorClear(PlaneEntity plane, RunwayEnd end, double interceptDistance) {
+        double from = Math.min(interceptDistance, AutopilotConfig.FINAL_INTERCEPT_DISTANCE);
+        Vec3 start = end.approachPoint(from, end.glideSlopeAltitude(from) - end.elevation());
+        Vec3 aim = end.aimPoint();
+        return TerrainScanner.pathClear(plane.level(), plane, start, new Vec3(aim.x, aim.y + 2, aim.z));
+    }
+
+    /**
+     * Records the arrival plan and says so, once, when it is taken. Reported rather than whispered:
+     * "why is it circling" is precisely the question a headless log has to be able to answer, and
+     * the reason phrase is the answer. A replan says what made it replan, which is the other half —
+     * a plan that changes for no stated reason is indistinguishable from one that was never made.
+     */
+    private void commitArrival(PlaneEntity plane, ArrivalPlan planned, @Nullable String trigger) {
+        arrival = planned;
+        nextArrivalCheck = ticks + AutopilotConfig.ARRIVAL_RECHECK_INTERVAL;
+        plannedObstacles = landingAirfield.approachObstacles(plane.level(), planned.end());
+        double range = AutopilotMath.horizontalDistance(plane.position(), planned.end().threshold());
+        AutopilotFeedback.report(owner, "Plane #" + plane.getId()
+            + (trigger == null ? " arrival at " : " replanning the arrival at ")
+            + landingAirfield.name() + "/" + planned.end().designator() + ": " + planned.reason()
+            + ", decided " + Math.round(range) + " blocks out"
+            + (trigger == null ? "" : " (" + trigger + ")") + ".");
     }
 
     /** The cruise speed this flight was ordered to fly, or the default for a plan-less aircraft. */
@@ -961,6 +1177,27 @@ public class PlaneAutopilot {
             holdFix = interceptFix();
             setMode(plane, AutopilotMode.HOLD);
             return;
+        }
+
+        // The committed plan is re-checked here too, and not only on the run down to the fix. The
+        // reason is entirely about chunks: an obstacle 200 blocks the far side of the threshold is
+        // not loaded when the arrival is decided 415 blocks out, and the aircraft's own ticket only
+        // keeps about 110 blocks of ground ahead of it resident. Measured with a wall thrown across
+        // the 36 funnel after the survey, checking only in DESCENT left the plan untouched and the
+        // aircraft flew the same approach into the same wall three times.
+        //
+        // Only before FINAL. Inside the handover distance the gates own the decision, and swapping
+        // runway ends there is a go-around under another name.
+        RunwayEnd committedEnd = landingEnd;
+        if (!isFinal) {
+            ArrivalPlan reviewed = reviewArrival(plane, false);
+            if (landingEnd != committedEnd || reviewed.entry().circling()) {
+                // A different end, or no flyable final at all: hand it back to the descent, which is
+                // the phase that knows how to fly to a fix and how to enter the hold.
+                holdFix = interceptFix();
+                setMode(plane, AutopilotMode.DESCENT);
+                return;
+            }
         }
 
         Vec3 position = plane.position();
@@ -1282,9 +1519,11 @@ public class PlaneAutopilot {
         }
         // Free runway. Rejoin as soon as some final — extended if need be — can absorb whatever
         // height is left, which for an aircraft that only ever held for traffic is immediately.
-        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, plane.position(), true);
+        ArrivalPlan planned = ArrivalPlan.decide(landingEnd, capability(plane), true);
         if (!planned.entry().circling()) {
-            announceArrival(plane, planned);
+            // Not a replan: the hold was the plan, and this is the arrival being decided for real
+            // now that there is a runway to decide it against.
+            commitArrival(plane, planned, null);
             setMode(plane, AutopilotMode.DESCENT);
         }
     }
@@ -1589,6 +1828,13 @@ public class PlaneAutopilot {
      * and the tower board. A path planner whose reasoning is invisible is one nobody can debug.
      */
     public Component planComponent() {
+        // Three planners, one field, in the order the flight uses them: how it is leaving, how it is
+        // getting there, and how it is arriving. The departure plan is the answer while the aircraft
+        // is still on the ground, which is exactly when "which way is it going to go" is the
+        // question and the status line used to answer it with the route planner's "direct".
+        if (departurePlan != null && (mode == AutopilotMode.PARKED || mode.holdsDepartureRunway())) {
+            return departurePlan.describe();
+        }
         boolean enRoute = mode == AutopilotMode.CRUISE || mode == AutopilotMode.CLIMB
             || mode == AutopilotMode.STRIKE;
         return !enRoute && arrival != null ? arrival.describe() : router.describe();
@@ -1735,6 +1981,13 @@ public class PlaneAutopilot {
         }
         if (goArounds > 0) {
             builder.append(" go-arounds=").append(goArounds);
+        }
+        // Beside the go-around count on purpose: the two together are how a committed arrival is
+        // judged. A replan is the plan being repaired in the air, which is the outcome this feature
+        // wants; a go-around is the same failure discovered at the gate, which is the one it does
+        // not. Reading only one of the two numbers tells you nothing.
+        if (replans > 0) {
+            builder.append(" replans=").append(replans);
         }
         if (plan != null && plan.kind() == FlightPlan.Kind.ROUTE) {
             builder.append(" legs=").append(plan.legsFlown()).append('/').append(plan.maxLegs());

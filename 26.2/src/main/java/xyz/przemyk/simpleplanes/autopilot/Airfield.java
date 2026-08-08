@@ -163,15 +163,8 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     public RunwayEnd bestEnd(Level level, @Nullable Vec3 from) {
         RunwayEnd a = endA();
         RunwayEnd b = endB();
-        int obstaclesA;
-        int obstaclesB;
-        if (hasSurveyedApproaches()) {
-            obstaclesA = approachObstaclesA;
-            obstaclesB = approachObstaclesB;
-        } else {
-            obstaclesA = scoreApproach(level, a);
-            obstaclesB = scoreApproach(level, b);
-        }
+        int obstaclesA = approachObstacles(level, a);
+        int obstaclesB = approachObstacles(level, b);
         if (from == null) {
             if (obstaclesA != obstaclesB) {
                 return obstaclesA < obstaclesB ? a : b;
@@ -180,6 +173,33 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             return pointB().y >= pointA().y ? a : b;
         }
         return arrivalCost(a, obstaclesA, from) <= arrivalCost(b, obstaclesB, from) ? a : b;
+    }
+
+    /**
+     * Columns poking through the approach funnel of one end: the surveyed count where there is one,
+     * and a live measurement otherwise.
+     *
+     * <p>Split out of {@link #bestEnd} because a departure needs the same number about the
+     * <em>opposite</em> end — the funnel it climbs out over — and there was no way to ask for it.
+     * See {@link DeparturePlan}.
+     */
+    public int approachObstacles(Level level, RunwayEnd end) {
+        if (!hasSurveyedApproaches()) {
+            return scoreApproach(level, end);
+        }
+        // Which of the two stored counts this is, by which of the two stored thresholds the end
+        // crosses. Nearest rather than equal: a RunwayEnd is a value, callers build their own with
+        // opposite(), and a count silently attributed to the wrong end of the strip is the exact
+        // failure this whole area has already had once.
+        int surveyed = end.threshold().distanceToSqr(pointA()) <= end.threshold().distanceToSqr(pointB())
+            ? approachObstaclesA : approachObstaclesB;
+        // ...and whatever has appeared since. A survey is a photograph: it is trustworthy about the
+        // moment it was taken and says nothing about a hill that was built, or a chunk that was
+        // generated, afterwards. Taking the larger of the two keeps the survey as the floor — which
+        // is what stops an unloaded funnel scoring zero and winning — while letting an obstacle the
+        // aircraft can now actually see be counted. Unknown columns are skipped in the live count
+        // for exactly that reason: the surveyed number already speaks for them.
+        return Math.max(surveyed, countApproachObstacles(level, end));
     }
 
     /** Track an arrival at {@code from} has to fly to land on this end, plus what its funnel costs. */
@@ -193,14 +213,31 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     /**
      * The runway end a departure should roll <em>from</em>.
      *
-     * <p>{@link #bestEnd} answers "which way should an aircraft land", i.e. which threshold to cross
-     * on the way in. A departure wants the opposite: it starts at that threshold and rolls away from
-     * it, down the same strip, so it climbs out over the cleaner funnel. Returning
-     * {@code bestEnd} directly is exactly right — a {@link RunwayEnd} is "threshold plus the far end
-     * to run towards", which is the same geometry for a take-off roll as for a roll-out.
+     * <p>This used to be {@code airfield.bestEnd(level)}, and that was the wrong question asked of
+     * the wrong data. {@link #bestEnd} scores each end by its own <em>approach</em> funnel — the
+     * ground before its threshold — because that is what an arrival flies through. A departure that
+     * rolls from that threshold runs the other way down the strip and climbs out past the far one,
+     * over the opposite end's funnel: the one {@code bestEnd} had just rejected. On a field with a
+     * hill off one end, the aircraft landed away from the hill and departed straight at it.
+     *
+     * <p>{@link DeparturePlan} asks it properly, and with the one input the old call did not have —
+     * where the flight is going. See that class for the score.
      */
     public static RunwayEnd departureEnd(Level level, Airfield airfield) {
-        return airfield.bestEnd(level);
+        return departureEnd(level, airfield, null);
+    }
+
+    /**
+     * As {@link #departureEnd(Level, Airfield)}, for a flight that knows where it is going.
+     *
+     * <p>Called from two places that must not disagree — the spawner, which puts the aircraft on a
+     * parking spot beside one threshold, and the flight director, which then taxis to it. Both terms
+     * of {@link DeparturePlan}'s score favour the same end (the one nearer the destination is also
+     * the one with the smaller turn onto course), so the airframe's turn rate can change the turn
+     * the plan <em>reports</em> but not the end it picks.
+     */
+    public static RunwayEnd departureEnd(Level level, Airfield airfield, @Nullable Vec3 destination) {
+        return DeparturePlan.decide(level, airfield, destination, 1.0).end();
     }
 
     /**
