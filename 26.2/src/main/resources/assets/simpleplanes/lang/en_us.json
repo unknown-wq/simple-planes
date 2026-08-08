@@ -138,6 +138,7 @@
     "simpleplanes.autopilot.detail.size": "  length %s, width %s, slope %s deg, roughness %s",
     "simpleplanes.autopilot.detail.threshold": "  threshold %s: elevation %s, heading %s deg, approach obstacles %s of %s",
     "simpleplanes.autopilot.detail.preferred": "  preferred landing direction %s",
+    "simpleplanes.autopilot.detail.touchdown": "  touchdown aim %s blocks in, stopping by about %s of %s",
     "simpleplanes.autopilot.detail.usable": "  usable: needs %s blocks, has %s",
     "simpleplanes.autopilot.detail.unusable": "  TOO SHORT: needs %s blocks, has %s - sorties into it are refused",
     "simpleplanes.autopilot.detail.free": "  runway free",

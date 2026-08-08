@@ -375,8 +375,13 @@ public class PlaneAutopilot {
         String runway = "";
         if (landingEnd != null) {
             double runwayHeading = landingEnd.landingHeading();
-            runway = String.format(" thr_y=%.1f dthr=%.1f lat=%.1f", landingEnd.threshold().y,
-                -AutopilotMath.alongTrack(landingEnd.threshold(), runwayHeading, position),
+            // daim is the one the arrival is actually flown to: the glide slope ends on it, the
+            // flare is triggered relative to it and the "still airborne" go-around is measured from
+            // it. dthr is kept beside it because the threshold is what the report and the survey
+            // speak in, and watching the two diverge is how the aim rule is checked.
+            double dthr = -AutopilotMath.alongTrack(landingEnd.threshold(), runwayHeading, position);
+            runway = String.format(" thr_y=%.1f dthr=%.1f daim=%.1f lat=%.1f", landingEnd.threshold().y,
+                dthr, dthr + landingEnd.aimOffset(),
                 AutopilotMath.lateralOffset(landingEnd.threshold(), runwayHeading, position));
         }
         // hdg/cmdhdg/roll are here because every lateral defect this feature has had is invisible
@@ -1012,11 +1017,22 @@ public class PlaneAutopilot {
         // two numbers are identical, which is why the difference went unnoticed. They are nothing
         // like each other on an approach that crosses a valley or a coastline, and there the ground
         // reading is the wrong one: it starts the gates late over low ground and early over high.
-        double heightAboveRunway = position.y - threshold.y;
+        //
+        // The datum is the aim point rather than the threshold, which is the same choice as the
+        // glide slope's endpoint and has to be the same choice: the flare is triggered on this
+        // number and the glide slope decides where the aircraft will be when it reaches it. Aiming
+        // at one point and flaring relative to another is exactly the disagreement that produced
+        // "landed 1 block down the runway" on a 183-block strip. Identical to the threshold on a
+        // level runway, which is every runway the rig flies.
+        double heightAboveRunway = position.y - landingEnd.touchdownElevation();
+        double distanceToAim = distanceToThreshold + landingEnd.aimOffset();
 
-        // Flew past the threshold without getting down: go around.
-        if (distanceToThreshold < -5) {
-            goAround(plane, "crossed the threshold still airborne");
+        // Flew past the aim point without getting down: go around. Measured against the aim point
+        // and not the threshold now, because the threshold is no longer where the aircraft is trying
+        // to arrive — on a 183-block field it aims 37 blocks in, so a threshold-referenced version
+        // of this check would send every single approach around 32 blocks before it flared.
+        if (distanceToAim < -5) {
+            goAround(plane, "crossed the touchdown point still airborne");
             return;
         }
 
@@ -1137,8 +1153,9 @@ public class PlaneAutopilot {
         }
         // Height above the runway, for the same reason the flare is entered on it: over ground that
         // falls away past the threshold, AGL climbs on its own and the aircraft would abandon a
-        // perfectly good flare for a balloon it never made.
-        double heightAboveRunway = plane.position().y - landingEnd.threshold().y;
+        // perfectly good flare for a balloon it never made. Same datum the flare was entered on —
+        // the aim point — so the entry and the abort cannot disagree about how high the aircraft is.
+        double heightAboveRunway = plane.position().y - landingEnd.touchdownElevation();
         if (heightAboveRunway > AutopilotConfig.FLARE_HEIGHT * 4 && modeTicks > 20) {
             // Ballooned back up — re-establish the approach.
             setMode(plane, AutopilotMode.FINAL);
@@ -1169,11 +1186,22 @@ public class PlaneAutopilot {
                 + ", " + Math.round(plane.getZ());
             String problem = landingProblem(plane);
             if (problem == null) {
-                long down = Math.round(Math.abs(AutopilotMath.alongTrack(
-                    landingEnd.threshold(), landingEnd.landingHeading(), plane.position())));
+                double along = Math.abs(AutopilotMath.alongTrack(
+                    landingEnd.threshold(), landingEnd.landingHeading(), plane.position()));
+                long down = Math.round(along);
+                // How much of the strip the landing actually consumed, which is the thing a player
+                // judges by eye and could not previously read anywhere. "3 blocks down the runway"
+                // says nothing about whether that is a tidy arrival on a short field or an aircraft
+                // that has parked itself on the very lip of a 183-block one; the percentage says
+                // which, and it is what the aim point is tuned against.
+                long used = Math.round(100.0 * along / Math.max(landingEnd.length(), 1.0E-3));
                 AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " landed at "
                     + landingAirfield.name() + "/" + landingEnd.designator() + ", " + where
-                    + " (" + down + (down == 1 ? " block" : " blocks") + " down the runway).");
+                    // "the N-block runway" rather than "a N-block runway": the indefinite article
+                    // would need a/an chosen from how the number is pronounced ("an 18-block", "a
+                    // 183-block"), which is not a rule worth writing.
+                    + " (" + down + (down == 1 ? " block" : " blocks") + " down the "
+                    + Math.round(landingEnd.length()) + "-block runway, " + used + "% used).");
             } else {
                 AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " did not land at "
                     + landingAirfield.name() + "/" + landingEnd.designator() + ": came to rest "

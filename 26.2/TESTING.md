@@ -73,6 +73,19 @@ grep -E "Strike|Plane #" console.log
 ./stop.sh
 ```
 
+**Sprint the clock rather than waiting for it.** `/tick sprint <ticks>` is vanilla and runs the world
+as fast as the CPU allows — 600–1300 ticks/s with an aircraft airborne here, so the 25-second sleep
+above becomes well under a second and a full sortie becomes a few seconds. Ticks are still ticks;
+only wall-clock time changes, which is why it does not perturb anything the flight model does. Issue
+it after the flight command, and `/tick sprint stop` when the outcome line appears.
+
+**Run your own copy on your own port.** Several of these servers exist side by side on this container
+(`/home/user/testserver` on 25565 and others beside it); copy the launcher, `libraries`, `versions`,
+`mods`, `eula.txt`, `server.properties` and `ops.json` into a new directory, change `server-port`,
+`query.port` and `rcon.port`, and take a fresh world. Sharing one rig between two people running
+`tick sprint` and `kill @e` at each other is not a test, and a world full of another agent's
+airfields will renumber yours.
+
 **No `forceload` is needed for a flight**, and adding one mostly hides bugs. Autopilot aircraft carry
 their own rolling chunk tickets and are renewed from the server tick (see `AUTOPILOT.md`, "Chunk
 loading"), so an 800-block strike and a 2000-block airfield-to-airfield sortie both complete with
@@ -141,8 +154,12 @@ sortie takes about **two minutes** of wall clock at the 2.60 default (it was nea
 `./cmd.sh "autopilot status"` to watch it, and assert on the final line:
 
 ```
-Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).
+Plane #7 landed at airfield-2/36, 2655, -60, -21 (18 blocks down the 66-block runway, 28% used).
 ```
+
+The percentage is the assertion worth making on a landing, not the distance: "3 blocks down the
+runway" is a tidy arrival on a short field and an aircraft parked on the lip of a 183-block one, and
+for a long time it was the latter without anything in the output saying so.
 
 Every terminal event now goes through `AutopilotFeedback.report`, which logs to the console when
 there is no owning player — landings, go-arounds (with the reason), runway switches and
@@ -240,7 +257,7 @@ and every autopilot aircraft prints one line per tick to `console.log`:
 
 ```
 trace #5 t=1713 flare pos=0.3,-56.02,15.6 agl=3.98 gnd=-60.0 landable=false vs=-0.063 spd=0.439
-      thr=0 og=false water=false cmdalt=-57.9 thr_y=-60.0 dthr=15.1 lat=-0.2
+      thr=0 og=false water=false cmdalt=-57.9 thr_y=-60.0 dthr=15.1 daim=-21.5 lat=-0.2
 ```
 
 `gnd`/`landable` are the two surface answers (`AGL` reference, and whether it is ground at all),
@@ -248,6 +265,13 @@ trace #5 t=1713 flare pos=0.3,-56.02,15.6 agl=3.98 gnd=-60.0 landable=false vs=-
 and `water` are `getOnGround()` and `isOnWater()` — which are not the same question and were being
 treated as one. A 90-second sortie is about 1800 lines; `grep "trace #5" console.log` per aircraft.
 It is off by default and costs a `Boolean.getBoolean` per tick when it is.
+
+**`daim` is the one the arrival is actually flown to**, and it is not `dthr`. The glide slope ends on
+the aim point, the flare is triggered relative to it and the "still airborne" go-around is measured
+from it, so `daim` going through zero is the moment the aircraft is over the point it is aiming at.
+`dthr` is kept beside it because the survey, the landing report and the airfield browser all speak in
+distances from the threshold, and watching the two diverge is how the aim rule is checked. They are
+equal only on a runway short enough that `touchdownAimOffset` returns 0, which no usable runway is.
 
 ### Recipe: an approach over water
 
@@ -260,7 +284,7 @@ own control: fly it dry, flood the corridor, fly it again.
 ./cmd.sh "forceload add -32 -176 32 352"
 sleep 10
 ./cmd.sh "autopilot survey 0 -60 0 0 -60 -160"        # end 36 lands towards -Z, approach from +Z
-./cmd.sh 'autopilot inbound 0 -20 700 "airfield-1"'   # dry: lands 6 blocks down the runway
+./cmd.sh 'autopilot inbound 0 -20 700 "airfield-1"'   # dry: lands 37 blocks down a 160-block runway
 
 # the sea. -63..-61 is the whole destructible depth of the superflat, so filling it with water
 # leaves the heightmap at -60 - identical to the grass it replaced.
@@ -272,23 +296,30 @@ sleep 10
 
 Two numbers decide whether it ditches, and both are worth knowing before spending an hour on it:
 
-* **How far the water reaches past the threshold.** The flare is entered 15 blocks *before* the
-  threshold and touches down 5 blocks *past* it, so with the shoreline at the threshold the aircraft
-  crosses the waterline with **1.2 blocks to spare** — measured identically at 0.40, 2.60 and the
-  2.80 maximum, so it is geometry and not luck about speed. Flood to `z = -8` and it goes in. That
-  1.2-block margin was the whole difference between "another sortie landed fine" and a drowning.
+* **How far the water reaches past the threshold**, which is the number this recipe exists to find,
+  and it is **no longer near the threshold at all**. It used to be: the flare fired 15 blocks
+  *before* the threshold, so a shoreline stopping exactly at the threshold left 1.2 blocks to spare
+  and flooding to `z = -8` drowned the aircraft. Since the glide slope was re-aimed at the touchdown
+  point the flare fires 21.8 blocks *past* the threshold on a 183-block field, and the same runway
+  flooded 8 and then 20 blocks onto the strip lands at 43.0 both times — the same number as dry, to
+  the tenth of a block, because the water is nowhere near where the aircraft stops flying. Flood 26
+  blocks in and `landableBelow` simply defers the flare until there is runway underneath
+  (`agl=3.29`, 26.5 blocks down) and it still lands. **Flood past the aim point** to see it fail.
+  This margin scales with the aim offset, so it is smaller on a short field: use a runway of the
+  length you care about, and read `daim` in the trace rather than assuming.
 * **How high the water stands relative to the threshold.** Raising it is the obvious way to make the
   failure bigger and it does not work: standing water above the runway elevation has to be held back
-  by something, and whatever holds it back also stands above a glide slope aimed at the threshold, so
-  the aircraft hits the seawall instead. Any test built that way is testing the wall.
+  by something, and whatever holds it back also stands above a glide slope that ends on the runway,
+  so the aircraft hits the seawall instead. Any test built that way is testing the wall.
 
 Restoring the ground afterwards takes three fills (the superflat is dirt at −63/−62 and grass at
-−61), and the airfield needs no re-survey — nothing it stores has changed.
+−61), and the airfield needs no re-survey — nothing it stores has changed. Prove the restore worked
+by re-flying it: the arrival should reproduce the dry numbers exactly, tick for tick.
 
 Flood **both** funnels and the strip itself to exercise the give-up path: the aircraft goes around
 three times, switches ends, goes around once more, commits, and prints
-`did not land at airfield-1/18: came to rest in the water, at 0, -63, -152`. That takes about eight
-minutes of wall clock — five approaches — so give it the time before assuming it has hung.
+`did not land at airfield-1/18: came to rest in the water, at 1, -63, -142`. That is five approaches
+— eight minutes of real time, or about ten seconds under `tick sprint 30000`.
 
 ### Recipe: what the surface probes read
 
@@ -456,14 +487,45 @@ worse, and it is how the four-aircraft result above was shown to be pre-existing
 
 ### Recipe: a short runway, and refusing one
 
-`MIN_USABLE_RUNWAY_LENGTH` is 30 blocks, so a 24-block strip is the test case for the refusal and a
-66-block one is the test case for a landing that has to be tidy:
+`MIN_USABLE_RUNWAY_LENGTH` is 18 blocks, so a 16-block strip is the test case for the refusal and an
+18-block one is the test case for a landing that has to be tidy — it is the shortest field the
+autopilot will accept, so it is the one that has to be flown before the constant may be lowered:
 
 ```sh
-./cmd.sh "autopilot survey 660 -60 40 660 -60 64"     # 24 blocks -> registers with a warning
+./cmd.sh "autopilot survey 660 -60 40 660 -60 56"     # 16 blocks -> registers with a warning
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-3"' # -> refused, with the numbers
 ./cmd.sh 'autopilot airfields'                        # -> the row is marked TOO SHORT
 ```
+
+### Recipe: measuring where a landing actually puts the aircraft
+
+The four numbers that matter are all in the trace, and none of them are in `status`: where the
+aircraft crosses the threshold and how high, where the flare fires, where the wheels touch, and where
+it stops. Run one arrival with the trace on and read them off the ticks, in that order — `daim`
+through zero for the aim point, `dthr` through zero for the threshold, the first `flare` line, the
+first `og=true` line and the last line of all.
+
+```sh
+./cmd.sh 'autopilot inbound 0 -20 700 "airfield-1" 2.60'
+./cmd.sh "tick sprint 6000"
+grep "trace #" console.log | grep -E " (final|flare|rollout) "
+```
+
+Two things make this cheap enough to run a dozen times. **`/tick sprint <ticks>` is vanilla and runs
+the world flat out** — measured at 600–1300 ticks/s with an aircraft airborne on this container, so a
+90-second arrival completes in 2–5 seconds of wall clock. The physics is untouched: ticks are still
+ticks, only wall-clock time changes, which is exactly why it is safe where "tick the aircraft faster"
+would not be (every constant in this flight model is per-tick). `/tick sprint stop` aborts it, and
+the completion line doubles as a free performance readout. **And the whole event is speed-independent
+in the parts that count** — the arrival is flown at `APPROACH_SPEED`/`FINAL_SPEED` whatever the
+cruise was ordered at, so 0.40 and 2.80 touch down within three blocks of each other and the trailing
+speed argument is a check, not a variable to sweep.
+
+Do not quote wall-clock seconds from this container in a report: it is shared with other agents
+running their own servers and builds. Tick counts and positions are solid; seconds are not.
+
+Measured touchdown and stop points across runway lengths and speeds are tabulated in `AUTOPILOT.md`,
+"Where on the runway it touches down"; they are the reference to regress against.
 
 ### Recipe: marked parking
 
