@@ -1,9 +1,11 @@
 package xyz.przemyk.simpleplanes.entities;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
@@ -120,6 +122,32 @@ public final class PlaneCollisions {
     /** Ticks a block-provided fall multiplier (hay 0.2, slime 0.0, ...) stays armed. */
     public static final int SOFT_LANDING_TTL = 4;
 
+    // ---- water entry -------------------------------------------------
+    //
+    // Water has no collision shape: Entity.move() is never blocked by it, so none of the machinery
+    // above ever fires for it and hitting the sea at 3 blocks/tick used to be free — with or without
+    // the Floaty Bedding upgrade. The upgrade made it worse rather than causing it, by deleting the
+    // descent as well.
+    //
+    // The evidence used here is still positive and geometric, and specifically is NOT inferred from
+    // speed history: it is a fluid boundary the aircraft demonstrably crossed this tick, read from
+    // two real block samples (dry before the move, water after it), charged at the velocity the
+    // aerodynamics actually produced. That is the same standard of proof as a blocked axis.
+
+    /** Entry speed below which touching down on water is free at any attitude (7 blocks/s). */
+    public static final double WATER_TOLERANCE_MIN = 0.35;
+    /**
+     * Extra tolerance granted for arriving wings-level, so a deliberate water landing with Floaty
+     * Bedding — the whole point of the upgrade — costs nothing up to 0.70 blocks/tick (14 blocks/s).
+     */
+    public static final double WATER_TOLERANCE_LEVEL_BONUS = 0.35;
+    /**
+     * damage = mass * factor * (v^2 - tolerance^2). Softer than the ground factors because water is
+     * softer: a wings-level entry at 1.0 blocks/tick costs ~5 HP, at 2.0 ~35 HP, and at the 3.14
+     * blocks/tick a boosted aircraft reaches, the plane does not survive.
+     */
+    public static final double WATER_DAMAGE_FACTOR = 10.0;
+
     // ------------------------------------------------------------------
 
     /**
@@ -140,6 +168,14 @@ public final class PlaneCollisions {
 
         float softLandingMultiplier = 1.0F;
         int softLandingTicks;
+
+        /**
+         * The plane's velocity as the aerodynamics left it this tick, before {@code tickUpgrades()}
+         * had a chance to rewrite it. {@code FloatingUpgrade} runs before {@code move()} and arrests
+         * a descent over water, so without this the water-entry check would measure the velocity
+         * after the arrest — which is exactly the velocity the upgrade was hiding.
+         */
+        Vec3 preUpgradeMotion = Vec3.ZERO;
     }
 
     // ------------------------------------------------------------------
@@ -287,6 +323,8 @@ public final class PlaneCollisions {
         // reading is fed by client packets, and a single missed packet reads as 0 while the
         // catch-up packet after it carries two ticks of displacement. min() of two adjacent samples
         // is immune to any single such spike.
+        damage += waterEntryDamage(plane, posBefore, mass, up);
+
         boolean groundContact = plane.onGround() || (blockedY && wanted.y < 0);
         double hSteady = Math.min(horizontal(state.knownMovement), horizontal(state.prevKnownMovement));
         double hSpeed = Math.max(horizontal(wanted), hSteady);
@@ -296,6 +334,55 @@ public final class PlaneCollisions {
         }
 
         applyDamage(plane, serverLevel, damage);
+    }
+
+    /**
+     * Damage for going into the water at speed.
+     *
+     * <h2>Why this needs its own rule</h2>
+     * Everything else in this class keys off an axis {@code Entity.move()} refused to move along.
+     * Water has no collision shape, so {@code move()} is never blocked by it, {@code horizontal-
+     * Collision} stays false and not one of those charges ever fires. A plane could go into the sea
+     * at any speed for free. The Floaty Bedding upgrade was blamed for this and did make it worse —
+     * it deleted the descent as well, so there was nothing left to see — but the hole was there
+     * without it too.
+     *
+     * <h2>Why this is still positive evidence</h2>
+     * The trigger is a fluid boundary the aircraft is measured to have crossed during this tick: the
+     * block at the sample point was not water before {@code move()} and is water after it. Two real
+     * block reads, one tick apart, of a boundary that does not move. Nothing here guesses an impact
+     * from a change in speed, which is the inference that made the earlier versions of this file
+     * fire on packet jitter — {@code getKnownMovement()} is not consulted at all.
+     *
+     * <p>The magnitude is {@link State#preUpgradeMotion}, the velocity the aerodynamics produced
+     * this tick, sampled before {@code tickUpgrades()} could arrest it. The sample point matches
+     * {@code PlaneEntity#isOnWater} so that "the upgrade thinks it is floating" and "the collision
+     * code thinks it has entered the water" can never disagree.
+     */
+    private static double waterEntryDamage(PlaneEntity plane, Vec3 posBefore, double mass, double up) {
+        boolean wasInWater = isWaterAt(plane, posBefore);
+        boolean nowInWater = isWaterAt(plane, plane.position());
+        if (wasInWater || !nowInWater) {
+            return 0;
+        }
+
+        double impact = plane.collisionState.preUpgradeMotion.length();
+        // Wings-level gets the full allowance; arriving on a wingtip or nose-first does not, exactly
+        // as for a ground landing.
+        double tolerance = WATER_TOLERANCE_MIN + WATER_TOLERANCE_LEVEL_BONUS * Mth.clamp(up, 0.0, 1.0);
+        if (impact <= tolerance) {
+            return 0;
+        }
+        return mass * WATER_DAMAGE_FACTOR * (impact * impact - tolerance * tolerance);
+    }
+
+    /**
+     * Water test at the same offset {@code PlaneEntity#isOnWater} uses, so the flotation code and
+     * the impact code always agree about where the waterline is.
+     */
+    private static boolean isWaterAt(PlaneEntity plane, Vec3 position) {
+        BlockPos pos = new BlockPos(Mth.floor(position.x), Mth.floor(position.y + 0.4), Mth.floor(position.z));
+        return plane.level().getBlockState(pos).getFluidState().is(FluidTags.WATER);
     }
 
     /**

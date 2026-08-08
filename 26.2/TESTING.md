@@ -67,12 +67,28 @@ watchdog), and **`pause-when-empty-seconds=0`** — without that last one the se
 cp /home/user/simple-planes/26.2/build/libs/simpleplanes-26.2-5.3.7.jar /home/user/testserver/mods/
 cd /home/user/testserver
 ./start.sh                                  # blocks until "Done (…)", ~10 s
-./cmd.sh "forceload add -180 -40 180 40"    # entities do not tick in unloaded chunks
-./cmd.sh "autopilot strike 0 -59 0 150 90"
-sleep 20
-grep -E "Strike|Route" console.log
+./cmd.sh "autopilot strike 0 -59 0 800 90"
+sleep 25
+grep -E "Strike|Plane #" console.log
 ./stop.sh
 ```
+
+**No `forceload` is needed for a flight**, and adding one mostly hides bugs. Autopilot aircraft carry
+their own rolling chunk tickets and are renewed from the server tick (see `AUTOPILOT.md`, "Chunk
+loading"), so an 800-block strike and a 2000-block airfield-to-airfield sortie both complete with
+none. Two things to know if you reach for it anyway:
+
+* `forceload add` refuses more than **256 chunks per command** — `forceload add -400 -400 400 400` is
+  2601 chunks and simply prints `Too many chunks in the specified area` and does nothing. An earlier
+  version of this file recommended a command in that shape, so tests that "passed with forceload"
+  were in fact running with none.
+* Force-loading a corridor and then flying out of it is a good way to *reproduce* the chunk bug
+  rather than avoid it: the aircraft freezes at the boundary, keeping its velocity exactly.
+
+**Kill leftovers between runs.** `./cmd.sh "autopilot stop"` stops the flight directors but leaves
+the aircraft in the world, and test flights all use the same corridor — a parked hulk on the run-in
+line will be rammed by the next one, which registers as a plane-to-plane collision and ends the run
+early with a confusing report. Use `./cmd.sh "kill @e[type=simpleplanes:plane]"`.
 
 `start.sh` keeps a FIFO open on the server's stdin, so `cmd.sh` can feed console commands to a
 running server at any time; `console.log` is the transcript. Command output (`sendSuccess`) is
@@ -90,9 +106,59 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 |---|---|
 | `strike <x y z> [distance] [bearing]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test |
 | `route <from> <to>` | point-to-point cruise — the "does it explode for no reason" test |
+| `flight <from> <to>` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
+| `inbound <x y z> <airfield>` | one-way arrival into a named airfield — the landing test, without the departure |
 | `survey <t1> <t2>` / `airfields` | register and list runways |
 | `status` | live list of autopilot aircraft with a status line each |
 | `stop` | stop all of them |
+
+### Recipe: a complete airfield-to-airfield sortie
+
+`survey` is the one subcommand that does require loaded chunks (it measures real blocks), so it is
+also the only place `forceload` is genuinely useful. Two runways 2000 blocks apart on the superflat:
+
+```sh
+./cmd.sh "forceload add 640 -200 670 0"      # 28 chunks - under the 256 limit
+./cmd.sh "forceload add 2640 -200 2670 0"
+sleep 8
+./cmd.sh "autopilot survey 654 -60 -9 654 -60 -192"
+./cmd.sh "autopilot survey 2654 -60 -9 2654 -60 -192"
+./cmd.sh "autopilot airfields"
+
+./cmd.sh "forceload remove all"               # prove the flight loads its own chunks
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+```
+
+Airfields persist in `SavedData`, so the survey only has to be done once per world. The sortie takes
+about four minutes of wall clock; poll `./cmd.sh "autopilot status"` to watch it, and assert on the
+final line:
+
+```
+Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).
+```
+
+Every terminal event now goes through `AutopilotFeedback.report`, which logs to the console when
+there is no owning player — landings, go-arounds (with the reason), runway switches and
+"came down at". Progress chatter still uses `overlay`, which no-ops headlessly. If you add a new
+end-of-flight path, use `report`, or it will be invisible on this rig.
+
+### Recipe: water impact
+
+Water has no collision shape, so it needs its own test. Build a basin, then summon planes into it
+with a known entry velocity — `Motion` in the summon NBT is the cleanest way to control the entry
+speed, and spawning right at the waterline stops gravity adding to it:
+
+```sh
+./cmd.sh "forceload add 690 690 740 740"
+./cmd.sh "fill 700 -64 700 735 -60 735 minecraft:water"
+./cmd.sh 'summon simpleplanes:plane 705 -59.0 705 {upgrades:{"simpleplanes:floaty_bedding":{}},Motion:[0.0,-1.0,0.0],Tags:["wt"]}'
+sleep 5
+./cmd.sh "execute as @e[tag=wt] run data get entity @s health"
+```
+
+Health is an int, default 10. A plane that no longer answers `data get` was destroyed. Measured
+boundary with Floaty Bedding and wings level: free to 0.70 b/t, 1 HP at 0.75, 5 HP at 1.00,
+destroyed from 1.2. See `COLLISION-DIAGNOSIS.md`, section Р3.
 
 Both flights print a terminal line (`hit the target at …`, `flew into terrain at …`, …), which is
 what makes them assertable from a shell.

@@ -6,14 +6,19 @@ import com.mojang.serialization.Codec;
  * Flight-director state machine states.
  *
  * <pre>
- * IDLE ──► TAKEOFF ──► CLIMB ──► CRUISE ──► DESCENT ──► APPROACH ──► FINAL ──► FLARE ──► ROLLOUT ──► IDLE
- *                                  │            ▲          │  ▲                 │
- *                                  │            └── HOLD ◄──┘  └──── GO_AROUND ◄─┘
- *                                  └──► STRIKE (one-way attack run, no landing)
+ * IDLE ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
+ *                                        │          ▲         │  ▲                │
+ *                                        │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
+ *                                        └──► STRIKE (one-way attack run, no landing)
  * </pre>
+ *
+ * <p>{@code TAXI} is only entered by a sortie that starts parked at a registered airfield; an
+ * aircraft launched in the air begins at {@code CLIMB} and one placed on open ground at
+ * {@code TAKEOFF}.
  */
 public enum AutopilotMode {
     IDLE("idle"),
+    TAXI("taxi"),
     TAKEOFF("takeoff"),
     CLIMB("climb"),
     CRUISE("cruise"),
@@ -55,6 +60,11 @@ public enum AutopilotMode {
 
     /** Modes where the wings must stay level (ground roll, touchdown). */
     public boolean requiresWingsLevel() {
-        return this == FINAL || this == FLARE || this == ROLLOUT || this == TAKEOFF;
+        return this == FINAL || this == FLARE || this == ROLLOUT || this == TAKEOFF || this == TAXI;
+    }
+
+    /** Modes flown with the wheels on the ground, where there is no flight path to speak of. */
+    public boolean isGroundPhase() {
+        return this == TAXI || this == TAKEOFF || this == ROLLOUT;
     }
 }

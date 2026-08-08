@@ -39,10 +39,68 @@ that input from the autopilot when no player is aboard. See §7.
   pitch attitude → pitch control`.
 * **Speed** — proportional on the throttle notch, adjusted every 5 ticks so the lever does not
   chatter.
-* **Bank** — follows the heading error, capped at 25°, and forced to zero for landing and ground
-  roll.
+* **Bank** — follows the heading error, capped at 25°, given up as the speed decays (a banked turn
+  needs `1/cos(bank)` times the lift of level flight, and a slow aircraft has none to spare), and
+  forced to zero for landing and ground roll.
+
+### Staying inside the envelope
+
+Three rules exist purely to stop the aircraft leaving controlled flight. All three were added after
+watching it do so, with numbers.
+
+**Angle-of-attack limiter.** The commanded pitch is clamped to within `MAX_ANGLE_OF_ATTACK` (20°) of
+the *current flight path angle*, not of the horizon. This is the important one.
+`PlaneEntity#tickRotateMotion` scales both the wing lift and the rate at which the velocity vector
+follows the nose by `d = 1 - min(1, aoa/60)²`, which is **exactly zero at 60° of angle of attack**:
+the wings stop working and the aircraft falls with the nose up and no way out. The altitude cascade
+then reads the growing sink rate as "too low" and asks for more nose-up — a divergence, not an
+oscillation. Field telemetry of the failure: pitch +25° against a flight path of −79°, 104° of angle
+of attack, 1.09 b/t of sink, 33 blocks above the ground, nose 188° off the commanded heading.
+Referencing the clamp to the flight path makes the same rule serve as the recovery: deep in a stall
+the flight path is steeply down, so the clamp forces the nose down with it and the aircraft flies out.
+
+**The throttle is flown on horizontal speed.** It used to compare `getDeltaMovement().length()`
+against the commanded speed, which counts the rate of *falling* as though it were progress. An
+aircraft dropping out of a descent therefore reads as fast, so the loop closes the throttle, so it
+gets slower and falls faster, so it reads faster still. That is a latch; it was observed sitting in
+it at throttle 0. Airspeed along the wing is what keeps the wings working, so that is what is
+regulated.
+
+**Idle is an airbrake, not neutral.** `tickMotion` multiplies the whole drag polynomial by
+`brakesMul = 5` at throttle 0. The descent and approach phases are allowed to use it — it is the only
+way to slow down on an 8° slope, and without it the aircraft arrived on short final at 0.94 b/t
+against a commanded 0.40, floated, and went around three times. Everywhere else `MIN_AIRBORNE_THROTTLE`
+keeps one notch in. Below `MIN_FLYING_SPEED` (0.32 b/t) the lever goes fully open **on the spot**
+rather than one notch per 5 ticks, which would take 25 ticks the aircraft does not have. And while
+the aircraft is manoeuvring — bank over 8° or heading error over 15° — the loop may not reduce power
+at all: a turn costs energy and is the last moment to be closing the throttle.
 
 All tuning lives in one file: `autopilot/AutopilotConfig.java`.
+
+### Thrust direction
+
+The single largest defect found in this whole subsystem, and the cause of three separate reports.
+
+`getTickPush` builds the engine thrust vector by rotating `(0, 0, push)` out of the body frame with
+`transformPos`, and `transformPos` rotates by **`Q_Client`**. `Q_Client` is a client-side quantity:
+on the server the only thing that ever writes it is `RotationPacket`, sent by the player flying the
+plane. An aircraft with nobody aboard therefore kept whatever `Q_Client` it was created with for its
+entire life, while `Q` — set from the freshly integrated attitude at the end of every `tick()` —
+tracked reality.
+
+**An unmanned aircraft was thrusting in the direction it was spawned facing, for ever.**
+
+Straight-line flight looked flawless, which is why it survived so long: a strike run launched pointing
+at its target accelerated 2.15 → 3.14 b/t without a wobble. Anything that turned fell apart. Measured
+on a 200-block out-and-back, the aircraft came out of the 180° turnback at **0.36 b/t and stayed
+pinned there at full throttle**, descending, until it reached the ground — with the engine pushing
+backwards. That one frozen quaternion is the "spawned aircraft gradually loses speed" report, the
+turnback stall and the failed landing descent, all three.
+
+`PlaneEntity#transformPosPhysics` uses `Q` when there is no controlling passenger and `Q_Client`
+otherwise, so a ridden plane is bit-for-bit unchanged. After the fix the same turnback holds
+0.75 → 0.78 → 0.75 with no speed loss at all. `PlaneCollisions#upY` had already documented this exact
+trap for the attitude calculation; the thrust vector had the same bug and nobody had joined the dots.
 
 ---
 
@@ -104,15 +162,16 @@ exact. The survey reports:
 ## 3. The state machine
 
 ```
-IDLE ──► TAKEOFF ──► CLIMB ──► CRUISE ──► DESCENT ──► APPROACH ──► FINAL ──► FLARE ──► ROLLOUT ──► IDLE
-                                 │            ▲           │  ▲                 │
-                                 │            └─ HOLD ◄───┘  └──── GO_AROUND ◄─┘
-                                 └──► STRIKE (one-way attack run, no landing)
+IDLE ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
+                              │          ▲         │  ▲                 │
+                              │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
+                              └──► STRIKE (one-way attack run, no landing)
 ```
 
 | Mode | What it does |
 |---|---|
-| `TAKEOFF` | Full power, ground steering on the runway heading, rotate at 0.35 speed, wings level |
+| `TAXI` | Ground steering from the parking spot to the departure threshold at 0.20 speed, elevator neutral |
+| `TAKEOFF` | Full power, ground steering on the runway heading, elevator aft, rotate at 0.35 speed, wings level |
 | `CLIMB` | Climb to cruise altitude on the first waypoint's bearing |
 | `CRUISE` | Fly waypoints, terrain-following, advancing on arrival within 30 blocks |
 | `STRIKE` | Hold 100 above the ground, then dive at the target — see [The attack run](#the-attack-run) |
@@ -138,7 +197,13 @@ the first seconds of the run and makes the aircraft sag towards the ground while
 speed ceiling is set through `PlaneEntity#setMaxSpeed`, which is not a limiter but the point the
 thrust fades out at: `tickMotion` scales the push by `1 − speed / (maxSpeed × 10 × (push + 0.05))`,
 so raising it from 2.0 to 3.0 moves the balance against the drag curve from about 2.0 to about 2.8
-blocks/tick. Measured on a 400-block run, the speed rises monotonically 2.30 → 3.13 and never falls.
+blocks/tick. Measured over an 800-block run with no chunk force-loading at all, the speed rises
+monotonically 2.15 → 2.73 → 2.82 → 2.87 on the run-in and 3.14 in the dive, and never falls.
+
+A strike run is the one profile that was *always* fast, and for an unfortunate reason: it is flown
+in a straight line. See [Thrust direction](#thrust-direction) — until recently an unmanned aircraft
+thrusted in the direction it was spawned facing, so straight-line flight was perfect and everything
+that turned quietly lost all its speed.
 
 **Height.** The run-in is flown at 100 blocks *above the ground*, not above the target. This is the
 whole fix for aircraft that used to end up stuck in a tree: a glancing hit on a canopy blocks only
@@ -179,6 +244,70 @@ permanently stationary aircraft parked in the scenery with the autopilot still r
 Measured over three runs: 400 blocks, launched at 100 above ground, **3-6 blocks from the aimpoint**.
 That is the tick discretisation, not the guidance - at 3.13 blocks/tick the aircraft cannot be
 sampled any closer than that to the aimpoint, and the detonation covers the difference.
+
+---
+
+## 3a. Airfield to airfield: the scripted sortie
+
+```
+/autopilot flight <from> <to>
+```
+
+Two registered airfields by name; one aircraft flies the whole thing:
+
+**Parked.** The aircraft is created stationary, on the ground, throttle shut, on an apron beside the
+departure runway — `width/2 + 4` blocks off the centreline and 12 blocks back from the threshold.
+If the ground alongside is not level with the runway (within 2 blocks) the apron is abandoned and it
+parks on the centreline behind the threshold instead, because the surveyed strip is the one piece of
+ground known to be flat. **No initial velocity.** The velocity a strike is launched with is an
+air-launch and stays exclusive to strikes; a runway departure has a runway.
+
+**Taxi.** `TAXI` steers to a lineup point at the threshold at `TAXI_SPEED` (0.20 b/t), then stops
+chasing the point and simply holds the runway heading until it is within `TAXI_ALIGNED_ERROR` (8°) —
+chasing a point the aircraft is nearly on top of makes the nosewheel hunt. Throttle is capped at 3
+so it creeps rather than charges. `TAXI_TIMEOUT` (900 ticks) departs anyway rather than circling a
+threshold for ever.
+
+**Departure.** Along the *surveyed* runway, on its real heading, from its real threshold.
+
+**Cruise.** Altitude chosen from the terrain sampled along the whole great-circle leg between the two
+fields, plus 60.
+
+**Arrival.** The existing approach machinery, onto the destination's surveyed runway, with the end
+chosen by `Airfield#bestEnd` (approach obstacles, ties to uphill).
+
+**Report.** Every phase change that matters prints to the console, and the flight ends with one
+assertable line — `Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).`
+
+### Testing the arrival on its own
+
+```
+/autopilot inbound <x y z> <airfield>
+```
+
+Launches in the air at that point and flies a genuine **one-way** sortie into the named field. This
+is something `route` cannot express: a route is always out-and-back, and it picks its landing field
+by proximity to where it *departed*, so an aircraft starting far away always ended in an improvised
+field landing instead of an approach to the runway it was sent to. `inbound` also lets the approach
+be iterated on without flying the departure first.
+
+### The ground-phase pitch trap
+
+Both ground phases were commanding the elevator the wrong way, and neither had ever been exercised —
+routes and strikes are both launched in the air, so nothing had ever departed from a standstill.
+
+A parked plane rests at `PlaneEntity#getGroundPitch`, **+5°**. Commanding a level attitude therefore
+leaves the pitch controller permanently holding nose-down, and `PlaneEntity#tickOnGround` reads a
+negative pitch input as **reverse thrust** (`push = -groundPush`). Measured: the aircraft taxied
+smoothly *backwards* away from the runway at 0.13 b/t, facing the right way the whole time.
+
+* `TAXI` holds the elevator strictly **neutral** — no reverse, no boost.
+* `TAKEOFF` holds it **aft** for the whole roll, which is also how a real departure is flown: a
+  positive input levels the aircraft on its wheels (removing the static-friction penalty that divides
+  thrust by five while the nose sits at +5°) and guarantees at least `groundPush`. It cannot rotate
+  early, because `tickOnGround` returns `speedingUp = false` below take-off speed and `tick()` only
+  runs `tickPitch` when it is true. Before: the roll stuck at 0.13 b/t against a 0.35 rotate speed.
+  After: 0.27 → 0.58 → 0.63, rotate, lift off.
 
 ---
 
@@ -292,11 +421,18 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
 ```
 /autopilot strike <x y z> [distance] [bearing]   launch an attack run
 /autopilot route <x y z> <x y z>                 fly A -> B -> A and land
+/autopilot flight <from> <to>                    full sortie between two registered airfields
+/autopilot inbound <x y z> <airfield>            one-way arrival into a named airfield
 /autopilot survey <x y z> <x y z>                survey a runway between two thresholds
 /autopilot airfields                             list registered airfields
 /autopilot status                                full telemetry for every autopilot aircraft
 /autopilot stop                                  stop every autopilot aircraft in this dimension
 ```
+
+`flight` and `inbound` take airfield **names** (tab-completed from the registered list, quoted
+because names contain a hyphen), so they need no block-position argument at all and cannot be
+refused for pointing at unloaded ground — which is the normal case, not an edge case, since both
+runways are usually nowhere near a player.
 
 `bearing` is the compass direction the attack run comes in *from*, 0–359. Omit it and the bearing is
 derived from wherever the command was issued (the player, or the console's world-spawn origin); if
@@ -318,10 +454,56 @@ means the aircraft is not ticking at all (see chunk loading below).
 ### Chunk loading
 
 An autopilot aircraft routinely flies hundreds of blocks from any player, and **entities in chunks
-nobody keeps loaded simply stop ticking**. The autopilot therefore re-requests a
-`TicketType.ENDER_PEARL` ticket with radius 2 every 20 ticks, exactly as vanilla does for a thrown
-ender pearl (`ServerPlayer#placeEnderPearlTicket`). The ticket times out after 40 ticks, so nothing
-leaks if the aircraft is destroyed. Without this the 400-block strike would just hang in the air.
+nobody keeps loaded simply stop ticking**. Aircraft therefore carry a rolling
+`TicketType.ENDER_PEARL` ticket. Two details in that sentence were wrong in the first version and
+both cost whole flights:
+
+**The radius is not the bubble.** `TicketStorage#addTicketWithRadius(type, pos, r)` gives the centre
+chunk level `33 - r`, and the level rises by one per chunk outwards, while `ChunkLevel#isEntityTicking`
+needs level ≤ 31. A ticket of radius `r` therefore ticks entities only within `r - 2` chunks of the
+centre — vanilla's ender-pearl radius of 2, which this copied, produces an entity-ticking area of
+**exactly one chunk**. That is fine for a pearl, which the player re-tickets, and useless for an
+aircraft covering 3 blocks a tick: it leaves that chunk in five ticks. The radius is now
+`CHUNK_TICKET_RADIUS = 4`, which ticks entities two chunks (32 blocks) in every direction.
+
+**The renewal cannot come from the aircraft.** Renewing the ticket from `PlaneAutopilot#tick` is
+circular: an aircraft that slips out of the entity-ticking area stops ticking, so it stops renewing
+the ticket that would bring it back, and it hangs in the air for ever. Measured on the rig before the
+fix, an 800-block strike froze permanently the instant it crossed out of the force-loaded region,
+keeping its velocity and its position to the decimal for the rest of the run. Renewal now runs from
+the **server level tick**, over the strong references in `AutopilotRegistry`, so a frozen aircraft is
+picked up and thawed.
+
+A second ticket is placed `CHUNK_TICKET_LEAD_TICKS` (20 ticks) of travel **ahead** of the aircraft.
+That is not an optimisation: without it the aircraft permanently flies at the edge of its own loaded
+area, so `TerrainScanner` reads `UNKNOWN_HEIGHT` for most of its forward profile and terrain
+following silently degrades to "hold altitude".
+
+The ticket still times out after 40 ticks, so nothing leaks when the aircraft is destroyed. Verified
+on the rig: an 800-block strike and a 2000-block airfield-to-airfield sortie both complete with
+**zero** `forceload` and no player anywhere near either end.
+
+### Command arguments and unloaded ground
+
+`strike` and `route` take their positions with `BlockPosArgument.getBlockPos`, **not**
+`getLoadedBlockPos`. A destination hundreds of blocks away is by definition outside anyone's
+simulation distance, and demanding a loaded position made the command reject exactly the flights it
+exists to fly, with `That position is not loaded`. The aircraft loads its own chunks, so the
+destination does not have to be resident when the order is given.
+
+`survey` deliberately keeps `getLoadedBlockPos`: a survey measures real blocks — surface heights,
+width, slope, roughness — so surveying unloaded ground would register a runway made of nothing.
+Refusing is the right answer there; go and stand on the runway.
+
+### How many aircraft are flying
+
+`RunwayOccupancy.activeCount()` is **derived** from the live set in `AutopilotRegistry`, recounted on
+every call. It used to be a `static int` bumped on activation and decremented on release, which
+leaked a slot for every aircraft that went away without running its release path — i.e. on every
+crash, the most common ending. A live server was seen reporting `19/24 autopilot aircraft active, 2
+in this dimension`: five launches from refusing everything, with nothing but a restart to clear it.
+Only server-side entities are ever registered, so the shared client/server JVM of a single-player
+world cannot double-count either.
 
 ---
 
@@ -335,14 +517,20 @@ leaks if the aircraft is destroyed. Without this the 400-block strike would just
 * **Circuit joins are simplified.** The aircraft flies direct to the initial approach fix and tracks
   the extended centreline inbound. There is no downwind/base leg — the holding pattern is a simple
   circular orbit rather than a racetrack.
-* **Bank direction is cosmetic.** Turns are produced by the yaw control, as in the base game; bank
-  is commanded only so the aircraft looks right. If it banks the wrong way in a turn, flip the sign
-  of `desiredRoll` in `PlaneAutopilot#applyControls` — it will not change the flight path.
+* **Bank direction is cosmetic, but bank angle is not free.** Turns are produced by the yaw control,
+  as in the base game; bank is commanded only so the aircraft looks right. If it banks the wrong way
+  in a turn, flip the sign of `desiredRoll` in `PlaneAutopilot#applyControls` — it will not change the
+  flight path. The *magnitude* does matter, though: a banked aircraft yawing hard couples into pitch
+  through the quaternion, which is why bank is surrendered at low speed.
 * **Improvised landings are rough** by nature. Survey a runway for anything reliable.
 * **Terrain in ungenerated chunks reads as unknown** and is skipped, so an aircraft flying into
   never-visited terrain holds altitude rather than reacting to ground it cannot see. The chunk
   ticket keeps a bubble loaded around the aircraft itself, which covers the normal case.
-* **Route legs are fixed at 2** (out and back) from the wand. Use the `FlightPlan` API for more.
+* **Route legs are fixed at 2** (out and back) from the wand. Use `/autopilot flight` or
+  `/autopilot inbound` for a one-way sortie, or the `FlightPlan` API for more.
+* **Taxi is a straight line to the threshold.** There is no taxiway network and no obstacle
+  avoidance on the ground: the aircraft steers directly at the lineup point. On a surveyed field with
+  a sane parking apron that is enough; it will not thread a hangar.
 * **No player is ever required.** Aircraft spawn, fly, land, save and load with no player involved;
   an owning player is only an optional recipient for progress messages, and `AutopilotFeedback`
   no-ops when there is none.

@@ -2,8 +2,11 @@ package xyz.przemyk.simpleplanes.autopilot;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.TicketType;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -163,6 +166,12 @@ public final class AutopilotSpawner {
         if (run.lengthSqr() > 1.0E-6) {
             plane.setDeltaMovement(run.normalize().scale(CRUISE_LAUNCH_SPEED));
         }
+        // Engine already running. Launched at 0.70 with the throttle shut, the aircraft spent its
+        // first seconds slowing down, not speeding up: throttle 0 sets brakesMul = 5 in
+        // PlaneEntity#tickMotion, which is a full airbrake, and the autopilot's throttle loop only
+        // adds one notch every five ticks — 25 ticks to reach full power. Measured in the field at
+        // 0.64 blocks/tick and falling against a commanded 0.80, with the lever still on 2.
+        plane.setThrottle(PlaneEntity.MAX_THROTTLE);
         addToWorld(level, plane);
 
         PlaneAutopilot autopilot = new PlaneAutopilot();
@@ -171,6 +180,143 @@ public final class AutopilotSpawner {
         // persisted so the route resumes after a restart.
         autopilot.start(plane, FlightPlan.route(waypoints, cruiseAltitude, legs, airfieldName), true, true, owner);
         return plane;
+    }
+
+    /**
+     * Flies a complete sortie: park at {@code departure}, taxi out, take off, cruise, and land at
+     * {@code destination}.
+     *
+     * <p>The aircraft is spawned <em>stationary, on the ground, at a parking spot</em> and is given
+     * no velocity at all. The initial velocity a strike gets is an air-launch and stays exclusive to
+     * strikes: a runway departure has a runway, and everything from the parking spot to the
+     * threshold is done on the throttle and the nosewheel.
+     *
+     * @return the aircraft, or null if it could not be created
+     */
+    public static @Nullable PlaneEntity launchSortie(ServerLevel level, Airfield departure, Airfield destination,
+                                                     @Nullable Player owner) {
+        // The runway is usually nowhere near a player, so its chunks have to exist before anything
+        // can be measured on them or spawned into them. Both thresholds, not just the centre: a
+        // 183-block runway spans a dozen chunks, and the parking spot sits beyond one of its ends —
+        // loading only the middle left the spawn point unloaded, so the apron survey read "unknown
+        // terrain" and the aircraft was parked on the centreline by the fallback instead.
+        loadAirfield(level, departure);
+        loadAirfield(level, destination);
+
+        RunwayEnd departureEnd = Airfield.departureEnd(level, departure);
+        Vec3 parking = Airfield.parkingPosition(level, departureEnd);
+        loadAround(level, parking);
+        // Facing the threshold it is about to taxi to, so the first thing it does is roll forward
+        // rather than pirouette on the spot.
+        double heading = AutopilotMath.headingTo(parking, departureEnd.threshold());
+
+        PlaneEntity plane = create(level, parking.x, parking.y + 1.0, parking.z, heading);
+        if (plane == null) {
+            return null;
+        }
+        // Explicitly stationary. No synthetic velocity on a runway departure.
+        plane.setDeltaMovement(Vec3.ZERO);
+        plane.setThrottle(0);
+        addToWorld(level, plane);
+
+        int cruiseAltitude = sortieCruiseAltitude(level, departure, destination);
+        BlockPos aim = BlockPos.containing(destination.centre());
+        PlaneAutopilot autopilot = new PlaneAutopilot();
+        plane.setAutopilot(autopilot);
+        autopilot.start(plane, FlightPlan.sortie(aim, cruiseAltitude, destination.name(), departure.name()),
+            true, true, owner);
+        return plane;
+    }
+
+    /**
+     * Launches an aircraft in the air at {@code from} and sends it one-way to a named airfield.
+     *
+     * <p>The arrival half of a sortie on its own, so an approach can be iterated on without flying
+     * the departure first — and the answer to "start away from the field and fly in", which the
+     * out-and-back {@code route} cannot express.
+     */
+    public static @Nullable PlaneEntity launchInbound(ServerLevel level, Vec3 from, Airfield destination,
+                                                      @Nullable Player owner) {
+        loadAround(level, destination.centre());
+
+        int cruiseAltitude = Math.max((int) from.y, sortieCruiseAltitude(level, destination, destination));
+        Vec3 start = new Vec3(from.x, cruiseAltitude, from.z);
+        Vec3 towards = destination.centre();
+        double heading = AutopilotMath.headingTo(start, towards);
+
+        PlaneEntity plane = create(level, start.x, start.y, start.z, heading);
+        if (plane == null) {
+            return null;
+        }
+        // Airborne launch: same reasoning as a route, an aircraft dropped in with no airspeed has to
+        // dive to find some and does not always have the height to spare.
+        Vec3 run = towards.subtract(start);
+        if (run.lengthSqr() > 1.0E-6) {
+            plane.setDeltaMovement(run.normalize().scale(CRUISE_LAUNCH_SPEED));
+        }
+        // Launch with the engine already running. Spawning at flying speed with the throttle shut
+        // means throttle 0, and throttle 0 is an airbrake (PlaneEntity#tickMotion multiplies the
+        // whole drag polynomial by 5), so the aircraft spent its first seconds losing the speed it
+        // was given while the throttle loop crept up one notch every five ticks.
+        plane.setThrottle(PlaneEntity.MAX_THROTTLE);
+        addToWorld(level, plane);
+
+        BlockPos aim = BlockPos.containing(destination.centre());
+        PlaneAutopilot autopilot = new PlaneAutopilot();
+        plane.setAutopilot(autopilot);
+        autopilot.start(plane, FlightPlan.sortie(aim, cruiseAltitude, destination.name(), null),
+            true, true, owner);
+        return plane;
+    }
+
+    /** Cruise altitude for a sortie: clear of the terrain at both fields and everything between. */
+    public static int sortieCruiseAltitude(ServerLevel level, Airfield from, Airfield to) {
+        double highest = Math.max(from.centre().y, to.centre().y);
+        Vec3 a = from.centre();
+        Vec3 b = to.centre();
+        int samples = 24;
+        for (int i = 0; i <= samples; i++) {
+            double t = (double) i / samples;
+            double x = a.x + (b.x - a.x) * t;
+            double z = a.z + (b.z - a.z) * t;
+            int surface = TerrainScanner.surfaceHeight(level, x, z);
+            if (surface != TerrainScanner.UNKNOWN_HEIGHT) {
+                highest = Math.max(highest, surface);
+            }
+        }
+        return (int) Math.min(highest + 60, level.getMaxY() - 10);
+    }
+
+    /**
+     * Makes a region resident before anything is spawned into or measured on it.
+     *
+     * <p>{@code ServerLevel#getChunk(int, int)} generates and returns the chunk synchronously, which
+     * is what is needed here: a ticket alone only <em>schedules</em> the load, and the aircraft would
+     * be spawned into a chunk that does not exist yet — it would fall through the world or, more
+     * usually, sit there not ticking. The ticket is still added so the chunk stays resident
+     * afterwards.
+     */
+    /** Makes a whole runway resident: both thresholds and the ground between them. */
+    private static void loadAirfield(ServerLevel level, Airfield airfield) {
+        Vec3 a = airfield.pointA();
+        Vec3 b = airfield.pointB();
+        int steps = Math.max(1, (int) Math.ceil(airfield.length() / 16.0));
+        for (int i = 0; i <= steps; i++) {
+            double t = (double) i / steps;
+            loadAround(level, new Vec3(a.x + (b.x - a.x) * t, a.y, a.z + (b.z - a.z) * t));
+        }
+    }
+
+    private static void loadAround(ServerLevel level, Vec3 centre) {
+        int chunkX = Mth.floor(centre.x) >> 4;
+        int chunkZ = Mth.floor(centre.z) >> 4;
+        level.getChunkSource().addTicketWithRadius(TicketType.ENDER_PEARL,
+            new ChunkPos(chunkX, chunkZ), AutopilotConfig.CHUNK_TICKET_RADIUS);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                level.getChunk(chunkX + dx, chunkZ + dz);
+            }
+        }
     }
 
     /** Cruise high enough to clear the terrain under every waypoint. */
@@ -188,11 +334,12 @@ public final class AutopilotSpawner {
     }
 
     private static void addToWorld(Level level, PlaneEntity plane) {
-        // Ticket first: the aircraft is usually spawned far from anyone, and an entity in a chunk
-        // nobody keeps loaded never ticks — it would simply hang in the air. Requesting before the
-        // entity is added gets the chunk load under way first. The autopilot renews this every
-        // 20 ticks; the ticket itself expires after 40, so nothing leaks.
+        // Chunks first, and resident before the entity is added rather than merely requested. An
+        // aircraft is nearly always spawned far from any player, and an entity added to a chunk that
+        // is not loaded yet does not tick — it just hangs there. A ticket on its own only schedules
+        // the load, so the spawn chunk is also pulled in synchronously.
         if (level instanceof ServerLevel serverLevel) {
+            loadAround(serverLevel, plane.position());
             PlaneAutopilot.keepChunksLoaded(serverLevel, plane);
         }
         level.addFreshEntity(plane);
