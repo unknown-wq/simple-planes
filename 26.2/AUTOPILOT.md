@@ -878,11 +878,13 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
                                                  launch an attack run
 /autopilot tool <distance> [bearing] [blast] [blocks] [fire]
                                                  write those settings onto the held strike tool
-/autopilot route <x y z> <x y z> [speed]         fly A -> B -> A and land
-/autopilot flight <from> <to> [speed] [delay <seconds>]
+/autopilot route <x y z> <x y z> [speed] [type <airframe>]
+                                                 fly A -> B -> A and land
+/autopilot flight <from> <to> [speed] [delay <seconds>] [type <airframe>]
                                                  full sortie between two registered airfields;
                                                  delay is how long it waits on its parking spot
-/autopilot inbound <x y z> <airfield> [speed]    one-way arrival into a named airfield
+/autopilot inbound <x y z> <airfield> [speed] [type <airframe>]
+                                                 one-way arrival into a named airfield
 /autopilot survey <x y z> <x y z>                survey a runway between two thresholds
 /autopilot tower [<airfield>]                    runway states: free/occupied, by whom, who is holding
 /autopilot status                                full telemetry for every autopilot aircraft
@@ -921,6 +923,34 @@ Omit it and the bearing is derived from wherever the command was issued (the pla
 console's world-spawn origin); if that origin sits on top of the target it falls back to a fixed
 due-south run-in. Given explicitly, the whole flight is deterministic and repeatable, which is what
 makes headless testing useful.
+
+### Which airframe flies
+
+`type <plane|large|cargo|random>` on `route`, `flight` and `inbound`. `random` draws from the three
+fixed-wing airframes; **helicopters are excluded deliberately**, because `HelicopterEntity` overrides
+`tickPitch`, `tickRoll`, `tickRotateMotion` and `getTickPush` — the control laws do not describe it,
+so dispatching one would not fly it badly, it would fly something the flight director has no model of.
+
+A keyword branch for the same reason `delay` is one, and accepted after it, so the two read in the
+order a person says them. Omitted, the airframe is the starter plane, exactly as before.
+
+The three are not interchangeable. `getRotationSpeedMultiplier` scales both the pitch and the yaw
+ramp:
+
+| airframe | multiplier | max yaw | max pitch | measured |
+|---|---|---|---|---|
+| `plane` | 1.0 | 2.5 deg/tick | 5.0 deg/tick | departs and lands |
+| `large` | 0.5 | 1.25 deg/tick | 2.5 deg/tick | `landed at airfield-2/36, 2655, -60, -9 (1 block down the runway)` |
+| `cargo` | 0.2 | 0.5 deg/tick | 1.0 deg/tick | **cruises, cannot fly the approach turn** |
+
+**The cargo plane does not yet complete an arrival**, and that is measured rather than suspected. It
+departs correctly and holds 2.59 b/t over a 2000-block cruise, then on the approach it cannot close
+the turn onto the centreline: `want[hdg=320]` against an actual `hdg=056`, 96 degrees of error that
+never reduces, ending in `going around (1/3): heading 39 deg off the runway`. At 0.5 deg/tick and
+0.5 b/t its turn radius is about 57 blocks, so what has to become airframe-aware is the approach
+geometry — the fix distance, the 40-degree intercept cut, the bank limits — not the airframe. It is
+offered anyway because the cruise is genuinely useful and the failure is loud rather than silent, but
+it is not finished. Do not send one on a sortie you need to arrive.
 
 ### The warhead
 
