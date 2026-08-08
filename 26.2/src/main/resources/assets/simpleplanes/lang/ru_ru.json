@@ -82,5 +82,18 @@
     "simpleplanes.route_wand_desc": "ПКМ по блокам — точки маршрута, Shift+ПКМ — запуск",
     "simpleplanes.route_wand_waypoints": "Отмечено точек: %s",
     "simpleplanes.runway_tool_desc": "ПКМ по обоим торцам ВПП — снять характеристики",
-    "simpleplanes.runway_tool_anchor": "Первый порог: %s"
+    "simpleplanes.runway_tool_anchor": "Первый порог: %s",
+    "simpleplanes.tower.summary": "ВПП в этом измерении: %s, занято: %s, в зоне ожидания: %s.",
+    "simpleplanes.tower.empty": "В этом измерении нет ни зарегистрированных аэродромов, ни самолётов, ожидающих полосу.",
+    "simpleplanes.tower.no_traffic": "движения нет",
+    "simpleplanes.tower.holding_only": "в зоне ожидания %s, на полосу никто не выпущен",
+    "simpleplanes.tower.holding_header": "в зоне ожидания (очереди нет: полосу займёт тот, кто первым её опросит):",
+    "simpleplanes.tower.inbound_header": "на подходе:",
+    "simpleplanes.tower.arrival": "на посадку",
+    "simpleplanes.tower.blocks_out": "%s блоков до полосы",
+    "simpleplanes.tower.geometry": "ВПП %s, длина %s, ширина %s, уклон %s град.",
+    "simpleplanes.tower.threshold": "%s  курс %s  порог %s",
+    "simpleplanes.tower.not_registered": "(не зарегистрирован)",
+    "simpleplanes.tower.unregistered_note": "в этом измерении не зарегистрирован - самолёты летят на полосу, которую разметили сами, или на удалённую из списка",
+    "simpleplanes.tower.unknown": "Аэродром %s не найден, и к нему ничего не летит. Список: /autopilot airfields."
 }

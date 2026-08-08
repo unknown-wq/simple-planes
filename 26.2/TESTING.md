@@ -109,6 +109,7 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 | `flight <from> <to>` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
 | `inbound <x y z> <airfield>` | one-way arrival into a named airfield — the landing test, without the departure |
 | `survey <t1> <t2>` / `airfields` | register and list runways |
+| `tower [<airfield>]` | runway states — free/occupied, by which aircraft, in what mode, for how long, and who is holding |
 | `status` | live list of autopilot aircraft with a status line each |
 | `stop` | stop all of them |
 

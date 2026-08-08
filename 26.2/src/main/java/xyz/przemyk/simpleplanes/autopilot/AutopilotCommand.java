@@ -37,6 +37,7 @@ import java.util.List;
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt;
  * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
  * /autopilot airfields
+ * /autopilot tower [&lt;airfield&gt;]
  * /autopilot status
  * /autopilot stop
  * </pre>
@@ -94,6 +95,12 @@ public final class AutopilotCommand {
                 .then(Commands.argument("threshold1", BlockPosArgument.blockPos())
                     .then(Commands.argument("threshold2", BlockPosArgument.blockPos())
                         .executes(AutopilotCommand::survey))));
+
+            root.then(Commands.literal("tower")
+                .executes(AutopilotCommand::tower)
+                .then(Commands.argument("airfield", StringArgumentType.string())
+                    .suggests(AIRFIELD_SUGGESTIONS)
+                    .executes(AutopilotCommand::towerOne)));
 
             root.then(Commands.literal("airfields").executes(AutopilotCommand::airfields));
             root.then(Commands.literal("status").executes(AutopilotCommand::status));
@@ -266,6 +273,40 @@ public final class AutopilotCommand {
         BlockPos second = BlockPosArgument.getLoadedBlockPos(context, "threshold2");
         AirfieldReport.surveyAndRegister(AutopilotOutput.toSource(source), source.getLevel(), first, second);
         return 1;
+    }
+
+    /**
+     * The tower board for every runway in this dimension: free or occupied, by whom, in what mode,
+     * for how long, and who is holding for it.
+     *
+     * <p>Read-only. It reserves nothing and releases nothing; occupancy comes from
+     * {@link RunwayOccupancy#holder}, the same validated answer the aircraft themselves get.
+     *
+     * <p>The board's sentences carry an English fallback, so a player reading it in chat gets their
+     * own language and the dedicated server console — which loads no mod language files — still
+     * prints English rather than raw translation keys.
+     */
+    private static int tower(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<Component> lines = TowerBoard.board(source.getLevel());
+        for (Component line : lines) {
+            source.sendSuccess(() -> line, false);
+        }
+        return lines.size();
+    }
+
+    private static int towerOne(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        String name = StringArgumentType.getString(context, "airfield");
+        List<Component> lines = TowerBoard.board(source.getLevel(), name);
+        if (lines.isEmpty()) {
+            source.sendFailure(TowerBoard.unknownAirfield(name));
+            return 0;
+        }
+        for (Component line : lines) {
+            source.sendSuccess(() -> line, false);
+        }
+        return lines.size();
     }
 
     private static int airfields(CommandContext<CommandSourceStack> context) {

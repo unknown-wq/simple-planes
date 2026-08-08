@@ -425,6 +425,7 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
 /autopilot inbound <x y z> <airfield>            one-way arrival into a named airfield
 /autopilot survey <x y z> <x y z>                survey a runway between two thresholds
 /autopilot airfields                             list registered airfields
+/autopilot tower [<airfield>]                    runway states: free/occupied, by whom, who is holding
 /autopilot status                                full telemetry for every autopilot aircraft
 /autopilot stop                                  stop every autopilot aircraft in this dimension
 ```
@@ -450,6 +451,50 @@ the whole flight is deterministic and repeatable, which is what makes headless t
 flight director is *commanding*. Comparing the two is how you tell a controller that is tracking
 from one that is saturated or fighting itself — and a `pos` that does not change between two polls
 means the aircraft is not ticking at all (see chunk loading below).
+
+### The tower board
+
+`status` answers "what is aircraft #42 doing". `tower` answers the other question — "what is this
+runway doing, and who is waiting for it":
+
+```
+> autopilot tower
+2 runways in this dimension, 1 occupied, 1 holding.
+airfield-1  36/18  FREE      no traffic
+airfield-2  36/18  OCCUPIED  #2 arrival, final, 0:22, 186 blocks out
+  holding (no sequence: the first to poll a free runway takes it):
+    #1 arrival, hold, 0:19, 328 blocks out
+```
+
+Per runway: the designator pair, `FREE` or `OCCUPIED`, and for an occupant its id, its mode and how
+long it has held the reservation. Aircraft orbiting for that runway are listed under it,
+longest-wait-first, with the same elapsed time and their horizontal range to the field.
+`/autopilot tower <airfield>` adds the runway geometry, both thresholds, and everything else on the
+way in that has not asked for the runway yet.
+
+A name that is not registered still gets a row when traffic is flying to it — an improvised landing
+strip (`field-52  --/--  OCCUPIED  #52 arrival, final, 0:29  (not registered)`), or a field that was
+removed while an aircraft was already inbound.
+
+**The board is read-only and it does not smooth anything over.** Three things it deliberately does
+not claim, all of them true of the code as it stands:
+
+* **No queue order.** There is none: an aircraft in `HOLD` polls `RunwayOccupancy.isFree` every 20
+  ticks and whichever one polls first takes the runway. Numbering the holders would draw an order
+  that does not exist, so they are listed by wait time with the poll rule printed.
+* **No departures.** A reservation is only ever taken for the field an aircraft is *landing* at, so
+  an aircraft taxiing or rolling for take-off holds nothing and its strip reads `FREE`. That is
+  today's behaviour and the board shows it rather than inventing a state.
+* **No runway end in use.** Which of the two ends an arrival picked is private to the flight
+  director; the board prints the pair the airfield has.
+
+Occupancy comes from `RunwayOccupancy.holder()`, which validates the holder instead of trusting the
+map, so the board can never show a runway as busy because of an aircraft that crashed — and it can
+never disagree with the answer the aircraft themselves get, because it is the same call. Durations
+come from `TowerWatch`, which samples the live autopilot set from the server tick every 10 ticks and
+records nothing but "since when"; it writes nothing back into occupancy, so a board that shows
+something odd is reporting a fact rather than causing one. Every duration is therefore accurate to
+half a second, and a role less than half a second old prints `?`.
 
 ### Chunk loading
 
@@ -528,6 +573,11 @@ world cannot double-count either.
   ticket keeps a bubble loaded around the aircraft itself, which covers the normal case.
 * **Route legs are fixed at 2** (out and back) from the wand. Use `/autopilot flight` or
   `/autopilot inbound` for a one-way sortie, or the `FlightPlan` API for more.
+* **There is no runway sequencing.** One reservation per airfield, taken by arrivals only, and no
+  queue behind it: holding aircraft re-poll every 20 ticks and whoever polls first is next, so a
+  long-waiting aircraft can be passed over. Departures reserve nothing at all, so two sorties out of
+  the same field will taxi onto the same threshold. `/autopilot tower` makes both visible; neither
+  is fixed.
 * **Taxi is a straight line to the threshold.** There is no taxiway network and no obstacle
   avoidance on the ground: the aircraft steers directly at the lineup point. On a surveyed field with
   a sane parking apron that is enough; it will not thread a hangar.

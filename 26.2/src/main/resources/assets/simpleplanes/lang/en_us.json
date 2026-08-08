@@ -116,5 +116,18 @@
     "simpleplanes.route_wand_desc": "Right-click blocks to mark waypoints, sneak + right-click to launch",
     "simpleplanes.route_wand_waypoints": "Waypoints marked: %s",
     "simpleplanes.runway_tool_desc": "Right-click both ends of a runway to survey it",
-    "simpleplanes.runway_tool_anchor": "First threshold: %s"
+    "simpleplanes.runway_tool_anchor": "First threshold: %s",
+    "simpleplanes.tower.summary": "%s runways in this dimension, %s occupied, %s holding.",
+    "simpleplanes.tower.empty": "No airfields registered in this dimension, and no aircraft holding for one.",
+    "simpleplanes.tower.no_traffic": "no traffic",
+    "simpleplanes.tower.holding_only": "%s holding, none cleared yet",
+    "simpleplanes.tower.holding_header": "holding (no sequence: the first to poll a free runway takes it):",
+    "simpleplanes.tower.inbound_header": "inbound:",
+    "simpleplanes.tower.arrival": "arrival",
+    "simpleplanes.tower.blocks_out": "%s blocks out",
+    "simpleplanes.tower.geometry": "runway %s, %s blocks long, %s wide, slope %s deg",
+    "simpleplanes.tower.threshold": "%s  heading %s  threshold %s",
+    "simpleplanes.tower.not_registered": "(not registered)",
+    "simpleplanes.tower.unregistered_note": "not registered in this dimension - traffic is flying to a strip it surveyed for itself, or to one that has since been removed",
+    "simpleplanes.tower.unknown": "No such airfield: %s, and nothing is flying to one by that name. Use /autopilot airfields to list them."
 }
