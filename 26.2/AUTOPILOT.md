@@ -292,12 +292,12 @@ IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► 
 
 | Mode | What it does |
 |---|---|
-| `PARKED` | Stationary on the parking spot, throttle shut, running the departure clock down and then asking for the runway |
+| `PARKED` | Stationary on the parking spot, throttle shut, running the departure clock down and then asking for the runway. Which end it will use, and the turn onto course, were decided before it was put there — see [4e](#4e-deciding-the-departure-before-the-aircraft-rolls) |
 | `TAXI` | Ground steering from the parking spot to the departure threshold at 0.20 speed, elevator neutral |
 | `TAXI_IN` | Ground steering from where the aircraft stopped, off the strip and on to a marked stand — see [Taxiing in](#4d-taxiing-in-runway--stand) |
 | `TAKEOFF` | Full power, ground steering on the runway heading, elevator aft, rotate at 0.35 speed, wings level |
 | `CLIMB` | Climb to cruise altitude on the first waypoint's bearing |
-| `CRUISE` | Fly waypoints, terrain-following, advancing within `max(30, turn radius)`, bleeding speed for the arrival |
+| `CRUISE` | Fly waypoints, terrain-following, advancing within `max(30, turn radius)`, bleeding speed for the arrival — and, on the last leg into a named airfield, handing over to `DESCENT` at the arrival decision range rather than overhead ([4d](#4d-deciding-the-arrival-at-range-and-then-flying-it)) |
 | `STRIKE` | Hold 100 above the ground, then dive at the target — see [The attack run](#the-attack-run) |
 | `DESCENT` | Fly to the initial approach fix, 300 blocks out at circuit height |
 | `APPROACH` | Track the extended centreline and capture the glide slope |
@@ -977,8 +977,7 @@ Extending is always tried before circling because it helps twice over — more t
 *and* a higher slope that far out — and because it makes progress towards the runway, which an orbit
 does not. `MAX_INTERCEPT_DISTANCE` is 900 (126 blocks above the threshold at 8°, nearly three times
 circuit height); past that the extension is a long way flown in the wrong direction and an orbit
-really is cheaper. The plan is re-decided every tick and converges: a high arrival typically reads
-`extended final 450 → 600 → straight in` and lands without orbiting at all.
+really is cheaper.
 
 `tickApproach` caps the commanded altitude at `glideSlopeAltitude(min(distance, interceptDistance))`
 rather than at circuit height. That cap was the reason an extended final could not work: an aircraft
@@ -992,7 +991,244 @@ landing over a hill to save a detour is exactly the trade this function exists t
 position settles is the case the old code settled arbitrarily: with both funnels clean it returned
 end A regardless of where the aircraft came from, so an arrival from the wrong side flew the length
 of the field, turned round and came back — 400 blocks and about 40 seconds at approach speed. A
-departure passes no position and gets the old answer unchanged.
+departure has its own scorer now; see [4d](#4d-deciding-the-arrival-at-range-and-then-flying-it).
+
+**The obstacle count is the larger of the surveyed one and what is visible now.** A survey is a
+photograph: it is trustworthy about the moment it was taken and says nothing about a hill built, or a
+chunk generated, afterwards. Taking the maximum keeps the survey as the *floor* — which is what stops
+an unloaded funnel scoring zero and winning, the bug this function was fixed for once already — while
+letting an obstacle the aircraft can now actually see be counted. Unknown columns are skipped in the
+live half for exactly that reason: the surveyed number already speaks for them.
+
+### 4d. Deciding the arrival at range, and then flying it
+
+The user's question was blunt: **"почему за 200 блоков нельзя сразу расчитать по какому маршруту
+удастся сесть? … сделать расчёт а потом уже садиться и взлетать"** — why can the whole route to a
+landing not be worked out a couple of hundred blocks out and then simply flown, take-off included.
+
+They were right, and for a worse reason than they knew. Nothing was worked out at range at all.
+
+**The arrival began overhead.** `AutopilotSpawner#launchInbound` and `#launchSortie` make the flight's
+last waypoint the **centre of the destination runway**, and `tickCruise` only started the arrival once
+that waypoint was reached. Measured on the rig, a straight-in down the extended centreline at the
+2.60 default:
+
+```
+trace #1 t=340 descent pos=0.5,-0.04,-50.7 … dthr=-51.2   ← DESCENT entered 51 blocks PAST the threshold
+trace #1 t=440 descent pos=-89.2,-12.79,-40.0 … lat=-89.7 ← 90 blocks off the centreline, coming back round
+```
+
+The aircraft flew the length of the field, out to 90 blocks abeam, and back to a fix 300 blocks out on
+the side it had just come from — **1578 blocks of track for a 780-block flight**. That loop is on
+every single arrival, and none of it was a decision.
+
+So `ArrivalPlan` grew three things: a range at which the decision has to be made, a feasibility test
+against what the airframe can actually do, and a commit point.
+
+#### The decision range is the aircraft's own geometry
+
+```
+decisionRange = interceptDistance + max(ARRIVAL_DECISION_FLOOR, 2 × turnRadius)
+```
+
+`turnRadius` is `v / yawRate`, and `tickYaw` clamps the yaw rate to `2.5°/tick × the airframe's
+getRotationSpeedMultiplier`. **That multiplier is the whole reason this is not a constant**: 1.0 on
+the starter plane, 0.5 on the large one, **0.2 on the cargo plane**. The same 0.50 b/t approach is an
+11.5-block turn on one airframe and a **57-block** turn on another.
+
+Two radii, because the manoeuvre the range has to pay for is the join onto the centreline and its
+worst case is a course reversal, which displaces the aircraft `2r` sideways before it rolls out.
+
+**On the user's 100 blocks.** It is the floor, not the rule, and the arithmetic says why. At cruise
+speed the starter airframe's radius is 59.6 blocks, so two of them are 119 and the floor never binds.
+At approach speed the radius is 11.5 and two are 23 — without a floor the aircraft would be deciding
+its arrival from inside the pattern, so 100 is what stops that. But on the cargo airframe the
+approach-speed radius is 57 blocks and two are 115: **100 blocks is under two turn radii there**,
+which is enough to *verify* a straight-in and not enough to *repair* a bad entry. Flown on the rig,
+`inbound 0 -30 120` — 120 blocks straight down the centreline — lands on both builds, so 100 blocks
+really is enough for the easy case on the light airframe. It is not enough for the case that matters.
+
+The range is measured to the **threshold**, not to the intercept fix. An arrival from abeam never
+passes near the fix at all, so a fix-referenced trigger would sail straight past the decision and end
+up overhead again, which is the behaviour being removed.
+
+**Only a flight whose last waypoint *is* the field cuts the corner.** Three conditions:
+this is the last leg; the destination is a named airfield; and that waypoint is within
+`ARRIVAL_WAYPOINT_IS_THE_FIELD` (300 blocks) of it. A route wand's last waypoint is somewhere a player
+pointed at, and it is still flown to exactly as before — verified with `/autopilot route`, which still
+reads `arrival at field-17/36: straight in, decided 45 blocks out` off its improvised strip.
+
+#### Feasibility, not merely geometry
+
+The old test was one line: can the height above the fix be lost on the way there at
+`MAX_DESCENT_ANGLE`. Two things the airframe knows and that line did not:
+
+* **The descent is sink-rate limited, not angle limited.** The altitude cascade clamps the commanded
+  vertical speed to `MAX_SINK_RATE` (0.30 b/t) *before* it becomes a flight path angle, so the
+  gradient really available is `min(tan(12°), 0.30 / v)`. At cruise speed that is 0.115 against the
+  0.213 of 12° — the old figure promised **nearly twice** the descent the aircraft could fly.
+  `AutopilotMath.descentAvailable` integrates it along `speedSchedule`, which is the same profile the
+  descent leg is actually flown on, because neither end is honest alone: the current speed
+  under-counts by the whole braked part of the run and the target speed over-counts by the fast part.
+* **The turn onto final has to fit.** Joining through `θ` displaces the aircraft `r(1 − cos θ)` to the
+  outside, up to `2r`; washing that off against the centreline costs `offset / tan(40°)` of track
+  (40° is the largest cut `tickApproach` takes), and all of it has to be spent before the gates arm at
+  `FINAL_HANDOVER_DISTANCE`. On the starter airframe at approach speed the worst case costs 27 of the
+  150 available and this never binds — nothing about an ordinary arrival changes. On a cargo plane it
+  costs 136, which only just fits, and from the transit speed it does not fit at all. That is the case
+  that used to be discovered at the gate: measured before `speedAtFix` existed, an aircraft reaching
+  the fix at 1.91 b/t swung **87 blocks** off the centreline and went around.
+
+Both failures are repaired the same way and in the same order as before — extend the final, orbit only
+when no final can absorb it — because a longer final buys track for the height *and* for the turn.
+
+#### Committed, and re-checked
+
+The plan used to be recomputed from scratch every tick. That is not a commitment, and the phrase gave
+it away: a 172-block-high arrival announced `extended final 600 → 450 → 600 → straight in` inside a
+single second, because the extension ladder is discrete and an aircraft between two rungs alternates
+between them.
+
+It is now decided once and held, and re-checked every `ARRIVAL_RECHECK_INTERVAL` (20 ticks). **What
+triggers a replan**, in the order they are tested:
+
+| Trigger | Phrase | Live in |
+|---|---|---|
+| The runway became busy, or free | `the runway is busy` / `the runway is free` | descent and approach |
+| The glide slope is blocked — raycast from the fix to the aim point | `terrain across the 36 glide slope` | descent and approach |
+| The end's approach obstacle count has risen since the plan was made | `5 columns now visible in the 36 approach` | descent and approach |
+| The committed profile no longer closes | `the profile no longer closes` | descent only |
+| A final a whole rung shorter now closes | `a shorter final now closes` | descent only |
+
+Everything else leaves the plan alone. Four details that were each found by getting them wrong first:
+
+* **The corridor raycast is the only probe that loads what it looks at.** `Level#clip` reads block
+  states and `Level#getBlockState` generates the chunk if it has to, where every heightmap probe in
+  this feature answers `UNKNOWN_HEIGHT`. The ground under a final is exactly the part of the world
+  nobody has generated when the arrival is decided 415 blocks out. With only the heightmap probe the
+  plan never changed at all on the wall test below — the wall's chunks were still unloaded every time
+  it was consulted. Its cost is bounded: the trace starts no further out than
+  `FINAL_INTERCEPT_DISTANCE`, so a 900-block extended final is checked over its last 300 and the first
+  call is about twenty chunks whatever the plan.
+* **It fires once per runway end.** An overhang is invisible to the heightmap, so a replan can land on
+  the same end again; firing every second after that would replan for ever and change nothing. Said
+  once, and the corridor raycast in `tickApproach` — unchanged — still produces the go-around.
+* **The profile test is not re-run once the aircraft is established on the final.** The plan has been
+  executed by then and the authority on whether the approach is good enough to land from is the
+  landing gates. Re-deciding there produced nothing but noise: a perfectly ordinary straight-in
+  announcing an extended final five blocks short of its own fix, because the distance still to run
+  goes to zero and any height above the slope reads as a failure. `ARRIVAL_PROFILE_SLACK` (5 blocks,
+  the cascade's steady-state lag with a block in hand) covers the same hair-trigger nearer the fix.
+* **A replan re-chooses the runway end — but not after a go-around.** `goAround` takes the end over at
+  that point (it switches to the opposite one after `MAX_GO_AROUNDS`), and a replan that re-ran
+  `bestEnd` would hand it straight back, swapping the aircraft between the two for ever.
+
+#### Measured
+
+Same rig, same world, same jar swapped underneath it; a 160×25 strip on the superflat, `tick sprint`
+throughout. **Ticks** is launch to wheels stopped, **track** is the summed horizontal chords, **lat**
+is the worst lateral offset once established on the approach.
+
+| Arrival | ticks | track | lat | go-arounds |
+|---|---|---|---|---|
+| straight in, 2.60 | 1396 → **889** | 1578 → **737** | 41.8 → **0.0** | 0 → 0 |
+| straight in, 2.80 | 1372 → **897** | 1575 → **736** | 39.5 → **0.0** | 0 → 0 |
+| straight in, 0.40 | 3389 → **1559** | 1477 → **736** | 47.4 → **0.0** | 0 → 0 |
+| from the wrong side | 1334 → **823** | 1409 → **575** | 42.2 → **0.0** | 0 → 0 |
+| 120 blocks high | 1649 → **1396** | 2174 → **1733** | 25.7 → **13.2** | 0 → 0 |
+| wrong side *and* high | 1585 → **1321** | 2017 → **1566** | 26.0 → **13.1** | 0 → 0 |
+| from abeam, 500/300 | 1317 → **971** | 1354 → **876** | 44.6 → 44.4 | 0 → 0 |
+| from abeam, 150/150 | 1193 → **974** | 1021 → **701** | 45.6 → 49.9 | 0 → 0 |
+| 120 blocks out, centreline | 1177 → **991** | 985 → **837** | — | 0 → 0 |
+| two arrivals, one runway (first) | 1423 → **947** | 1664 → **857** | 40.6 → 38.8 | 0 → 0 |
+| two arrivals, one runway (second) | 2509 → **2038** | 2622 → **1775** | 43.1 → 58.0 | 0 → 0 |
+| **wall across the funnel, built after the survey** | 2018 → **1353** | 2350 → **1502** | — | **3 → 0** |
+| southbound sortie, both ends | 2457 → **1868** | 3742 → **2715** | 40.9 → **4.2** | 0 → 0 |
+
+Replans fired 0 times on six of the nine clean arrivals, twice on each of the two high ones (walking
+the extension ladder down as the height came off), and once on the wall.
+
+**The two arrivals from abeam are the honest exception.** An aircraft 150 blocks from the runway and
+90° off it has to reposition whatever the planner says — the fix is behind it — so the lateral figure
+does not improve and should not. What improves is that it decides to reposition at range instead of
+arriving overhead and discovering it.
+
+**Nothing in `gateFailure` moved.** Heading, lateral offset, bank and sink rate are the values they
+were, and the corridor raycast in `tickApproach` is untouched. The wall case is the measure of
+success: the go-arounds went away because the approach became flyable, not because a gate stopped
+complaining.
+
+#### The one thing that was not the problem
+
+The premise "compute it 200 blocks out" is right in spirit and wrong in the arithmetic. On the flat,
+clean superflat **not one arrival went around before this change** — 8 scenarios, 0 go-arounds — so
+"how often does an arrival go around" was already zero for the easy cases and there was nothing there
+to fix. What was there to fix was a guaranteed 400–800 blocks of unplanned circuit on every arrival,
+and a plan that was recomputed rather than committed to. The go-arounds only appear when the world
+disagrees with the survey, and that is the case the replan triggers exist for.
+
+### 4e. Deciding the departure before the aircraft rolls
+
+`Airfield#departureEnd` called `bestEnd(level)` with no position and no destination, and `bestEnd`
+answers a different question: *which threshold would you rather cross on the way in*. It scores each
+end by its own **approach** funnel — the ground **before** that threshold. A departure that rolls from
+that threshold runs the other way down the strip and climbs out past the **far** one, over the
+opposite end's funnel: the one `bestEnd` had just rejected.
+
+**So on a field with a hill off one end, the aircraft landed away from the hill and took off straight
+at it.** Reproduced on the rig with a 36-block wall 20 to 60 blocks off the 36 threshold, surveyed
+(`approach obstacles: 36 -> 5, 18 -> 0`), with the destination due south so the departure climbs
+straight out:
+
+```
+Plane #100 cleared to taxi at airfield-1/18 …
+Plane #100 lost at 19, -27, 19 in climb.        ← flown into the wall
+```
+
+`DeparturePlan` scores it properly, and with the input the old call did not have — where the flight is
+going:
+
+```
+cost(end) = track from the far threshold to the first waypoint
+          + turnRadius × the turn onto course, in radians
+          + 400 × columns in the climb-out funnel
+```
+
+* The first two terms are what a wrong-way departure costs: a runway length flown in the wrong
+  direction plus the turn, about 210 blocks on a 160-block strip at climb speed.
+* The obstacle term is the same 400 blocks an arrival pays, so **one blocked column outweighs any
+  wrong-way departure** — turning the aircraft round is cheap and climbing out at a hillside is not.
+  The count comes from the survey, for the same reason `bestEnd` takes it from there: a departure is
+  decided while most of the climb-out is unloaded ground.
+* Both of the first two terms favour the same end (the one nearer the destination is also the one with
+  the smaller turn), so the airframe's turn rate can change the turn the plan *reports* but not the
+  end it picks. That matters because the choice is made twice — once by the spawner, which puts the
+  aircraft on a parking spot beside one threshold, and once by the flight director, which then taxis
+  to it — and the two must not disagree.
+
+Same wall, same sortie, after:
+
+```
+Plane #4 departure from airfield-1: depart 36, 180 deg turn to course.
+Plane #4 landed at airfield-3/18, 0, -60, 2537 (36 blocks down the 160-block runway, 23% used).
+```
+
+And with no obstacle at all, a sortie to a field 2660 blocks due south departs 18 (straight out)
+instead of 36 (180° turn): **2457 → 1868 ticks, 3742 → 2715 blocks of track, 28.4 → 15.7 full turns of
+heading change.**
+
+The phrase goes in the same `plan[…]` field as everything else, and is what `status` and the tower
+board show while the aircraft is on the ground:
+
+```
+#20 parked pos=17,-60,13 … dep=airfield-1/36 wait=clock 0:15 legs=0/1 plan[depart 36, 92 deg turn to course]
+airfield-1  36/18  FREE      2 waiting to depart, none cleared yet
+    #20 departure, parked, 0:05, 0:14 on the clock [depart 36, 92 deg turn to course]
+```
+
+`/autopilot status` also carries `replans=N` beside `go-arounds=N`. The two are read together: a
+replan is the plan being repaired in the air, which is the outcome this feature wants, and a
+go-around is the same failure discovered at the gate, which is the one it does not.
 
 ### How long a landing takes, and where the time went
 
@@ -1947,9 +2183,11 @@ A name that is not registered still gets a row when traffic is flying to it — 
 strip (`field-52  --/--  OCCUPIED  #52 arrival, final, 0:29  (not registered)`), or a field that was
 removed while an aircraft was already inbound.
 
-Every aircraft's row ends with the flight director's own account of its plan, in brackets —
-`straight in`, `extended final 600`, `orbit to lose 120`, `holding, runway busy`, or en route
-`around right 30 deg, saves 44 of climb`. It comes from the aircraft rather than being re-derived,
+Every aircraft's row ends with the flight director's own account of its plan, in brackets — on the
+ground `depart 36, straight out` or `depart 18, 92 deg turn to course`, en route
+`around right 30 deg, saves 44 of climb`, and arriving `straight in`, `extended final 600`,
+`orbit to lose 120` or `holding, runway busy`. Three planners, one field, in the order the flight uses
+them. It comes from the aircraft rather than being re-derived,
 so the board cannot describe an arrival differently from the way it is being flown, and it is the
 answer to the question a board full of holding traffic exists to raise. The same phrase is the
 `plan[…]` field on every `/autopilot status` line and is reported to the console whenever it changes.
@@ -2041,7 +2279,26 @@ world cannot double-count either.
   extended centreline inbound. There is no downwind/base leg — an aircraft that arrives high extends
   the final rather than flying a circuit, and the hold is a simple circular orbit rather than a
   racetrack. Coming from the far side of the field the join is therefore a 180° turn, flown at
-  approach speed so it rolls out on the line.
+  approach speed so it rolls out on the line. `ArrivalPlan` now *checks* that turn fits (§4d) and
+  lengthens the final until it does, but it still cannot construct a different shape of join.
+* **An arrival from abeam still has to reposition, and the planner does not make that cheaper.** The
+  intercept fix is on the far side of an aircraft that arrives 150 blocks out and 90° off the runway,
+  so it flies away from the field to get onto the final. Measured on the rig, the lateral excursion in
+  that case is the same before and after (45.6 → 49.9 blocks). What changed is that it *decides* to
+  reposition at range instead of discovering it overhead. A base leg is what would actually fix it.
+* **The corridor raycast used for planning forces chunk generation.** It is the only probe in this
+  feature that does; every heightmap probe declines to answer for unloaded ground instead. That is
+  deliberate — the ground under a final is exactly what nobody has generated when the arrival is
+  decided 400 blocks out — but it means a committed arrival generates about twenty chunks under its
+  own glide slope, once, and that cost lands on a single tick.
+* **The departure's climb-out obstacles come from the survey and nowhere else.** A hill built after
+  the survey, or in a chunk nobody has loaded, does not enter the choice of departure end: unlike the
+  arrival, a departure has no time in which to notice. Re-survey the field after changing the ground
+  off either threshold.
+* **The decision range is derived from the turn radius, not from the terrain.** It says how much room
+  the *join* needs; it knows nothing about how far out the aircraft would have to start descending
+  over a ridge. `RoutePlanner` still owns the en-route half of that and only sees as far as the
+  loaded horizon.
 * **The route planner is a heading search, not a path search.** It scores candidate headings along
   straight rays out to the loaded horizon; it has no notion of a gap it could aim at, and it cannot
   plan a route that needs two turns. It re-decides every second, which is what makes that adequate

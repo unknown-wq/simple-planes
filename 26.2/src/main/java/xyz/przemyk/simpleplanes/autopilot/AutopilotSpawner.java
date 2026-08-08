@@ -240,7 +240,10 @@ public final class AutopilotSpawner {
         loadAirfield(level, departure);
         loadAirfield(level, destination);
 
-        RunwayEnd departureEnd = Airfield.departureEnd(level, departure);
+        // Where the sortie is going decides which way it leaves, so the destination goes in here and
+        // not only into the flight plan — see DeparturePlan. The parking spot is derived from the
+        // answer, so this is the moment it has to be settled.
+        RunwayEnd departureEnd = Airfield.departureEnd(level, departure, destination.centre());
         Airfield.ParkingSpot parking = Airfield.parkingPosition(level, departureEnd);
         loadAround(level, parking.position());
         // The heading comes from the parking spot rather than being derived here. Facing the
