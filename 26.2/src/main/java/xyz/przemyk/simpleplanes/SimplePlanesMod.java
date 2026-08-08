@@ -7,6 +7,7 @@ import net.minecraft.world.item.Items;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotRegistry;
+import xyz.przemyk.simpleplanes.autopilot.TowerWatch;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesBlocks;
@@ -46,6 +47,7 @@ public class SimplePlanesMod implements ModInitializer {
         // registry whose server-tick heartbeat keeps chunks loaded around aircraft in flight.
         AutopilotComponents.init();
         AutopilotRegistry.init();
+        TowerWatch.init();
         AutopilotCommand.register();
 
         registerUpgradeItems();

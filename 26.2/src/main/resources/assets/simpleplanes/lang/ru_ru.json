@@ -122,5 +122,18 @@
     "simpleplanes.autopilot.manage.park_on_strip": "  Внимание: эта стоянка на самой полосе — ожидающий там борт стоит на посадочной площадке.",
     "simpleplanes.autopilot.manage.unpark_none": "У аэродрома %s нет стоянки рядом с %s.",
     "simpleplanes.autopilot.manage.unparked": "Стоянка в %s удалена (осталось %s).",
-    "simpleplanes.autopilot.detail.threshold_unsurveyed": " (измерено сейчас, не по разметке)"
+    "simpleplanes.autopilot.detail.threshold_unsurveyed": " (измерено сейчас, не по разметке)",
+    "simpleplanes.tower.summary": "ВПП в этом измерении: %s, занято: %s, в зоне ожидания: %s.",
+    "simpleplanes.tower.empty": "В этом измерении нет ни зарегистрированных аэродромов, ни самолётов, ожидающих полосу.",
+    "simpleplanes.tower.no_traffic": "движения нет",
+    "simpleplanes.tower.holding_only": "в зоне ожидания %s, на полосу никто не выпущен",
+    "simpleplanes.tower.holding_header": "в зоне ожидания (очереди нет: полосу займёт тот, кто первым её опросит):",
+    "simpleplanes.tower.inbound_header": "на подходе:",
+    "simpleplanes.tower.arrival": "на посадку",
+    "simpleplanes.tower.blocks_out": "%s блоков до полосы",
+    "simpleplanes.tower.geometry": "ВПП %s, длина %s, ширина %s, уклон %s град.",
+    "simpleplanes.tower.threshold": "%s  курс %s  порог %s",
+    "simpleplanes.tower.not_registered": "(не зарегистрирован)",
+    "simpleplanes.tower.unregistered_note": "в этом измерении не зарегистрирован - самолёты летят на полосу, которую разметили сами, или на удалённую из списка",
+    "simpleplanes.tower.unknown": "Аэродром %s не найден, и к нему ничего не летит. Список: /autopilot airfields."
 }

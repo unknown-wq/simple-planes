@@ -110,6 +110,7 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 | `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
 | `survey <t1> <t2>` | register a runway |
 | `airfields [info\|show\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
+| `tower [<airfield>]` | runway states — free/occupied, by which aircraft, in what mode, for how long, and who is holding |
 | `status` | live list of autopilot aircraft with a status line each |
 | `stop` | stop all of them |
 

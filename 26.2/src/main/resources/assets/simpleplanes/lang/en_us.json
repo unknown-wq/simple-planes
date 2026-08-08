@@ -156,5 +156,18 @@
     "simpleplanes.autopilot.manage.park_on_strip": "  Note: that spot is on the runway itself, so an aircraft waiting there stands on the landing area.",
     "simpleplanes.autopilot.manage.unpark_none": "No parking spot of %s near %s.",
     "simpleplanes.autopilot.manage.unparked": "Removed the parking spot at %s (%s left).",
-    "simpleplanes.autopilot.detail.threshold_unsurveyed": " (measured now, not surveyed)"
+    "simpleplanes.autopilot.detail.threshold_unsurveyed": " (measured now, not surveyed)",
+    "simpleplanes.tower.summary": "%s runways in this dimension, %s occupied, %s holding.",
+    "simpleplanes.tower.empty": "No airfields registered in this dimension, and no aircraft holding for one.",
+    "simpleplanes.tower.no_traffic": "no traffic",
+    "simpleplanes.tower.holding_only": "%s holding, none cleared yet",
+    "simpleplanes.tower.holding_header": "holding (no sequence: the first to poll a free runway takes it):",
+    "simpleplanes.tower.inbound_header": "inbound:",
+    "simpleplanes.tower.arrival": "arrival",
+    "simpleplanes.tower.blocks_out": "%s blocks out",
+    "simpleplanes.tower.geometry": "runway %s, %s blocks long, %s wide, slope %s deg",
+    "simpleplanes.tower.threshold": "%s  heading %s  threshold %s",
+    "simpleplanes.tower.not_registered": "(not registered)",
+    "simpleplanes.tower.unregistered_note": "not registered in this dimension - traffic is flying to a strip it surveyed for itself, or to one that has since been removed",
+    "simpleplanes.tower.unknown": "No such airfield: %s, and nothing is flying to one by that name. Use /autopilot airfields to list them."
 }
