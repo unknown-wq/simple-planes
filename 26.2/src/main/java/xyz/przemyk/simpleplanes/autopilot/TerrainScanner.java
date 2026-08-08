@@ -36,14 +36,53 @@ public class TerrainScanner {
     /**
      * Surface height of a column: the Y of the first free block above the terrain, or
      * {@link #UNKNOWN_HEIGHT} if the chunk is not loaded.
+     *
+     * <p>This is the <em>clearance</em> surface — the top of whatever the aircraft would touch if it
+     * flew down this column. {@link Heightmap.Types#MOTION_BLOCKING} tests
+     * {@code blocksMotion() || !getFluidState().isEmpty()}, so a sea reports its own waterline and a
+     * forest its canopy. That is the right answer for "how low may I fly here", which is what terrain
+     * following and the approach obstacle counts ask, and the wrong answer for "may I put the wheels
+     * down here" — see {@link #landableSurfaceHeight}.
      */
     public static int surfaceHeight(Level level, double x, double z) {
+        return heightAt(level, Airfield.heightmapType(), x, z);
+    }
+
+    /**
+     * Surface an aircraft could actually come to rest on: the top of the highest block that blocks
+     * motion, with any fluid standing on it ignored. Over an ocean this is the sea floor rather than
+     * the waterline, and over a lava lake the rock underneath it.
+     *
+     * <p>{@link Heightmap.Types#OCEAN_FLOOR} carries {@code Usage.LIVE_WORLD}, so unlike the
+     * worldgen-only heightmaps it is maintained on a running server and costs the same single O(1)
+     * lookup as {@link #surfaceHeight}.
+     */
+    public static int landableSurfaceHeight(Level level, double x, double z) {
+        return heightAt(level, Heightmap.Types.OCEAN_FLOOR, x, z);
+    }
+
+    /**
+     * Whether the surface directly under a column is ground an aircraft can touch down on, as
+     * opposed to the top of a body of water or lava.
+     *
+     * <p>The two heightmaps differ by exactly the fluid standing on top of the terrain, so comparing
+     * them answers the question without a single block lookup. An unloaded column answers
+     * <em>false</em> on purpose: everything that consults this is deciding whether to commit to a
+     * touchdown, and "the server has not loaded that ground" must never be the answer that lets the
+     * commitment be made.
+     */
+    public static boolean isLandable(Level level, double x, double z) {
+        int clearance = surfaceHeight(level, x, z);
+        return clearance != UNKNOWN_HEIGHT && clearance == landableSurfaceHeight(level, x, z);
+    }
+
+    private static int heightAt(Level level, Heightmap.Types type, double x, double z) {
         int blockX = (int) Math.floor(x);
         int blockZ = (int) Math.floor(z);
         if (!level.hasChunkAt(blockX, blockZ)) {
             return UNKNOWN_HEIGHT;
         }
-        int height = level.getHeight(Airfield.heightmapType(), blockX, blockZ);
+        int height = level.getHeight(type, blockX, blockZ);
         if (height <= level.getMinY()) {
             return UNKNOWN_HEIGHT;
         }
@@ -148,9 +187,15 @@ public class TerrainScanner {
      * Precise line-of-sight check along the approach path, used to confirm the final approach
      * corridor really is clear before committing to a landing. This is a genuine voxel raycast
      * ({@link Level#clip(ClipContext)}), so unlike the heightmap it also catches overhangs.
+     *
+     * <p>Fluids count. The corridor used to be traced with {@link ClipContext.Fluid#NONE}, which is
+     * the setting for "what would I bump into" — and water is the one thing on an approach that an
+     * aircraft passes straight through and does not come out of. A sea standing above the glide
+     * slope is as much of a reason to go around as a hillside is, and it is invisible to the
+     * heightmap check as well, because the heightmap reports the waterline as though it were ground.
      */
     public static boolean pathClear(Level level, Entity entity, Vec3 from, Vec3 to) {
-        BlockHitResult hit = level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, entity));
+        BlockHitResult hit = level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.ANY, entity));
         return hit.getType() == HitResult.Type.MISS;
     }
 }

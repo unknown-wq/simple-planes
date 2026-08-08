@@ -218,9 +218,11 @@ All three are in the Simple Planes creative tab.
 
 * **Right-click a block** — spawns an aircraft the configured distance away (default 400 blocks, on
   the far side of you so it runs in past you) and sends it at that block at full throttle.
-* **Right-click the air** — status report, including the blast setting.
+* **Right-click the air** — status report: distance, warhead and run-in bearing.
 * **Sneak + right-click the air** — cycle the spawn distance: 100 → 200 → 400 → 800, and the blast
   strength one step each time the distance wraps. See [The strike tool](#the-strike-tool).
+* `/autopilot tool <distance> [bearing] [blast] [blocks] [fire]` — write the full set of settings,
+  including "do not break blocks", "set fire" and a pinned run-in bearing, onto the tool in hand.
 
 The aircraft is launched already at attack speed with a booster fitted, cruises the run-in at
 **100 blocks above the ground**, and only then dives — see [The attack run](#the-attack-run).
@@ -273,14 +275,15 @@ exact. The survey reports:
 ## 3. The state machine
 
 ```
-IDLE ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
-                              │          ▲         │  ▲                 │
-                              │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
-                              └──► STRIKE (one-way attack run, no landing)
+IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
+                             │          ▲         │  ▲                 │
+                             │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
+                             └──► STRIKE (one-way attack run, no landing)
 ```
 
 | Mode | What it does |
 |---|---|
+| `PARKED` | Stationary on the parking spot, throttle shut, running the departure clock down and then asking for the runway |
 | `TAXI` | Ground steering from the parking spot to the departure threshold at 0.20 speed, elevator neutral |
 | `TAKEOFF` | Full power, ground steering on the runway heading, elevator aft, rotate at 0.35 speed, wings level |
 | `CLIMB` | Climb to cruise altitude on the first waypoint's bearing |
@@ -361,17 +364,28 @@ sampled any closer than that to the aimpoint, and the detonation covers the diff
 ## 3a. Airfield to airfield: the scripted sortie
 
 ```
-/autopilot flight <from> <to>
+/autopilot flight <from> <to> [speed] [delay <seconds>]
 ```
 
 Two registered airfields by name; one aircraft flies the whole thing:
 
-**Parked.** The aircraft is created stationary, on the ground, throttle shut, on an apron beside the
-departure runway — `width/2 + 4` blocks off the centreline and 12 blocks back from the threshold.
-If the ground alongside is not level with the runway (within 2 blocks) the apron is abandoned and it
-parks on the centreline behind the threshold instead, because the surveyed strip is the one piece of
-ground known to be flat. **No initial velocity.** The velocity a strike is launched with is an
-air-launch and stays exclusive to strikes; a runway departure has a runway.
+**Parked.** The aircraft is created stationary, on the ground, throttle shut, on a **marked parking
+spot** if the field has one (§4b) and otherwise on an apron derived from the survey — `width/2 + 4`
+blocks off the centreline and 12 blocks back from the threshold. If the ground alongside is not level
+with the runway (within 2 blocks) the apron is abandoned and it parks on the centreline behind the
+threshold instead, because the surveyed strip is the one piece of ground known to be flat. **No
+initial velocity.** The velocity a strike is launched with is an air-launch and stays exclusive to
+strikes; a runway departure has a runway.
+
+It is spawned one block above the parking surface and settles onto it. Verified on the rig against a
+spot marked at `670, -61, 10`: the launch line reads `parked at airfield-1 (671, -59, 11)` and the
+first `status` poll reads `pos=671,-60,11 agl=0` — the top of the marked block, not inside it. The
+half-block is the difference between the block a player clicked and
+`TerrainScanner.surfaceHeight`, which reports the first *free* block; both `Airfield#pointA` and the
+parking validation use that same convention, so they are directly comparable.
+
+**Waiting.** `PARKED` is where the aircraft sits until it is allowed to move, and there are two
+separate gates — see [Departure delay and the runway gate](#departure-delay-and-the-runway-gate).
 
 **Taxi.** `TAXI` steers to a lineup point at the threshold at `TAXI_SPEED` (0.20 b/t), then stops
 chasing the point and simply holds the runway heading until it is within `TAXI_ALIGNED_ERROR` (8°) —
@@ -389,6 +403,84 @@ chosen by `Airfield#bestEnd` (approach obstacles, ties to uphill).
 
 **Report.** Every phase change that matters prints to the console, and the flight ends with one
 assertable line — `Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).`
+
+### Departure delay and the runway gate
+
+`PARKED` holds the aircraft on its spot until two things are true, in order.
+
+**The clock.** `delay <seconds>` on the command, stored on the flight plan as ticks. It runs down
+whatever else is happening and is purely what was ordered.
+
+**The runway.** Only once the clock has run out does the aircraft ask `RunwayOccupancy` for the
+departure field, and it does not move until it has it. Asking earlier would reserve a strip for an
+aircraft that is not going to use it for another five minutes, which is worse than not reserving one
+at all.
+
+**A departure now reserves the runway**, which is new — it used to reserve nothing, so two sorties
+out of one field would taxi onto the same threshold and the tower board printed `FREE` for a strip
+with an aircraft rolling down it. The reservation is taken *before* the mode changes, so the aircraft
+is never in `TAXI` without holding the runway, and it is released on the `TAKEOFF → CLIMB` transition
+— `TAKEOFF_CLEAR_HEIGHT`, 10 blocks above the ground and past the far threshold. Measured on the rig,
+two sorties ordered 3 s apart out of `airfield-1`:
+
+```
+Plane #56 cleared to taxi at airfield-1/36 after 1s on the parking spot.
+Plane #57 holding on the parking spot at airfield-1: runway occupied by #56.
+  #56 taxi    pos=670,-60,10 ...          dep=airfield-1/36
+  #57 parked  pos=639,-60,4  spd=0.00 ... dep=airfield-1/36 wait=runway
+  … ten seconds of #57 sitting still while #56 taxis, lines up and rolls …
+Plane #57 cleared to taxi at airfield-1/36 after 10s on the parking spot.
+  #56 climb   pos=657,-47,-66 agl=13 ...   ← the same second: #56 left TAKEOFF, #57 got the runway
+```
+
+**It cannot leak.** Nothing here is a new lifetime to get wrong: `RunwayOccupancy` validates every
+reservation against `PlaneAutopilot#holdsRunway` rather than trusting its map, and that method is now
+true for a departure exactly while the mode is `TAXI` or `TAKEOFF`. An aircraft that is killed,
+crashes, despawns or is stopped therefore stops holding the runway without anything having to notice
+— on top of the existing `releaseAll` on `stop` and on `PlaneEntity#remove`. Verified: an aircraft
+killed mid-taxi while holding `airfield-1` leaves the board reading `airfield-1  36/18  FREE`.
+
+**There is no timeout on the runway gate, and that is deliberate.** Rolling anyway after some number
+of failed polls would put an aircraft onto a runway that is genuinely occupied, which is the one
+thing the gate exists to prevent. A departure waits for as long as it takes; `/autopilot tower` is
+what makes that visible. (The *taxi* keeps its `TAXI_TIMEOUT` — by then the aircraft already owns the
+strip and the only question is whether it is straight on it.)
+
+**No order between waiting aircraft.** A parked aircraft polls every `DEPARTURE_POLL_INTERVAL` (20)
+ticks on its own tick counter, which is the same rule and the same interval an arrival in `HOLD`
+uses, so departures and arrivals compete on equal terms and neither can poll the other out simply by
+asking more often. Whoever polls a free runway first takes it. With two aircraft waiting the order is
+unspecified and a long-waiting aircraft can be passed over — the tower board says so in as many words
+rather than printing a queue number that means nothing.
+
+### Why the delay is a keyword argument
+
+`/autopilot flight <from> <to> [speed] [delay <seconds>]`, not `/autopilot flight <delay> <from> <to>`.
+
+The delay is the first thing anyone thinks of, but it cannot be the first argument: `flight` already
+takes two strings, so a leading positional would reinterpret every existing
+`/autopilot flight "airfield-1" "airfield-2"` as a delay and one airfield. A *trailing* positional is
+no better — it would be reachable only by also giving a speed, so "wait 30 seconds" would mean
+"wait 30 seconds and, by the way, here is a cruise speed I did not care about". The keyword branches
+off both the two-argument and the three-argument forms, so all four of these parse and the first two
+are byte-identical to what they were:
+
+```
+/autopilot flight "airfield-1" "airfield-2"
+/autopilot flight "airfield-1" "airfield-2" 2.60
+/autopilot flight "airfield-1" "airfield-2" delay 30
+/autopilot flight "airfield-1" "airfield-2" 2.80 delay 15
+```
+
+Seconds, because that is what a person thinks in; the plan stores ticks. Bounded at
+`MAX_DEPARTURE_DELAY_SECONDS` (3600) by the argument parser — `Integer must not be more than 3600:
+found 99999` — because a parked aircraft still holds one of the 24 autopilot slots and a chunk bubble
+for the whole wait, so a mistyped delay is indistinguishable from a launch that failed.
+
+The plan field is `optionalFieldOf("departure_delay", 0)`, so a plan with no delay writes no key at
+all and is byte-identical to one written before this existed. Verified with `data get`:
+`{kind: "route", …, max_legs: 1}` with no delay ordered, and `…, departure_delay: 300, …` for
+`delay 15`.
 
 ### Testing the arrival on its own
 
@@ -446,10 +538,128 @@ beyond that it commits to the landing rather than orbiting forever.
    runway aiming point, once a second above 15 blocks AGL. Unlike the heightmap this also catches
    overhangs. A blocked corridor triggers a go-around.
 
+### Water is not ground
+
+The heightmap cannot tell a sea from a field, and for a long time neither could the approach.
+
+`TerrainScanner.surfaceHeight` reads `Heightmap.Types.MOTION_BLOCKING`, whose predicate is
+`blocksMotion() || !getFluidState().isEmpty()`. A column of ocean therefore reports its **waterline**
+as the surface, at the same O(1) cost and with the same shape of answer as a column of grass. Every
+number derived from it inherits that: the survey's approach obstacle counts, the terrain profile, and
+`agl` in `/autopilot status`. Filling the approach corridor of a test runway with water changed
+nothing whatsoever in the survey — `160x25, roughness 0.00, approach obstacles 36 -> 0, 18 -> 0`
+before and after.
+
+That is the *right* answer for "how low may I fly here" and the wrong one for "may I put the wheels
+down here", and the flare asked the second question using the first answer:
+
+* **The flare is a commitment, not a manoeuvre.** `tickFlare` forces the throttle to 0 and holds it
+  there. Whatever is under the aircraft when it fires is what the aircraft is going to come down on.
+* **`getOnGround()` is true in water.** `PlaneEntity#tickOnGround` runs on `getOnGround() ||
+  isOnWater()` and sets the `onGroundTicks` coyote timer from inside it, so an aircraft floating in
+  the sea reports itself as on the ground — with the same 48x rolling drag.
+
+Put together, an approach that crossed the shoreline four blocks up entered `FLARE` over open water,
+stopped flying, sank, and the roll-out announced a landing. Measured on the rig, a runway on flat
+ground with the sea lapping eight blocks past its threshold:
+
+| | before | after |
+|---|---|---|
+| `FLARE` entered | 15 blocks **before** the threshold, `agl=3.98` over the waterline | never — no landable surface |
+| water contact | 6 blocks past the threshold, still descending | none, `water=false` throughout |
+| came to rest | `y = -63`, three blocks under the surface, `water=true` | went around, switched ends, landed on 18 |
+| reported | `Plane #5 landed at airfield-1/36, 0, -63, -6 (7 blocks down the runway).` | `going around (1/3): crossed the threshold still airborne` |
+
+Three changes, and they are all "reference the runway, not the ground":
+
+1. **`TerrainScanner.isLandable`** compares `MOTION_BLOCKING` against `OCEAN_FLOOR` — the same
+   predicate without the fluid clause, and `Usage.LIVE_WORLD`, so a running server maintains it. The
+   two differ by exactly the fluid standing on the terrain, so one extra heightmap lookup answers
+   "is this ground" with no block reads at all. An **unloaded** column answers *false*: everything
+   that consults it is deciding whether to commit, and "not loaded" must never be the answer that
+   lets the commitment be made.
+2. **The flare needs a landable surface *and* the runway's own elevation.** `agl <= FLARE_HEIGHT`
+   alone also fires over ground that rises under the approach — a beach or a ridge brings AGL to four
+   blocks while the aircraft is nine above the runway and fifty short of it. Both numbers agree over
+   the runway, which is the only place a flare belongs.
+3. **The gates and the corridor raycast are flown on height above the threshold**, not AGL. The
+   documentation always said "below 30 blocks above the threshold"; the code said "below 30 blocks
+   above whatever is underneath". Identical on a flat field, and on a coastal or valley approach the
+   ground reading starts the gates late over low ground and early over high. The corridor raycast is
+   also now traced with `ClipContext.Fluid.ANY` instead of `NONE`: a sea standing above the glide
+   slope is as good a reason to go around as a hillside, and it is the one obstacle the heightmap
+   check cannot see, because it reports the waterline as ground.
+
+**What the fix does not do** is make a flooded runway landable. Standing water above the threshold
+elevation is held back by something, and whatever holds it back stands above a glide slope that is
+aimed at the threshold — such an approach is unflyable in principle, and the correct outcome is the
+go-around it now gets. What the fix converts is the class where the runway *is* dry and the water is
+only on the way in.
+
+**Other surfaces that are not ground.** Three bands laid across a cruise track on the rig, read
+straight off the per-tick trace at 100 blocks up (`gnd` is the AGL reference, `landable` the new
+test):
+
+| under the aircraft | `gnd` | `landable` | |
+|---|---|---|---|
+| plain grass, the superflat | −60 | true | the baseline |
+| **lava**, 3 deep, replacing −63…−61 | −60, its own surface | **false** | fluid: in `MOTION_BLOCKING`, not in `OCEAN_FLOOR` |
+| **oak leaves**, a 3-block canopy on −60…−58 | −57, the canopy | true | leaves block motion, so both heightmaps agree |
+| **powder snow**, 3 deep on −60…−58 | −60, the ground *under* it | true | in neither heightmap |
+
+So lava is fixed by the same test with no lava-specific code — it is a fluid, and the false flare
+fired over it for exactly the reason it fired over the sea.
+
+Powder snow needed nothing: `Blocks.POWDER_SNOW` is registered with `dynamicShape()`, so
+`BlockBehaviour#calculateSolid` has no collision-shape cache to consult and returns false, and the
+block is therefore absent from *both* heightmaps. An aircraft is measured against the real ground
+underneath the snow — which is also where it ends up, since powder snow has no collision for it. The
+altitude was never wrong; the aircraft simply arrives already buried, which is the correct outcome
+for landing in a snowdrift.
+
+A forest canopy is a genuine surface and reads as one. An aircraft that settles into the treetops
+really has come to rest on them — that was never a false altitude, only a false *report*, and it is
+the next section that fixes it. What did change for a forest is the flare: a canopy rising under the
+approach used to bring AGL to four blocks while the aircraft was still well above the runway, and the
+height-above-threshold term now refuses that.
+
+### A landing report has to be true
+
+`tickRollout` used to announce a landing on `speed < ROLLOUT_STOP_SPEED && getOnGround()` and nothing
+else. Both are satisfied by an aircraft resting on a sea floor a hundred blocks short of the field,
+and the distance it printed — `|alongTrack|` — stays a small, plausible-looking number whether the
+aircraft is on the strip, short of it, or far out to one side. That is how a drowning came to be
+reported as `landed at airfield-2/19 … (58 blocks down the runway)`.
+
+`landingProblem` now asks the three questions the claim actually rests on, and the roll-out prints
+one line or the other:
+
+* along the strip, between the thresholds within `LANDING_POSITION_TOLERANCE` (5 blocks)
+* across it, inside `max(width/2, 5)` of the centreline
+* at the runway surface underneath, within `LANDING_ELEVATION_TOLERANCE` (3 blocks) — interpolated
+  along the strip, because a surveyed runway is allowed to slope
+* and not in water, which is checked first because it is the one that was being missed
+
+```
+Plane #7 landed at airfield-2/36, 2655, -60, -12 (4 blocks down the runway).
+Plane #5 did not land at airfield-1/36: came to rest in the water, at 0, -63, -6.
+```
+
+Both paths go through `stop()`, so the runway reservation is released either way — a runway held for
+ever by an aircraft on the sea floor was the second thing the false report hid. `checkGrounded` gained
+the same distinction one level up: an aircraft that stops flying in a mode that is meant to be
+airborne now **ditched in water at** rather than **came down at** when it is floating.
+
+All of these go through `AutopilotFeedback.report`, which logs when there is no owning player, so a
+console-issued sortie prints every one of them — verified on the rig, where every line quoted above
+was read out of `console.log` with no player connected.
+
 **Holding.** `RunwayOccupancy` is a small reservation registry keyed by dimension and airfield name.
-An aircraft reserves the runway when it commits to the approach and releases it on landing, on a
-go-around, or when it is destroyed. A second aircraft arriving at a busy field enters `HOLD` and
-orbits the approach fix until the runway frees up.
+An arrival reserves the runway when it commits to the approach and releases it on landing, on a
+go-around, or when it is destroyed; a departure reserves it before it starts to taxi and releases it
+on the climb-out (see [Departure delay and the runway gate](#departure-delay-and-the-runway-gate)).
+A second aircraft arriving at a busy field enters `HOLD` and orbits the approach fix at circuit
+height until the runway frees up; one departing from a busy field stays on its parking spot.
 
 Aircraft in a hold are separated by entity id: the level is `id mod 4` times 10 blocks and the
 starting angle round the fix is `id * 137°`. `PlaneEntity#canBeCollidedWith` is unconditionally
@@ -673,6 +883,12 @@ the rest are where a queue forms behind it. Verified: two sorties launched a sec
 Anything that fails re-validation drops through to the next spot and finally to the derived apron, so
 a marked spot can never strand an aircraft that would otherwise have flown.
 
+A marked spot is now also somewhere an aircraft **waits** rather than merely somewhere it appears:
+`PARKED` sits there for the ordered delay and then for as long as the runway is busy. That makes the
+"more than one spot" rule load-bearing instead of cosmetic — with two spots marked, two sorties
+ordered seconds apart wait on different squares while the first one uses the strip, and each is
+listed under the field on `/autopilot tower` with what it is waiting for.
+
 ---
 
 ## 5. Terrain following and obstacle avoidance
@@ -762,6 +978,8 @@ you want a reliable one.
 |---|---|---|
 | Airfields, including marked parking spots | `SavedData` per dimension, `data/simpleplanes/airfields.dat` | **Yes** |
 | In-progress route flight | Plane entity NBT, via `FlightPlan.CODEC` | **Yes** |
+| Departure delay *ordered* | Plane entity NBT, `departure_delay` on the plan | **Yes** |
+| Departure delay *remaining* | Flight director only | No — a reloaded `PARKED` becomes `TAKEOFF`, see §9 |
 | Half-drawn route / half-marked runway | Data component on the item | **Yes** |
 | Runway reservations | In memory | No — and correctly so, they are re-derived on load |
 | Strike flights | Not written | No — see below |
@@ -807,8 +1025,12 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
 ```
 /autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]
                                                  launch an attack run
+/autopilot tool <distance> [bearing] [blast] [blocks] [fire]
+                                                 write those settings onto the held strike tool
 /autopilot route <x y z> <x y z> [speed]         fly A -> B -> A and land
-/autopilot flight <from> <to> [speed]            full sortie between two registered airfields
+/autopilot flight <from> <to> [speed] [delay <seconds>]
+                                                 full sortie between two registered airfields;
+                                                 delay is how long it waits on its parking spot
 /autopilot inbound <x y z> <airfield> [speed]    one-way arrival into a named airfield
 /autopilot survey <x y z> <x y z>                survey a runway between two thresholds
 /autopilot tower [<airfield>]                    runway states: free/occupied, by whom, who is holding
@@ -832,10 +1054,22 @@ because names contain a hyphen), so they need no block-position argument at all 
 refused for pointing at unloaded ground — which is the normal case, not an edge case, since both
 runways are usually nowhere near a player.
 
-`bearing` is the compass direction the attack run comes in *from*, 0–359. Omit it and the bearing is
-derived from wherever the command was issued (the player, or the console's world-spawn origin); if
-that origin sits on top of the target it falls back to a fixed due-south run-in. Given explicitly,
-the whole flight is deterministic and repeatable, which is what makes headless testing useful.
+`bearing` is the compass direction the attack run comes in *from*, 0–359 — where the aircraft is
+placed relative to the target, not the direction it then flies. That is the useful way round,
+because what someone choosing a bearing is picking is which side of the target the run-in passes
+over. Measured against a target at `0 80 0` from 100 blocks:
+
+| `bearing` | Spawned at | Attacks toward |
+|---|---|---|
+| 0 | `1, -99` (north) | south |
+| 90 | `101, 1` (east) | west |
+| 180 | `1, 101` (south) | north |
+| 270 | `-99, 1` (west) | east |
+
+Omit it and the bearing is derived from wherever the command was issued (the player, or the
+console's world-spawn origin); if that origin sits on top of the target it falls back to a fixed
+due-south run-in. Given explicitly, the whole flight is deterministic and repeatable, which is what
+makes headless testing useful.
 
 ### The warhead
 
@@ -890,12 +1124,35 @@ only reaches disk on a route or sortie.
 
 ### The strike tool
 
-The item carries a blast **strength** only, cycled by sneak + right-click: the spawn distance
-advances on every press, and the blast advances one step each time the distance wraps back to the
-start, through 4.0 → 8.0 → 16.0 → 1.0. Both values are printed on every press and both are on the
-tooltip. A held item offers exactly one spare gesture, and spending it on a three-way cycle of
-independent settings would be harder to use than not having them there at all — so `blocks` and
-`fire` stay command-only, and the tool always breaks blocks and never sets fire, as it always has.
+Sneak + right-click cycles the two settings that get changed in flight: the spawn distance advances
+on every press, and the blast strength advances one step each time the distance wraps back to the
+start, through 4.0 → 8.0 → 16.0 → 1.0. Both are printed on every press and both are on the tooltip.
+
+The other three settings are reachable, just not through that gesture. A held item offers exactly
+one spare gesture, and cycling five independent settings through it would be worse than not having
+them — so the full set is written onto the tool in hand by a command:
+
+```
+/autopilot tool <distance> [bearing] [blast] [blocks] [fire]
+```
+
+The same arguments in the same order as `strike`, minus the target, because the target of a tool
+strike is whichever block gets right-clicked. This is the one subcommand that requires a player:
+the thing being configured is an item in a hand (main hand first, then off hand).
+
+`bearing` here is optional in a second sense — **-1 unpins it**, restoring the default behaviour of
+working the run-in out from wherever the player is standing so the aircraft passes them on its way
+in. Any pinned bearing makes a tool strike as repeatable as a console one. Arguments left off keep
+their current value rather than resetting to the default, so a second call can change one setting
+without restating the rest.
+
+Every setting lives on the stack as a data component, so it survives logging out, a chest, and
+death. They are four separate components rather than one `Blast` component because tools already in
+players' inventories carry a bare float under the old key: adding fields beside it keeps those
+tools working, where changing the type would silently reset them.
+
+The sneak-cycle deliberately preserves `blocks` and `fire` when it advances the strength — a
+gesture meant for the two numbers must not quietly undo the two settings it does not show.
 
 `status` is the one to watch while debugging. Per aircraft it prints:
 
@@ -909,6 +1166,14 @@ flight director is *commanding*. Comparing the two is how you tell a controller 
 from one that is saturated or fighting itself — and a `pos` that does not change between two polls
 means the aircraft is not ticking at all (see chunk loading below).
 
+A `solid=` field appears beside `agl` only when the two disagree, which is exactly when the aircraft
+is over something it cannot land on: `agl=4 solid=7` is four blocks above a waterline and seven above
+the sea floor under it. Without it a ditching and an approach over a field read identically here.
+
+`-Dsimpleplanes.autopilot.trace=true` on the server JVM adds a per-tick line per aircraft to the log
+with the same quantities plus `landable`, `og`, `water` and the distance along and across the runway.
+It is what the water bug was found with; `status` polls too slowly to see a flare fire.
+
 ### The tower board
 
 `status` answers "what is aircraft #42 doing". `tower` answers the other question — "what is this
@@ -916,12 +1181,35 @@ runway doing, and who is waiting for it":
 
 ```
 > autopilot tower
-2 runways in this dimension, 1 occupied, 1 holding.
-airfield-1  36/18  FREE      no traffic
-airfield-2  36/18  OCCUPIED  #2 arrival 36, final, 0:22, 186 blocks out [straight in]
+3 runways in this dimension, 2 occupied, 1 holding, 1 waiting to depart.
+airfield-1  36/18  OCCUPIED  #56 departure, taxi, 0:04
+  waiting to depart (no sequence: the first to poll a free runway takes it):
+    #57 departure, parked, 0:01, waiting for the runway
+airfield-2  36/18  OCCUPIED  #2 arrival, final, 0:22, 186 blocks out
   holding (no sequence: the first to poll a free runway takes it):
-    #1 arrival 36, hold, 0:19, 328 blocks out [holding, runway busy]
+    #1 arrival, hold, 0:19, 328 blocks out
+airfield-3  09/27  FREE      1 waiting to depart, none cleared yet
+  waiting to depart (no sequence: the first to poll a free runway takes it):
+    #9 departure, parked, 0:04, 0:25 on the clock
 ```
+
+Per runway: the designator pair, `FREE` or `OCCUPIED`, and for an occupant its id, whether it is a
+`departure` or an `arrival`, its mode and how long it has held the reservation. Aircraft orbiting for
+that runway are listed under it, longest-wait-first, with the same elapsed time and their horizontal
+range to the field; aircraft still on their parking spots are listed the same way with **what they
+are waiting for** — `0:25 on the clock` or `waiting for the runway`. Those two are never merged into
+one word, because a wait that cannot say which of the two gates it is behind is indistinguishable
+from a hang. `/autopilot tower <airfield>` adds the runway geometry, both thresholds, and everything
+else on the way in that has not asked for the runway yet.
+
+`/autopilot status` carries the same two facts per aircraft: `dep=airfield-1/36` while it is on the
+ground at the departure field, plus `wait=clock 0:14` or `wait=runway` while it is parked.
+
+```
+#1 parked pos=671,-60,11 agl=0 hdg=324 pitch=+5 roll=-0 spd=0.03 vs=-0.03 thr=0
+    want[hdg=324 alt=-60 spd=0.00] tgt=2655,0,-100 dist=1987 dep=airfield-1/36 wait=clock 0:14 legs=0/1
+```
+
 
 Per runway: the designator pair, `FREE` or `OCCUPIED`, and for an occupant its id, the end it picked,
 its mode and how long it has held the reservation. Aircraft orbiting for that runway are listed under it,
@@ -940,15 +1228,17 @@ so the board cannot describe an arrival differently from the way it is being flo
 answer to the question a board full of holding traffic exists to raise. The same phrase is the
 `plan[…]` field on every `/autopilot status` line and is reported to the console whenever it changes.
 
-**The board is read-only and it does not smooth anything over.** Two things it deliberately does
-not claim, both of them true of the code as it stands:
+**The board is read-only and it does not smooth anything over.** One thing it deliberately does
+not claim, and it is true of the code as it stands:
 
-* **No queue order.** There is none: an aircraft in `HOLD` polls `RunwayOccupancy.isFree` every 20
-  ticks and whichever one polls first takes the runway. Numbering the holders would draw an order
-  that does not exist, so they are listed by wait time with the poll rule printed.
-* **No departures.** A reservation is only ever taken for the field an aircraft is *landing* at, so
-  an aircraft taxiing or rolling for take-off holds nothing and its strip reads `FREE`. That is
-  today's behaviour and the board shows it rather than inventing a state.
+* **No queue order.** There is none: an aircraft in `HOLD` or in `PARKED` polls
+  `RunwayOccupancy` every 20 ticks and whichever one polls first takes the runway, arrivals and
+  departures alike. Numbering them would draw an order that does not exist, so they are listed by
+  wait time with the poll rule printed.
+
+The third thing it used to not claim was **departures**, and that is now fixed rather than
+documented: a departure holds a reservation from the start of the taxi to the climb-out, so the
+strip it is using reads `OCCUPIED`, by whom, and in which direction.
 
 Occupancy comes from `RunwayOccupancy.holder()`, which validates the holder instead of trusting the
 map, so the board can never show a runway as busy because of an aircraft that crashed — and it can
@@ -1040,6 +1330,13 @@ world cannot double-count either.
   flight path. The *magnitude* does matter, though: a banked aircraft yawing hard couples into pitch
   through the quaternion, which is why bank is surrendered at low speed.
 * **Improvised landings are rough** by nature. Survey a runway for anything reliable.
+* **A runway cannot be reached across standing water that is higher than it.** The glide slope is
+  aimed at the threshold, so anything holding water above the threshold elevation also stands above
+  the slope near it: that approach is unflyable and the aircraft goes around rather than ditching.
+  Nothing picks the drier end for you either — `bestEnd` ranks the two funnels on the obstacle counts
+  the survey recorded, and a sea at or below the runway elevation is not an obstacle to *clearance*,
+  which is all that count measures. It is only after the three go-arounds that the other end is
+  tried.
 * **Terrain in ungenerated chunks reads as unknown** and is skipped, so an aircraft flying into
   never-visited terrain holds altitude rather than reacting to ground it cannot see. The chunk
   ticket keeps a bubble loaded around the aircraft itself, which covers the normal case.
@@ -1052,12 +1349,17 @@ world cannot double-count either.
 * **There is no taxiway network.** Marked parking makes the *start* of the taxi a human decision;
   the taxi itself is still a straight line to the threshold, which is why a marked spot is validated
   along that line and capped at 64 blocks from it.
-* **There is no runway sequencing.** One reservation per airfield, taken by arrivals only, and no
-  queue behind it: holding aircraft re-poll every 20 ticks and whoever polls first is next, so a
-  long-waiting aircraft can be passed over. Departures reserve nothing at all, so two sorties out of
-  the same field will taxi onto the same threshold. `/autopilot tower` makes both visible; neither
-  is fixed. Aircraft in a hold *are* separated from each other now (see §4), but that is separation,
-  not order.
+* **There is no runway sequencing.** One reservation per airfield, now taken by departures as well
+  as arrivals, but still no queue behind it: waiting aircraft re-poll every 20 ticks and whoever
+  polls first is next, so a long-waiting aircraft can be passed over and the order between two
+  aircraft waiting for the same strip is unspecified. `/autopilot tower` makes it visible; it is not
+  fixed. What *is* fixed is the collision it used to allow — two sorties out of the same field can
+  no longer taxi onto the same threshold.
+* **A restart during a departure delay departs the aircraft immediately.** `PlaneAutopilot.load`
+  maps a saved `PARKED` to `TAKEOFF`, exactly as it already does for `TAXI`, because it does not
+  re-resolve the departure runway and a restored `PARKED` would have nothing to ask for and no way
+  to leave the spot. The remaining delay is lost. Departing from where it stands is the same
+  compromise a half-finished taxi has always made.
 * **There is no en-route separation, and nothing diverts.** Aircraft converging on the same field
   from different directions fly through each other's airspace, and planes are hard-colliding
   entities: two arrivals launched 120 blocks apart towards the same runway were reproducibly

@@ -11,6 +11,8 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
@@ -40,6 +42,10 @@ import java.util.Optional;
  */
 public class PlaneAutopilot {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger("simpleplanes-autopilot");
+    /** Per-tick flight telemetry to the server log; see {@link #trace}. */
+    private static final boolean TRACE = Boolean.getBoolean("simpleplanes.autopilot.trace");
+
     private AutopilotMode mode = AutopilotMode.IDLE;
     private @Nullable FlightPlan plan;
     private boolean active;
@@ -66,6 +72,10 @@ public class PlaneAutopilot {
     private @Nullable RunwayEnd landingEnd;
     /** Runway this sortie departs from, resolved once at launch; null for an airborne launch. */
     private @Nullable RunwayEnd departureEnd;
+    /** Ticks still to sit on the parking spot before the runway is asked for. */
+    private int departureHoldTicks;
+    /** Set once "waiting for the runway" has been reported, so a long wait says it exactly once. */
+    private boolean departureBlockedReported;
     private @Nullable Vec3 holdFix;
     private double holdAngle;
 
@@ -117,6 +127,8 @@ public class PlaneAutopilot {
         this.landingAirfield = null;
         this.landingEnd = null;
         this.departureEnd = null;
+        this.departureHoldTicks = 0;
+        this.departureBlockedReported = false;
         this.holdFix = null;
         this.anglesInitialised = false;
         this.outcomeReported = false;
@@ -129,7 +141,10 @@ public class PlaneAutopilot {
         }
         departureEnd = resolveDeparture(plane, flightPlan);
         if (departureEnd != null) {
-            setMode(plane, AutopilotMode.TAXI);
+            // Always through PARKED, even with no delay ordered: this is where the runway is asked
+            // for, and a zero delay simply means the first tick asks for it.
+            departureHoldTicks = flightPlan.departureDelayTicks();
+            setMode(plane, AutopilotMode.PARKED);
         } else if (plane.getOnGround()) {
             setMode(plane, AutopilotMode.TAKEOFF);
         } else {
@@ -206,9 +221,50 @@ public class PlaneAutopilot {
         return landingEnd == null ? null : landingEnd.designator();
     }
 
-    /** True while this aircraft is entitled to keep a runway reservation. */
+    /**
+     * True while this aircraft is entitled to keep a runway reservation.
+     *
+     * <p>Two ways to be entitled to one, and they are at opposite ends of the flight. An arrival
+     * holds the field it is landing at from the moment it commits to the approach; a departure holds
+     * the field it is leaving from the moment it starts to roll until it is airborne and clear.
+     * {@link RunwayOccupancy} validates every reservation against this method rather than trusting
+     * its map, so a departure that is destroyed, despawned or switched off on the taxiway stops
+     * holding the runway without anything having to notice.
+     */
     public boolean holdsRunway(String airfieldName) {
-        return active && landingAirfield != null && landingAirfield.name().equals(airfieldName) && mode.usesRunway();
+        if (!active) {
+            return false;
+        }
+        if (departureEnd != null && mode.holdsDepartureRunway()
+            && departureEnd.airfield().name().equals(airfieldName)) {
+            return true;
+        }
+        return landingAirfield != null && landingAirfield.name().equals(airfieldName) && mode.usesRunway();
+    }
+
+    /**
+     * The field this aircraft is still on the ground at, or null once it is airborne and clear of it.
+     *
+     * <p>The tower board's way of telling a departure from an arrival: while this is non-null the
+     * aircraft's business is with the runway it is leaving, not with the one it is going to.
+     */
+    public @Nullable String departureAirfieldName() {
+        if (!active || departureEnd == null
+            || !(mode == AutopilotMode.PARKED || mode.holdsDepartureRunway())) {
+            return null;
+        }
+        return departureEnd.airfield().name();
+    }
+
+    /**
+     * Ticks left on the departure clock while parked: positive when the aircraft is waiting for the
+     * clock, 0 when it is parked waiting for the runway, and -1 when it is not parked at all.
+     *
+     * <p>Three states rather than two because "waiting" that cannot say <em>what for</em> is
+     * indistinguishable from a hang, which is the whole reason this is exposed.
+     */
+    public int departureHoldTicks() {
+        return mode == AutopilotMode.PARKED ? departureHoldTicks : -1;
     }
 
     /**
@@ -270,6 +326,7 @@ public class PlaneAutopilot {
         cmdNeutralPitch = false;
 
         switch (mode) {
+            case PARKED -> tickParked(plane);
             case TAXI -> tickTaxi(plane);
             case TAKEOFF -> tickTakeoff(plane);
             case CLIMB -> tickClimb(plane);
@@ -295,6 +352,40 @@ public class PlaneAutopilot {
 
         applyTerrainFollowing(plane);
         applyControls(plane);
+        trace(plane);
+    }
+
+    /**
+     * Per-tick telemetry to the server log, off unless the JVM is started with
+     * {@code -Dsimpleplanes.autopilot.trace=true}.
+     *
+     * <p>{@code /autopilot status} is a snapshot at whatever rate a shell can poll it, and the
+     * events this feature gets wrong last a handful of ticks: the flare fires, the throttle shuts
+     * and the aircraft is in the water forty ticks later. This prints every tick, which is what it
+     * took to see that the flare was being entered 15 blocks short of a runway over a waterline the
+     * heightmap was reporting as ground. It goes to the log rather than through
+     * {@link AutopilotFeedback}, because a per-tick line sent to an owning player is unusable.
+     */
+    private void trace(PlaneEntity plane) {
+        if (!TRACE) {
+            return;
+        }
+        Vec3 position = plane.position();
+        double ground = groundBelow(plane);
+        String runway = "";
+        if (landingEnd != null) {
+            double heading = landingEnd.landingHeading();
+            runway = String.format(" thr_y=%.1f dthr=%.1f lat=%.1f", landingEnd.threshold().y,
+                -AutopilotMath.alongTrack(landingEnd.threshold(), heading, position),
+                AutopilotMath.lateralOffset(landingEnd.threshold(), heading, position));
+        }
+        LOGGER.info(String.format(
+            "trace #%d t=%d %s pos=%.1f,%.2f,%.1f agl=%.2f gnd=%.1f landable=%b vs=%+.3f spd=%.3f"
+                + " thr=%d og=%b water=%b cmdalt=%.1f%s",
+            plane.getId(), ticks, mode.getName(), position.x, position.y, position.z,
+            position.y - ground, ground, landableBelow(plane),
+            plane.getDeltaMovement().y, plane.getDeltaMovement().horizontalDistance(),
+            plane.getThrottle(), plane.getOnGround(), plane.isOnWater(), cmdTargetAltitude, runway));
     }
 
     /**
@@ -317,7 +408,12 @@ public class PlaneAutopilot {
             return false;
         }
         outcomeReported = true;
-        AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " came down at "
+        // Water gets its own word. "Came down at" reads as a heavy landing on a field, and an
+        // aircraft that has stopped flying over an ocean has done something quite different — it is
+        // on the sea floor. The report is the only place anyone finds out which of the two happened,
+        // and getOnGround() is true for both, because tickOnGround treats water as ground.
+        AutopilotFeedback.report(owner, "Plane #" + plane.getId()
+            + (plane.isOnWater() ? " ditched in water at " : " came down at ")
             + Math.round(plane.getX()) + ", " + Math.round(plane.getY()) + ", " + Math.round(plane.getZ())
             + " in " + mode.getName() + ".");
         stop(plane);
@@ -372,6 +468,67 @@ public class PlaneAutopilot {
     }
 
     // ------------------------------------------------------------------ modes
+
+    /**
+     * Standing on the parking spot, waiting for the departure clock and then for the runway.
+     *
+     * <p>Two gates, in that order, and they are not the same kind of wait. The clock is what the
+     * launch command asked for and runs down whatever else is happening. The runway is a fact about
+     * the world at the moment the aircraft wants to move, so it is asked for only once the clock has
+     * run out — asking earlier would reserve a strip for an aircraft that is not going to use it for
+     * another five minutes, which is worse than not reserving one at all.
+     *
+     * <p>Nothing is commanded here. Throttle 0, no steering, elevator neutral — the same neutral the
+     * taxi needs and for the same reason ({@code tickOnGround} reads a negative pitch input as
+     * reverse thrust, see {@link #tickTaxi}), except that here it is the difference between an
+     * aircraft that stands still and one that slowly reverses off its spot over five minutes of
+     * waiting.
+     *
+     * <p>The reservation is taken <em>before</em> the mode changes, so the aircraft is never in
+     * {@code TAXI} without holding the runway. {@link RunwayOccupancy#tryOccupy} is idempotent for
+     * the aircraft that already owns the strip, so the poll is safe to repeat.
+     */
+    private void tickParked(PlaneEntity plane) {
+        if (departureEnd == null) {
+            setMode(plane, AutopilotMode.TAKEOFF);
+            return;
+        }
+        cmdGroundSteer = true;
+        cmdBankLimit = 0;
+        cmdTerrainFollow = false;
+        cmdSpeed = 0;
+        cmdMinThrottle = 0;
+        cmdMaxThrottle = 0;
+        cmdNeutralPitch = true;
+        plane.setThrottle(0);
+
+        if (departureHoldTicks > 0) {
+            departureHoldTicks--;
+            return;
+        }
+
+        // Polled on the autopilot's own tick counter, exactly as tickHold polls for an arrival, so
+        // aircraft launched at different moments are out of phase with each other and a departure
+        // cannot poll a holding arrival out of the runway simply by asking more often.
+        if (ticks % AutopilotConfig.DEPARTURE_POLL_INTERVAL != 0) {
+            return;
+        }
+        String airfield = departureEnd.airfield().name();
+        if (!RunwayOccupancy.tryOccupy(plane.level(), airfield, plane)) {
+            if (!departureBlockedReported) {
+                departureBlockedReported = true;
+                PlaneEntity holder = RunwayOccupancy.holder(plane.level(), airfield);
+                AutopilotFeedback.report(owner, "Plane #" + plane.getId()
+                    + " holding on the parking spot at " + airfield + ": runway occupied"
+                    + (holder == null ? "" : " by #" + holder.getId()) + ".");
+            }
+            return;
+        }
+        AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " cleared to taxi at "
+            + airfield + "/" + departureEnd.designator() + " after " + modeTicks / 20
+            + "s on the parking spot.");
+        setMode(plane, AutopilotMode.TAXI);
+    }
 
     /**
      * Ground manoeuvring from the parking spot to the departure threshold.
@@ -838,6 +995,13 @@ public class PlaneAutopilot {
         cmdMinThrottle = 0;
 
         double agl = position.y - groundBelow(plane);
+        // Height above the runway, which is not the same question as height above the ground. Every
+        // check below is written about the runway — "the gates apply on short final", "the corridor
+        // raycast is skipped close in, where the runway itself is the hit" — and on a flat field the
+        // two numbers are identical, which is why the difference went unnoticed. They are nothing
+        // like each other on an approach that crosses a valley or a coastline, and there the ground
+        // reading is the wrong one: it starts the gates late over low ground and early over high.
+        double heightAboveRunway = position.y - threshold.y;
 
         // Flew past the threshold without getting down: go around.
         if (distanceToThreshold < -5) {
@@ -847,7 +1011,7 @@ public class PlaneAutopilot {
 
         // Real raycast down the approach corridor, so a hill in the way is caught even when the
         // heightmap profile looks fine. Skipped close in, where the runway itself is the hit.
-        if (!gatesDisabled && agl > 15 && ticks % 20 == 0) {
+        if (!gatesDisabled && heightAboveRunway > 15 && ticks % 20 == 0) {
             Vec3 aim = landingEnd.aimPoint();
             if (!TerrainScanner.pathClear(plane.level(), plane, position, new Vec3(aim.x, aim.y + 2, aim.z))) {
                 goAround(plane, "terrain in the approach corridor");
@@ -863,13 +1027,47 @@ public class PlaneAutopilot {
         }
 
         if (!gatesDisabled) {
-            String failure = gateFailure(plane, lateral, agl);
+            String failure = gateFailure(plane, lateral, heightAboveRunway);
             if (failure != null) {
                 goAround(plane, failure);
                 return;
             }
         }
-        if (agl <= AutopilotConfig.FLARE_HEIGHT || plane.getOnGround()) {
+
+        // The flare is a commitment rather than a manoeuvre: the throttle goes to zero and stays
+        // there, so whatever is under the aircraft when it fires is what the aircraft is going to
+        // come down on. That makes "am I four blocks up" the wrong question on its own.
+        //
+        // AGL is measured off MOTION_BLOCKING, whose predicate counts fluids, so a sea reports its
+        // own waterline as ground: four blocks over an ocean and four blocks over a runway are
+        // literally the same number, and the survey cannot tell them apart either. An aircraft that
+        // closed the throttle over water stopped flying, PlaneEntity#tickOnGround took over the
+        // moment it touched the surface (isOnWater puts it in ground mode, with the same 48x rolling
+        // drag), it sank, and the roll-out then announced a landing. Requiring a landable surface is
+        // the whole fix: over water the approach simply keeps flying the glide slope, which is
+        // referenced to the threshold and therefore never goes below it, and the flare happens over
+        // the runway where it was always meant to.
+        //
+        // getOnGround() needs the same qualification for the same reason — it is true while the
+        // aircraft is floating in water, because tickOnGround sets the coyote timer from isOnWater.
+        //
+        // The height above the runway is required as well as the height above the ground, and that
+        // is the second half of the same mistake: ground rising under the approach — a beach, a
+        // ridge, a forest — brings AGL down to four blocks while the aircraft is still nine blocks
+        // above the runway and fifty blocks short of it, and the flare fired there too. Both numbers
+        // agree over the runway itself, which is the only place the flare is supposed to happen.
+        //
+        // gatesDisabled is the existing "out of patience, put it down as it is" state, and it has to
+        // override the surface test too. A field whose approach really does end in water cannot be
+        // landed on however many times it is tried, and without this the aircraft goes around, holds,
+        // tries the other end, goes around again, for ever — holding the runway reservation the whole
+        // time and never producing an outcome anyone can read. Committing here ends the flight, and
+        // the roll-out now says what actually happened to it.
+        boolean touchedDown = plane.getOnGround() && !plane.isOnWater();
+        boolean readyToFlare = agl <= AutopilotConfig.FLARE_HEIGHT
+            && heightAboveRunway <= AutopilotConfig.FLARE_HEIGHT
+            && (landableBelow(plane) || gatesDisabled);
+        if (touchedDown || readyToFlare) {
             setMode(plane, AutopilotMode.FLARE);
         }
     }
@@ -878,9 +1076,13 @@ public class PlaneAutopilot {
      * The "is this a landing or a crash" test, applied only once the aircraft is low enough for it
      * to mean anything. Any failure sends it around rather than letting it touch down skewed —
      * which {@code PlaneEntity#causeFallDamage} would turn into an explosion anyway.
+     *
+     * @param heightAboveRunway height above the threshold, not above the ground under the aircraft:
+     *                          the gates are about how the runway is being arrived at, and on an
+     *                          approach over a valley or a sea the two differ by the depth of it
      */
-    private @Nullable String gateFailure(PlaneEntity plane, double lateral, double agl) {
-        if (agl > AutopilotConfig.GATE_CHECK_HEIGHT) {
+    private @Nullable String gateFailure(PlaneEntity plane, double lateral, double heightAboveRunway) {
+        if (heightAboveRunway > AutopilotConfig.GATE_CHECK_HEIGHT) {
             return null;
         }
         double headingError = Math.abs(AutopilotMath.angleDelta(plane.getYRot(), landingEnd.landingHeading()));
@@ -922,8 +1124,11 @@ public class PlaneAutopilot {
             setMode(plane, AutopilotMode.ROLLOUT);
             return;
         }
-        double agl = plane.position().y - groundBelow(plane);
-        if (agl > AutopilotConfig.FLARE_HEIGHT * 4 && modeTicks > 20) {
+        // Height above the runway, for the same reason the flare is entered on it: over ground that
+        // falls away past the threshold, AGL climbs on its own and the aircraft would abandon a
+        // perfectly good flare for a balloon it never made.
+        double heightAboveRunway = plane.position().y - landingEnd.threshold().y;
+        if (heightAboveRunway > AutopilotConfig.FLARE_HEIGHT * 4 && modeTicks > 20) {
             // Ballooned back up — re-establish the approach.
             setMode(plane, AutopilotMode.FINAL);
         }
@@ -949,14 +1154,69 @@ public class PlaneAutopilot {
             // overlay() no-ops when there is none — which is why a headless landing used to end in
             // silence with no way to tell it from an aircraft that simply vanished.
             outcomeReported = true;
-            long down = Math.round(Math.abs(AutopilotMath.alongTrack(
-                landingEnd.threshold(), landingEnd.landingHeading(), plane.position())));
-            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " landed at "
-                + landingAirfield.name() + "/" + landingEnd.designator() + ", "
-                + Math.round(plane.getX()) + ", " + Math.round(plane.getY()) + ", " + Math.round(plane.getZ())
-                + " (" + down + (down == 1 ? " block" : " blocks") + " down the runway).");
+            String where = Math.round(plane.getX()) + ", " + Math.round(plane.getY())
+                + ", " + Math.round(plane.getZ());
+            String problem = landingProblem(plane);
+            if (problem == null) {
+                long down = Math.round(Math.abs(AutopilotMath.alongTrack(
+                    landingEnd.threshold(), landingEnd.landingHeading(), plane.position())));
+                AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " landed at "
+                    + landingAirfield.name() + "/" + landingEnd.designator() + ", " + where
+                    + " (" + down + (down == 1 ? " block" : " blocks") + " down the runway).");
+            } else {
+                AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " did not land at "
+                    + landingAirfield.name() + "/" + landingEnd.designator() + ": came to rest "
+                    + problem + ", at " + where + ".");
+            }
+            // stop() releases the reservation on both paths. A runway held for ever by an aircraft
+            // that is on the sea floor is the second thing a false landing report used to hide.
             stop(plane);
         }
+    }
+
+    /**
+     * Why the aircraft has <em>not</em> landed on the runway it was cleared for, or null when it
+     * has. Three questions, and it has to answer all three: is it between the thresholds along the
+     * strip, is it inside the strip across it, and is it standing at the runway's own elevation.
+     *
+     * <p>The roll-out used to declare a landing on nothing but {@code stopped && getOnGround()},
+     * which is equally true of an aircraft resting on a sea floor a hundred blocks short of the
+     * field — {@code getOnGround()} is true in water, and the number it printed was
+     * {@code |alongTrack|}, which stays small and plausible whether the aircraft is on the strip,
+     * short of it, or far out to one side. A report that says "landed" when the aircraft has drowned
+     * is worse than the accident it hides: it is the line every other report in this feature is
+     * trusted on the strength of.
+     */
+    private @Nullable String landingProblem(PlaneEntity plane) {
+        if (plane.isOnWater()) {
+            return "in the water";
+        }
+        Vec3 position = plane.position();
+        double heading = landingEnd.landingHeading();
+        double along = AutopilotMath.alongTrack(landingEnd.threshold(), heading, position);
+        double length = landingEnd.length();
+        if (along < -AutopilotConfig.LANDING_POSITION_TOLERANCE) {
+            return String.format("%.0f blocks short of the threshold", -along);
+        }
+        if (along > length + AutopilotConfig.LANDING_POSITION_TOLERANCE) {
+            return String.format("%.0f blocks past the far end", along - length);
+        }
+        double lateral = AutopilotMath.lateralOffset(landingEnd.threshold(), heading, position);
+        double halfWidth = Math.max(landingAirfield.width() / 2.0, AutopilotConfig.LANDING_POSITION_TOLERANCE);
+        if (Math.abs(lateral) > halfWidth) {
+            return String.format("%.0f blocks off the centreline", Math.abs(lateral));
+        }
+        // Against the runway surface at this point along it, not against either threshold: a
+        // surveyed strip is allowed to slope, and a 3-block tolerance against the low end would
+        // reject a perfectly good landing at the high one.
+        double runwayHere = Mth.lerp(Mth.clamp(along / Math.max(length, 1.0E-3), 0.0, 1.0),
+            landingEnd.threshold().y, landingEnd.farEnd().y);
+        double drop = position.y - runwayHere;
+        if (Math.abs(drop) > AutopilotConfig.LANDING_ELEVATION_TOLERANCE) {
+            return String.format("%.0f blocks %s the runway surface", Math.abs(drop),
+                drop < 0 ? "below" : "above");
+        }
+        return null;
     }
 
     /**
@@ -1311,9 +1571,28 @@ public class PlaneAutopilot {
         return planComponent().getString();
     }
 
+    /**
+     * Height of the surface directly below, water and treetops included — the thing the aircraft
+     * would touch if it went straight down. An unloaded column reports the aircraft's own altitude,
+     * i.e. an AGL of zero, which is why nothing that commits the aircraft to anything may key off
+     * this number alone; see {@link #landableBelow}.
+     */
     private double groundBelow(PlaneEntity plane) {
         Vec3 position = plane.position();
         int surface = TerrainScanner.surfaceHeight(plane.level(), position.x, position.z);
+        return surface == TerrainScanner.UNKNOWN_HEIGHT ? position.y : surface;
+    }
+
+    /** Whether the surface directly below is something the aircraft could put its wheels on. */
+    private boolean landableBelow(PlaneEntity plane) {
+        Vec3 position = plane.position();
+        return TerrainScanner.isLandable(plane.level(), position.x, position.z);
+    }
+
+    /** Height of the ground below with any water or lava standing on it discounted. Telemetry only. */
+    private double landableGroundBelow(PlaneEntity plane) {
+        Vec3 position = plane.position();
+        int surface = TerrainScanner.landableSurfaceHeight(plane.level(), position.x, position.z);
         return surface == TerrainScanner.UNKNOWN_HEIGHT ? position.y : surface;
     }
 
@@ -1369,6 +1648,13 @@ public class PlaneAutopilot {
         if (landingAirfield != null && !next.usesRunway()) {
             RunwayOccupancy.release(plane.level(), landingAirfield.name(), plane);
         }
+        // The departure's mirror image: the strip is given back the moment the aircraft leaves the
+        // phases that need it, which is the CLIMB entry at TAKEOFF_CLEAR_HEIGHT. Releasing eagerly
+        // here rather than waiting for the flight to end is what lets the next sortie out of the
+        // same field while this one is still on its way to the destination.
+        if (departureEnd != null && !next.holdsDepartureRunway()) {
+            RunwayOccupancy.release(plane.level(), departureEnd.airfield().name(), plane);
+        }
         AutopilotFeedback.mode(owner, plane, next);
     }
 
@@ -1385,6 +1671,11 @@ public class PlaneAutopilot {
             .append(' ').append(mode.getName())
             .append(String.format(" pos=%.0f,%.0f,%.0f", position.x, position.y, position.z))
             .append(String.format(" agl=%.0f", position.y - groundBelow(plane)))
+            // Only when the two differ, which is exactly when the aircraft is over something it
+            // cannot land on. An approach that ditched used to be indistinguishable in this readout
+            // from one over a field: agl counts a waterline as ground.
+            .append(landableBelow(plane) ? ""
+                : String.format(" solid=%.0f", position.y - landableGroundBelow(plane)))
             .append(String.format(" hdg=%03d", AutopilotMath.compassDisplay(plane.getYRot())))
             .append(String.format(" pitch=%+.0f roll=%+.0f", plane.getXRot(), Mth.wrapDegrees(plane.rotationRoll)))
             .append(String.format(" spd=%.2f vs=%+.2f", velocity.length(), velocity.y))
@@ -1397,6 +1688,18 @@ public class PlaneAutopilot {
         if (target != null) {
             builder.append(String.format(" tgt=%.0f,%.0f,%.0f dist=%.0f",
                 target.x, target.y, target.z, AutopilotMath.horizontalDistance(position, target)));
+        }
+        if (departureAirfieldName() != null) {
+            builder.append(" dep=").append(departureAirfieldName())
+                .append('/').append(departureEnd.designator());
+        }
+        // A wait nobody can see is indistinguishable from a hang, so it says which of the two gates
+        // it is sitting behind and, for the clock, how much of it is left.
+        int held = departureHoldTicks();
+        if (held > 0) {
+            builder.append(" wait=clock ").append(TowerWatch.clock(held));
+        } else if (held == 0) {
+            builder.append(" wait=runway");
         }
         if (landingEnd != null) {
             builder.append(" rwy=").append(landingAirfield == null ? "?" : landingAirfield.name())
@@ -1494,8 +1797,12 @@ public class PlaneAutopilot {
         autopilot.persistent = true;
         autopilot.active = true;
         // A reloaded flight resumes in the air; a half-finished taxi is not worth restoring, and
-        // TAXI without a departure runway would sit on the threshold forever.
-        if (autopilot.mode == AutopilotMode.TAXI) {
+        // TAXI without a departure runway would sit on the threshold forever. PARKED goes the same
+        // way and for the same reason — load() does not re-resolve the departure end, so a restored
+        // PARKED would have no runway to ask for and no way to leave the spot. The cost is that a
+        // restart during a departure delay departs the aircraft immediately instead of finishing the
+        // clock; see AUTOPILOT.md, "Limitations".
+        if (autopilot.mode == AutopilotMode.TAXI || autopilot.mode == AutopilotMode.PARKED) {
             autopilot.mode = AutopilotMode.TAKEOFF;
         }
         plane.setAutopilot(autopilot);

@@ -274,7 +274,7 @@ public final class AirfieldBrowser {
         }
         if (RunwayOccupancy.holder(level, name) != null) {
             output.component(AutopilotText.tr("manage.busy",
-                "%s is in use by an aircraft on approach; try again when it has landed.", name)
+                "%s is in use by an aircraft; try again when the runway is free.", name)
                 .withStyle(ChatFormatting.RED));
             return false;
         }
@@ -301,12 +301,13 @@ public final class AirfieldBrowser {
                 "There is already an airfield called %s.", to).withStyle(ChatFormatting.RED));
             return false;
         }
-        // A flight in progress holds the destination by name — in the flight plan, in the runway
+        // A flight in progress holds the field by name — in the flight plan, in the runway
         // reservation and in the report it will print when it lands — so renaming under it would
-        // strand the aircraft looking for a field that no longer exists.
+        // strand the aircraft looking for a field that no longer exists. Departures hold a
+        // reservation too now, so this also covers renaming a field an aircraft is taxiing out of.
         if (RunwayOccupancy.holder(level, from) != null) {
             output.component(AutopilotText.tr("manage.busy",
-                "%s is in use by an aircraft on approach; try again when it has landed.", from)
+                "%s is in use by an aircraft; try again when the runway is free.", from)
                 .withStyle(ChatFormatting.RED));
             return false;
         }

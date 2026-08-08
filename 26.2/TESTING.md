@@ -106,7 +106,7 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 |---|---|
 | `strike <x y z> [distance] [bearing] [blast] [blocks] [fire]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test. The last three set the warhead: strength 0–16 (default 4), whether it breaks blocks, whether it sets fire |
 | `route <from> <to> [speed]` | point-to-point cruise — the "does it explode for no reason" test, and the speed-regulation test |
-| `flight <from> <to> [speed]` | full sortie between two registered airfields — taxi, take-off, cruise, approach, landing |
+| `flight <from> <to> [speed] [delay <s>]` | full sortie between two registered airfields — park, wait, taxi, take-off, cruise, approach, landing. `delay` is seconds spent on the parking spot before the runway is asked for |
 | `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
 | `survey <t1> <t2>` | register a runway |
 | `airfields [info\|show\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
@@ -225,6 +225,88 @@ destroyed from 1.2. See `COLLISION-DIAGNOSIS.md`, section Р3.
 
 Both flights print a terminal line (`hit the target at …`, `flew into terrain at …`, …), which is
 what makes them assertable from a shell.
+
+### Per-tick telemetry
+
+`autopilot status` is a snapshot at whatever rate a shell can poll it, and the things this feature
+gets wrong last a handful of ticks — the flare fires, the throttle shuts, and the aircraft is in the
+water forty ticks later. Start the server with
+
+```sh
+java -Xmx3G -Dsimpleplanes.autopilot.trace=true -jar fabric-server-launch.jar nogui
+```
+
+and every autopilot aircraft prints one line per tick to `console.log`:
+
+```
+trace #5 t=1713 flare pos=0.3,-56.02,15.6 agl=3.98 gnd=-60.0 landable=false vs=-0.063 spd=0.439
+      thr=0 og=false water=false cmdalt=-57.9 thr_y=-60.0 dthr=15.1 lat=-0.2
+```
+
+`gnd`/`landable` are the two surface answers (`AGL` reference, and whether it is ground at all),
+`dthr` is the distance to the landing threshold along the runway, `lat` the offset across it, `og`
+and `water` are `getOnGround()` and `isOnWater()` — which are not the same question and were being
+treated as one. A 90-second sortie is about 1800 lines; `grep "trace #5" console.log` per aircraft.
+It is off by default and costs a `Boolean.getBoolean` per tick when it is.
+
+### Recipe: an approach over water
+
+The whole point of this one is that **nothing about the airfield changes when you flood its
+approach** — the survey reports the same length, width, roughness and obstacle counts, because
+`MOTION_BLOCKING` reports a waterline exactly the way it reports a field. So the same runway is its
+own control: fly it dry, flood the corridor, fly it again.
+
+```sh
+./cmd.sh "forceload add -32 -176 32 352"
+sleep 10
+./cmd.sh "autopilot survey 0 -60 0 0 -60 -160"        # end 36 lands towards -Z, approach from +Z
+./cmd.sh 'autopilot inbound 0 -20 700 "airfield-1"'   # dry: lands 6 blocks down the runway
+
+# the sea. -63..-61 is the whole destructible depth of the superflat, so filling it with water
+# leaves the heightmap at -60 - identical to the grass it replaced.
+./cmd.sh "kill @e[type=simpleplanes:plane]"
+./cmd.sh "fill -25 -63 -8 25 -61 168 minecraft:water"
+./cmd.sh "fill -25 -63 169 25 -61 330 minecraft:water"
+./cmd.sh 'autopilot inbound 0 -20 700 "airfield-1"'
+```
+
+Two numbers decide whether it ditches, and both are worth knowing before spending an hour on it:
+
+* **How far the water reaches past the threshold.** The flare is entered 15 blocks *before* the
+  threshold and touches down 5 blocks *past* it, so with the shoreline at the threshold the aircraft
+  crosses the waterline with **1.2 blocks to spare** — measured identically at 0.40, 2.60 and the
+  2.80 maximum, so it is geometry and not luck about speed. Flood to `z = -8` and it goes in. That
+  1.2-block margin was the whole difference between "another sortie landed fine" and a drowning.
+* **How high the water stands relative to the threshold.** Raising it is the obvious way to make the
+  failure bigger and it does not work: standing water above the runway elevation has to be held back
+  by something, and whatever holds it back also stands above a glide slope aimed at the threshold, so
+  the aircraft hits the seawall instead. Any test built that way is testing the wall.
+
+Restoring the ground afterwards takes three fills (the superflat is dirt at −63/−62 and grass at
+−61), and the airfield needs no re-survey — nothing it stores has changed.
+
+Flood **both** funnels and the strip itself to exercise the give-up path: the aircraft goes around
+three times, switches ends, goes around once more, commits, and prints
+`did not land at airfield-1/18: came to rest in the water, at 0, -63, -152`. That takes about eight
+minutes of wall clock — five approaches — so give it the time before assuming it has hung.
+
+### Recipe: what the surface probes read
+
+Lay bands of a surface across a cruise track and fly over them with the trace on; there is no need to
+land. One `autopilot route` at 0.80 over three 40-block bands answers the whole question:
+
+```sh
+./cmd.sh "forceload add -16 460 16 660"
+./cmd.sh "fill -10 -63 600 10 -61 640 minecraft:lava"
+./cmd.sh "fill -10 -60 540 10 -58 580 minecraft:oak_leaves[persistent=true]"
+./cmd.sh "fill -10 -60 480 10 -58 520 minecraft:powder_snow"
+./cmd.sh "autopilot route 0 -20 700 0 -20 460 0.80"
+grep "trace #" console.log        # read gnd= and landable= per band
+```
+
+Measured at 100 blocks up: grass `gnd=-60 landable=true`, lava `gnd=-60 landable=false`, leaves
+`gnd=-57 landable=true`, powder snow `gnd=-60 landable=true` — the ground *under* the snow, because
+powder snow is in neither heightmap. See `AUTOPILOT.md`, "Water is not ground".
 
 ### Recipe: is the throttle loop actually regulating
 
@@ -403,6 +485,60 @@ sleep 6
 The refusals are worth exercising too, and each has its own message: a spot more than 64 blocks from
 the threshold, one raised or sunk more than 2 blocks (`fill` a 4-block plinth next to the runway),
 one within 5 blocks of an existing spot, and one on unloaded ground.
+
+**Check the aircraft is on the spot, not in it.** The launch line prints the spawn position and
+`status` prints where it settled, and those are one block apart on purpose:
+
+```
+Plane #1 parked at airfield-1 (671, -59, 11), …
+  #1 parked pos=671,-60,11 agl=0 …
+```
+
+`agl=0` on the second line is the assertion. A spot marked with `park … 670 -60 10` is stored as the
+block `670, -61, 10`, so `-60` is its top face; anything lower means the aircraft is inside the
+ground and the taxi will never start.
+
+### Recipe: departure delay, and two aircraft for one runway
+
+Both halves of the departure gate are assertable from the log, and the second one needs two aircraft
+ordered a few seconds apart out of the *same* field:
+
+```sh
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2" delay 30'
+for i in $(seq 1 8); do ./cmd.sh "autopilot status"; sleep 5; done
+# -> wait=clock 0:27 … 0:14 … 0:04 … wait=runway
+# -> Plane #1 cleared to taxi at airfield-1/36 after 31s on the parking spot.
+
+./cmd.sh "kill @e[type=simpleplanes:plane]"
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+sleep 3
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+for i in $(seq 1 16); do ./cmd.sh "autopilot status"; sleep 1; done
+```
+
+Poll `status` every **one** second here, not every five: the whole interesting window is the ten
+seconds the second aircraft spends stationary, and the moment to catch is the single tick where the
+first one enters `climb` and the second is cleared. The assertions are
+`Plane #B holding on the parking spot at airfield-1: runway occupied by #A`, a `pos=` on #B that does
+not change while #A taxis, and the pair of lines in the same second:
+
+```
+Plane #57 cleared to taxi at airfield-1/36 after 10s on the parking spot.
+  #56 climb pos=657,-47,-66 agl=13 …
+```
+
+`autopilot tower` is the other view of the same fact and is the quicker check while a run is live —
+`airfield-1  36/18  OCCUPIED  #56 departure, taxi, 0:04` with `#57 departure, parked, 0:01, waiting
+for the runway` indented under it.
+
+To prove the reservation cannot leak, kill an aircraft while it holds one and read the board back:
+
+```sh
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
+sleep 4                                            # taxiing, so it holds airfield-1
+./cmd.sh "kill @e[type=simpleplanes:plane]"
+./cmd.sh "autopilot tower"                         # -> airfield-1  36/18  FREE  no traffic
+```
 
 ### The one thing this rig cannot see
 

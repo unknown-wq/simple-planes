@@ -210,10 +210,12 @@ public final class AutopilotSpawner {
      * strikes: a runway departure has a runway, and everything from the parking spot to the
      * threshold is done on the throttle and the nosewheel.
      *
+     * @param departureDelayTicks how long the aircraft sits on its spot before asking for the runway
      * @return the aircraft, or null if it could not be created
      */
     public static @Nullable PlaneEntity launchSortie(ServerLevel level, Airfield departure, Airfield destination,
-                                                     @Nullable Player owner, double cruiseSpeed, Blast blast) {
+                                                     @Nullable Player owner, double cruiseSpeed, Blast blast,
+                                                     int departureDelayTicks) {
         // The runway is usually nowhere near a player, so its chunks have to exist before anything
         // can be measured on them or spawned into them. Both thresholds, not just the centre: a
         // 183-block runway spans a dozen chunks, and the parking spot sits beyond one of its ends —
@@ -248,7 +250,7 @@ public final class AutopilotSpawner {
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
         autopilot.start(plane, FlightPlan.sortie(aim, cruiseAltitude, destination.name(), departure.name(),
-            cruiseSpeed, blast), true, true, owner);
+            cruiseSpeed, blast, departureDelayTicks), true, true, owner);
         return plane;
     }
 
@@ -290,7 +292,7 @@ public final class AutopilotSpawner {
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
         autopilot.start(plane, FlightPlan.sortie(aim, cruiseAltitude, destination.name(), null,
-            cruiseSpeed, blast), true, true, owner);
+            cruiseSpeed, blast, 0), true, true, owner);
         return plane;
     }
 

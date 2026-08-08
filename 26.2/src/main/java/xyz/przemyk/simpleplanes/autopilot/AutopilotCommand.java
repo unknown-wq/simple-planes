@@ -18,10 +18,13 @@ import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
+import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
 
 import java.util.List;
 
@@ -36,8 +39,9 @@ import java.util.List;
  *
  * <pre>
  * /autopilot strike &lt;target&gt; [distance] [bearing] [blast] [blocks] [fire]
+ * /autopilot tool &lt;distance&gt; [bearing] [blast] [blocks] [fire]
  * /autopilot route &lt;from&gt; &lt;to&gt; [speed]
- * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed]
+ * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed] [delay &lt;seconds&gt;]
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt; [speed]
  * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
  * /autopilot airfields [info|show|remove|rename|park|unpark] …
@@ -69,6 +73,14 @@ public final class AutopilotCommand {
 
             // strike <target> [distance] [bearing] [blast] [blocks] [fire]
             //
+            // bearing is the compass direction the aircraft comes IN FROM, in degrees: it is where
+            // the aircraft is placed relative to the target, not the direction it then flies. 0
+            // spawns it north of the target and it attacks southbound; 90 spawns it east of the
+            // target and it attacks westbound. That is the useful way round, because what a person
+            // choosing a bearing is picking is which side of the target the run-in passes over.
+            // Left off, the run-in comes from wherever the order was given, which for a player
+            // means the aircraft passes them on its way in.
+            //
             // Positional and progressively optional, which is the shape the subcommand already had.
             // Every level executes the same method: the optional arguments are read back by name
             // from the parsed context, so the tree stays flat instead of gaining a lambda per
@@ -88,6 +100,25 @@ public final class AutopilotCommand {
                                     .then(Commands.argument("fire", BoolArgumentType.bool())
                                         .executes(AutopilotCommand::strike))))))));
 
+            // tool <distance> [bearing] [blast] [blocks] [fire]
+            //
+            // The same arguments in the same order as strike, minus the target — the target of a
+            // tool strike is whatever block gets right-clicked. Written onto the strike tool in
+            // hand, so a setting that the item's one spare gesture cannot reach is still reachable,
+            // and a strike worked out at the console can be carried into the world and repeated.
+            root.then(Commands.literal("tool")
+                .then(Commands.argument("distance", IntegerArgumentType.integer(20, 4000))
+                    .executes(AutopilotCommand::tool)
+                    .then(Commands.argument("bearing", IntegerArgumentType.integer(-1, 359))
+                        .executes(AutopilotCommand::tool)
+                        .then(Commands.argument("blast",
+                                FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_POWER))
+                            .executes(AutopilotCommand::tool)
+                            .then(Commands.argument("blocks", BoolArgumentType.bool())
+                                .executes(AutopilotCommand::tool)
+                                .then(Commands.argument("fire", BoolArgumentType.bool())
+                                    .executes(AutopilotCommand::tool)))))));
+
             root.then(Commands.literal("route")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
                     .then(Commands.argument("to", BlockPosArgument.blockPos())
@@ -95,14 +126,25 @@ public final class AutopilotCommand {
                         .then(Commands.argument("speed", cruiseSpeedArgument())
                             .executes(context -> route(context, requestedSpeed(context)))))));
 
+            // flight <from> <to> [speed] [delay <seconds>]
+            //
+            // The delay is what a person thinks of first, but it cannot be the first argument: every
+            // existing `/autopilot flight "a" "b"` and `/autopilot flight "a" "b" 2.60` has to keep
+            // parsing exactly as it does, and inserting a positional argument in front of them would
+            // reinterpret the airfield names. A trailing positional would not work either — it would
+            // be reachable only by also giving a speed. A keyword branch off both the two-argument
+            // and the three-argument forms gets the delay without touching either, and reads as what
+            // it is at the call site.
             root.then(Commands.literal("flight")
                 .then(Commands.argument("from", StringArgumentType.string())
                     .suggests(AIRFIELD_SUGGESTIONS)
                     .then(Commands.argument("to", StringArgumentType.string())
                         .suggests(AIRFIELD_SUGGESTIONS)
-                        .executes(context -> flight(context, AutopilotConfig.CRUISE_SPEED))
+                        .executes(AutopilotCommand::flight)
+                        .then(departureDelayArgument())
                         .then(Commands.argument("speed", cruiseSpeedArgument())
-                            .executes(context -> flight(context, requestedSpeed(context)))))));
+                            .executes(AutopilotCommand::flight)
+                            .then(departureDelayArgument())))));
 
             root.then(Commands.literal("inbound")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
@@ -204,7 +246,29 @@ public final class AutopilotCommand {
     }
 
     private static double requestedSpeed(CommandContext<CommandSourceStack> context) {
-        return AutopilotConfig.clampCruiseSpeed(DoubleArgumentType.getDouble(context, "speed"));
+        return has(context, "speed")
+            ? AutopilotConfig.clampCruiseSpeed(DoubleArgumentType.getDouble(context, "speed"))
+            : AutopilotConfig.CRUISE_SPEED;
+    }
+
+    /**
+     * {@code delay <seconds>} — how long a sortie waits on its parking spot before it asks for the
+     * runway.
+     *
+     * <p>Seconds, because that is what a person thinks in; the flight plan stores ticks. Bounded
+     * rather than unbounded because a parked aircraft holds one of the
+     * {@link AutopilotConfig#MAX_ACTIVE_AUTOPILOTS} slots for the whole wait, so a mistyped delay is
+     * indistinguishable from a launch that failed.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> departureDelayArgument() {
+        return Commands.literal("delay")
+            .then(Commands.argument("seconds",
+                    IntegerArgumentType.integer(0, AutopilotConfig.MAX_DEPARTURE_DELAY_SECONDS))
+                .executes(AutopilotCommand::flight));
+    }
+
+    private static int departureDelayTicks(CommandContext<CommandSourceStack> context) {
+        return optionalInt(context, "seconds", 0) * 20;
     }
 
     /** " at 2.40 blocks/tick", or " at the default 2.40 blocks/tick" — always says what was ordered. */
@@ -245,8 +309,7 @@ public final class AutopilotCommand {
         BlockPos target = BlockPosArgument.getBlockPos(context, "target");
 
         double bearing = compassBearing != null
-            // Compass degrees to Minecraft yaw: 0 compass (north) is yaw 180.
-            ? compassBearing - 180.0
+            ? AutopilotMath.yawFromCompass(compassBearing)
             : AutopilotSpawner.approachBearingFrom(source.getPosition(), target);
 
         if (!RunwayOccupancy.canActivateAnother()) {
@@ -264,6 +327,64 @@ public final class AutopilotCommand {
         source.sendSuccess(() -> Component.literal(
             AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
                 + " Warhead: " + blast.describe() + "."), true);
+        return 1;
+    }
+
+    /**
+     * Writes strike settings onto the strike tool the player is holding.
+     *
+     * <p>Requires a player, unlike everything else here, because the thing being configured is an
+     * item in a hand. Main hand first, then off hand, so it works however the tool is being carried.
+     *
+     * <p>A {@code bearing} of -1 means "unpin": the run-in goes back to being worked out from where
+     * the player is standing when the strike is ordered. Every argument that is left off keeps its
+     * current value rather than resetting to the default, so a second call can change one setting
+     * without restating the others.
+     */
+    private static int tool(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        ServerPlayer player = source.getPlayerOrException();
+
+        ItemStack stack = player.getMainHandItem();
+        if (!(stack.getItem() instanceof PlaneStrikeToolItem)) {
+            stack = player.getOffhandItem();
+        }
+        if (!(stack.getItem() instanceof PlaneStrikeToolItem)) {
+            source.sendFailure(Component.literal(
+                "Hold a strike tool to configure it (/give @s simpleplanes:plane_strike_tool)."));
+            return 0;
+        }
+
+        Blast current = PlaneStrikeToolItem.getBlast(stack);
+        Blast blast = new Blast(
+            optionalFloat(context, "blast", current.power()),
+            optionalBool(context, "blocks", current.breaksBlocks()),
+            optionalBool(context, "fire", current.fire()));
+
+        stack.set(AutopilotComponents.STRIKE_DISTANCE, IntegerArgumentType.getInteger(context, "distance"));
+        stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
+        stack.set(AutopilotComponents.STRIKE_BLOCKS, blast.breaksBlocks());
+        stack.set(AutopilotComponents.STRIKE_FIRE, blast.fire());
+
+        Integer bearing = PlaneStrikeToolItem.getBearing(stack);
+        if (has(context, "bearing")) {
+            int requested = IntegerArgumentType.getInteger(context, "bearing");
+            if (requested < 0) {
+                stack.remove(AutopilotComponents.STRIKE_BEARING);
+                bearing = null;
+            } else {
+                stack.set(AutopilotComponents.STRIKE_BEARING, requested);
+                bearing = requested;
+            }
+        }
+
+        ItemStack configured = stack;
+        Integer reportedBearing = bearing;
+        source.sendSuccess(() -> Component.literal("Strike tool set: "
+            + PlaneStrikeToolItem.getDistance(configured) + " blocks out, bearing "
+            + (reportedBearing == null
+                ? "from wherever you stand" : String.format("%03d", reportedBearing))
+            + ", warhead " + blast.describe() + "."), false);
         return 1;
     }
 
@@ -306,9 +427,11 @@ public final class AutopilotCommand {
      * for pointing at unloaded ground — which is the normal case, since both runways are usually
      * nowhere near a player. The spawner makes the departure and destination chunks resident itself.
      */
-    private static int flight(CommandContext<CommandSourceStack> context, double cruiseSpeed) {
+    private static int flight(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         ServerLevel level = source.getLevel();
+        double cruiseSpeed = requestedSpeed(context);
+        int delayTicks = departureDelayTicks(context);
         String fromName = StringArgumentType.getString(context, "from");
         String toName = StringArgumentType.getString(context, "to");
 
@@ -340,7 +463,7 @@ public final class AutopilotCommand {
         }
 
         PlaneEntity plane = AutopilotSpawner.launchSortie(level, from, to, source.getPlayer(),
-            cruiseSpeed, Blast.DEFAULT);
+            cruiseSpeed, Blast.DEFAULT, delayTicks);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -349,7 +472,9 @@ public final class AutopilotCommand {
         source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " parked at "
             + from.name() + " (" + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
             + ", " + Math.round(plane.getZ()) + "), sortie to " + to.name()
-            + " - " + Math.round(distance) + " blocks" + describeSpeed(cruiseSpeed) + "."), true);
+            + " - " + Math.round(distance) + " blocks" + describeSpeed(cruiseSpeed)
+            + (delayTicks > 0 ? ", departing in " + delayTicks / 20 + "s" : "")
+            + " (once the runway is free)."), true);
         return 1;
     }
 

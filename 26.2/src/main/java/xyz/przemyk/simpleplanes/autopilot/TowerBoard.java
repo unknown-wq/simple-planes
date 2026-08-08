@@ -34,17 +34,20 @@ import java.util.Map;
  * <h2>What the board deliberately does not claim</h2>
  * <ul>
  *   <li><b>No queue numbers.</b> There is no queue in the code today — an aircraft in
- *       {@link AutopilotMode#HOLD} polls a free runway every 20 ticks and whoever polls first takes
- *       it. Numbering the holders would draw an order that does not exist, so they are listed
- *       longest-wait-first with the poll rule stated.</li>
- *   <li><b>No departures.</b> A reservation is only ever taken for the field an aircraft is
- *       <em>landing</em> at, so an aircraft taxiing or rolling for take-off holds nothing and the
- *       strip it is using reads FREE. That is today's behaviour, and the board shows it rather than
- *       papering over it.</li>
+ *       {@link AutopilotMode#HOLD} or {@link AutopilotMode#PARKED} polls a free runway every 20
+ *       ticks and whoever polls first takes it, arrivals and departures alike. Numbering them would
+ *       draw an order that does not exist, so they are listed longest-wait-first with the poll rule
+ *       stated.</li>
  * </ul>
  *
- * <p>Each aircraft's row does carry the end it picked and a one-phrase account of how it intends to
- * get there ({@code straight in}, {@code extended final 600}, {@code orbit to lose 120},
+ * <p>Departures <em>are</em> shown, which they were not: a reservation used to be taken only for the
+ * field an aircraft was landing at, so a strip with an aircraft taxiing onto it read FREE. It now
+ * holds a reservation from the start of the taxi to the climb-out, and aircraft still standing on
+ * their parking spots are listed under the field they are waiting to leave, with what they are
+ * waiting for.
+ *
+ * <p>Each aircraft's row also carries the end it picked and a one-phrase account of how it intends
+ * to get there ({@code straight in}, {@code extended final 600}, {@code orbit to lose 120},
  * {@code around left 30 deg}). Both come from the flight director's own state rather than being
  * re-derived here, so the board cannot describe an arrival differently from the way it is flown.
  */
@@ -60,7 +63,13 @@ public final class TowerBoard {
 
     /** Everything the board knows about one runway. */
     private record Stand(String name, @Nullable Airfield airfield, @Nullable PlaneEntity occupant,
-                         List<PlaneEntity> holding, List<PlaneEntity> inbound) {}
+                         List<PlaneEntity> holding, List<PlaneEntity> waiting, List<PlaneEntity> inbound) {
+
+        static Stand of(ServerLevel level, String name, @Nullable Airfield airfield) {
+            return new Stand(name, airfield, RunwayOccupancy.holder(level, name),
+                new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+        }
+    }
 
     // ------------------------------------------------------------------ the board
 
@@ -75,19 +84,22 @@ public final class TowerBoard {
 
         int occupied = 0;
         int holding = 0;
+        int waiting = 0;
         for (Stand stand : stands) {
             if (stand.occupant() != null) {
                 occupied++;
             }
             holding += stand.holding().size();
+            waiting += stand.waiting().size();
         }
-        lines.add(text("summary", "%s runways in this dimension, %s occupied, %s holding.",
-            stands.size(), occupied, holding));
+        lines.add(text("summary", "%s runways in this dimension, %s occupied, %s holding, %s waiting to depart.",
+            stands.size(), occupied, holding, waiting));
 
         int width = nameColumn(stands);
         for (Stand stand : stands) {
             lines.add(standLine(stand, width));
             lines.addAll(holdingLines(stand));
+            lines.addAll(waitingLines(stand));
         }
         return lines;
     }
@@ -120,10 +132,11 @@ public final class TowerBoard {
                 }
             }
             lines.addAll(holdingLines(stand));
+            lines.addAll(waitingLines(stand));
             if (!stand.inbound().isEmpty()) {
                 lines.add(indent(2, text("inbound_header", "inbound:")));
                 for (PlaneEntity plane : sortedByDistance(stand.inbound(), stand.airfield())) {
-                    lines.add(indent(4, trafficLine(plane, stand.airfield(), false)));
+                    lines.add(indent(4, trafficLine(plane, stand, false)));
                 }
             }
             return lines;
@@ -144,11 +157,13 @@ public final class TowerBoard {
         String state = stand.occupant() != null ? "OCCUPIED" : "FREE";
         Component detail;
         if (stand.occupant() != null) {
-            detail = trafficLine(stand.occupant(), stand.airfield(), true);
-        } else if (stand.holding().isEmpty()) {
-            detail = text("no_traffic", "no traffic");
-        } else {
+            detail = trafficLine(stand.occupant(), stand, true);
+        } else if (!stand.holding().isEmpty()) {
             detail = text("holding_only", "%s holding, none cleared yet", stand.holding().size());
+        } else if (!stand.waiting().isEmpty()) {
+            detail = text("waiting_only", "%s waiting to depart, none cleared yet", stand.waiting().size());
+        } else {
+            detail = text("no_traffic", "no traffic");
         }
 
         // Padded columns stay literal: translated words of a different length would break them.
@@ -171,35 +186,65 @@ public final class TowerBoard {
         lines.add(indent(2, text("holding_header",
             "holding (no sequence: the first to poll a free runway takes it):")));
         for (PlaneEntity plane : sortedByWait(stand.holding())) {
-            lines.add(indent(4, trafficLine(plane, stand.airfield(), true)));
+            lines.add(indent(4, trafficLine(plane, stand, true)));
+        }
+        return lines;
+    }
+
+    /**
+     * Aircraft standing on a parking spot at this field. Same "no sequence" caveat as the holding
+     * list, and for exactly the same reason — they poll the same runway on the same rule.
+     */
+    private static List<Component> waitingLines(Stand stand) {
+        if (stand.waiting().isEmpty()) {
+            return List.of();
+        }
+        List<Component> lines = new ArrayList<>();
+        lines.add(indent(2, text("waiting_header",
+            "waiting to depart (no sequence: the first to poll a free runway takes it):")));
+        for (PlaneEntity plane : sortedByWait(stand.waiting())) {
+            lines.add(indent(4, trafficLine(plane, stand, true)));
         }
         return lines;
     }
 
     /**
      * {@code #12 arrival 09, final, 0:14, 288 blocks out [straight in]} — the same shape for every
-     * role.
+     * role, arrival or departure.
      *
      * <p>The trailing bracket is the flight director's own account of the arrival: which geometry it
      * chose and why. It is the answer to "why is that aircraft circling", which is the question a
      * board full of holding traffic exists to raise, and it comes from the aircraft rather than
      * being re-derived here, so the board cannot disagree with it.
      */
-    private static Component trafficLine(PlaneEntity plane, @Nullable Airfield airfield, boolean withElapsed) {
+    private static Component trafficLine(PlaneEntity plane, Stand stand, boolean withElapsed) {
         PlaneAutopilot autopilot = plane.getAutopilot();
-        String end = autopilot == null ? null : autopilot.landingDesignator();
-        // Every reservation today belongs to an aircraft landing at that field; there is no
-        // departure clearance, so nothing else can appear here.
+        boolean departure = autopilot != null && stand.name().equals(autopilot.departureAirfieldName());
+        // The end is only meaningful for an arrival: a departure's runway end is chosen by the
+        // taxi, and printing a landing designator beside it would read as a clearance it does not
+        // have.
+        String end = departure || autopilot == null ? null : autopilot.landingDesignator();
         MutableComponent line = Component.literal("#" + plane.getId() + " ")
-            .append(text("arrival", "arrival"))
+            .append(departure ? text("departure", "departure") : text("arrival", "arrival"))
             .append(Component.literal((end == null ? "" : " " + end)
                 + ", " + (autopilot == null ? "?" : autopilot.getMode().getName())));
         if (withElapsed) {
             line.append(Component.literal(", " + TowerWatch.elapsed(plane)));
         }
-        Double distance = distanceTo(plane, airfield);
-        if (distance != null) {
-            line.append(Component.literal(", ")).append(text("blocks_out", "%s blocks out", Math.round(distance)));
+        // What an aircraft on the ground is waiting for, and a distance for one that is not. A wait
+        // that cannot say which of the two gates it is behind reads exactly like a hang.
+        int held = autopilot == null ? -1 : autopilot.departureHoldTicks();
+        if (held > 0) {
+            line.append(Component.literal(", "))
+                .append(text("wait_clock", "%s on the clock", TowerWatch.clock(held)));
+        } else if (held == 0) {
+            line.append(Component.literal(", ")).append(text("wait_runway", "waiting for the runway"));
+        } else if (!departure) {
+            Double distance = distanceTo(plane, stand.airfield());
+            if (distance != null) {
+                line.append(Component.literal(", "))
+                    .append(text("blocks_out", "%s blocks out", Math.round(distance)));
+            }
         }
         if (autopilot != null) {
             line.append(Component.literal(" [")).append(autopilot.planComponent()).append(Component.literal("]"));
@@ -217,16 +262,16 @@ public final class TowerBoard {
         AutopilotSavedData data = AutopilotSavedData.get(level);
         Map<String, Stand> stands = new LinkedHashMap<>();
         for (Airfield airfield : data.airfieldList()) {
-            stands.put(airfield.name(), new Stand(airfield.name(), airfield,
-                RunwayOccupancy.holder(level, airfield.name()), new ArrayList<>(), new ArrayList<>()));
+            stands.put(airfield.name(), Stand.of(level, airfield.name(), airfield));
         }
 
         for (Traffic traffic : traffic(level)) {
-            Stand stand = stands.computeIfAbsent(traffic.airfield(), name ->
-                new Stand(name, data.get(name), RunwayOccupancy.holder(level, name),
-                    new ArrayList<>(), new ArrayList<>()));
+            Stand stand = stands.computeIfAbsent(traffic.airfield(),
+                name -> Stand.of(level, name, data.get(name)));
             if (traffic.role() == TowerWatch.Role.HOLDING) {
                 stand.holding().add(traffic.plane());
+            } else if (traffic.role() == TowerWatch.Role.WAITING) {
+                stand.waiting().add(traffic.plane());
             }
             // An occupant is not recorded here: the occupant on the row always comes from
             // RunwayOccupancy.holder(), so the board and the aircraft cannot be looking at two

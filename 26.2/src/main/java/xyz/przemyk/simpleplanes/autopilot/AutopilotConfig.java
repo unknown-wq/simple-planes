@@ -265,6 +265,27 @@ public final class AutopilotConfig {
     public static final int MAX_PARKING_SPOTS = 8;
     /** Ticks a taxi may take before the aircraft gives up and departs from where it stands. */
     public static final int TAXI_TIMEOUT = 900;
+    /**
+     * Longest departure delay {@code /autopilot flight … delay <seconds>} accepts.
+     *
+     * <p>An hour, and the bound exists because a parked aircraft still occupies one of the
+     * {@link #MAX_ACTIVE_AUTOPILOTS} slots and keeps a chunk bubble alive the whole time it waits.
+     * A mistyped delay is otherwise indistinguishable from an aircraft that never launched.
+     */
+    public static final int MAX_DEPARTURE_DELAY_SECONDS = 3600;
+    /**
+     * Ticks between a parked aircraft's attempts to take the departure runway.
+     *
+     * <p>Deliberately the same 20 ticks {@code PlaneAutopilot#tickHold} polls at, because it is the
+     * same rule: whoever polls a free runway first takes it. Matching the two means a departure and
+     * an arrival compete on equal terms rather than one of them being able to poll the other out.
+     *
+     * <p>There is no timeout behind this. Rolling anyway after some number of failed polls would
+     * put an aircraft on a runway that is genuinely occupied, which is the one thing the gate
+     * exists to prevent; a departure therefore waits for as long as it takes, and
+     * {@code /autopilot tower} is what makes that visible.
+     */
+    public static final int DEPARTURE_POLL_INTERVAL = 20;
 
     // ---- chunk loading ----
     /**
@@ -425,6 +446,27 @@ public final class AutopilotConfig {
     public static final double TOUCHDOWN_AIM_OFFSET = 12.0;
     public static final double FLARE_HEIGHT = 4.0;
     public static final double FLARE_PITCH = 4.0;
+
+    // ---- what counts as having landed ----
+    /*
+     * The roll-out has to decide whether the aircraft is standing on the runway it was cleared for
+     * or somewhere else entirely, and it is the only thing that ever does: nothing earlier in the
+     * arrival re-checks the position once the flare is committed. Both tolerances are therefore
+     * sized to accept an untidy but real landing and refuse anything that is not one, rather than to
+     * be generous.
+     */
+    /**
+     * How far outside the surveyed strip, along it or across it, an aircraft may come to rest and
+     * still be reported as landed on it. One plane length, so a touchdown that stops just short of
+     * the threshold still counts and one that stops a hundred blocks out to sea does not.
+     */
+    public static final double LANDING_POSITION_TOLERANCE = 5.0;
+    /**
+     * How far the resting elevation may differ from the runway surface underneath. A parked aircraft
+     * sits within a block of the surveyed elevation, so this only has to absorb a sloping strip and
+     * the block the aircraft settles into; anything larger means it is not on the runway at all.
+     */
+    public static final double LANDING_ELEVATION_TOLERANCE = 3.0;
 
     // ---- landing gates: violated on short final means go around ----
     public static final double GATE_HEADING_ERROR = 10.0;

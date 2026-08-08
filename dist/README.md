@@ -11,12 +11,34 @@ play, just drop it into `mods/` (see below). The sources it was built from live 
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `b0ef947b892ace7bd96392729be8adfbc62ad5e563bbe0beed088ec1f0e08d48` |
+| sha256 | `1212b8578941889c29cdc8004bd200dcf647e0d268f4852a4001291feb252e39` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
 
 ## Changes in this build
+
+### Strike tool settings, and departures that wait their turn
+
+The strike tool carried a blast strength and nothing else. The full set — strength, whether the
+blast breaks blocks, whether it sets fire, and a pinned run-in bearing — is now written onto the
+tool in hand by `/autopilot tool <distance> [bearing] [blast] [blocks] [fire]`, the same arguments
+in the same order as `/autopilot strike` minus the target. They are ordinary data components, so
+`/give` can hand out a preconfigured tool directly:
+
+```mcfunction
+/give @s simpleplanes:plane_strike_tool[simpleplanes:autopilot_strike_distance=400,simpleplanes:autopilot_strike_blast=15.0f,simpleplanes:autopilot_strike_fire=true]
+```
+
+The tool's launch report printed the internal yaw where the command prints a compass bearing —
+180° apart, so it reported the opposite of the direction the aircraft came from. Fixed.
+
+`/autopilot flight <from> <to> [speed] [delay <seconds>]` spawns the aircraft on a marked parking
+spot, holds it there for the ordered delay, and only then asks for the departure runway — taxiing
+out when it is free. This closes a real gap: departures reserved nothing at all, so two sorties out
+of one field taxied onto the same threshold. Existing invocations parse exactly as before.
+
+`COMMANDS.md` at the repository root is a Russian cheat sheet for every command and item gesture.
 
 ### Impact detection
 
