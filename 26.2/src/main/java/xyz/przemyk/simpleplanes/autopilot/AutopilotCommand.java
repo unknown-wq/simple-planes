@@ -46,7 +46,7 @@ import java.util.List;
  * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed] [delay &lt;seconds&gt;]
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt; [speed]
  * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
- * /autopilot airfields [info|show|remove|rename|park|unpark] …
+ * /autopilot airfields [info|show|resurvey|remove|rename|park|unpark] …
  * /autopilot tower [&lt;airfield&gt;]
  * /autopilot status
  * /autopilot stop
@@ -177,6 +177,10 @@ public final class AutopilotCommand {
                     .then(Commands.argument("airfield", StringArgumentType.string())
                         .suggests(AIRFIELD_SUGGESTIONS)
                         .executes(AutopilotCommand::airfieldShow)))
+                .then(Commands.literal("resurvey")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .executes(AutopilotCommand::airfieldResurvey)))
                 .then(Commands.literal("remove")
                     .then(Commands.argument("airfield", StringArgumentType.string())
                         .suggests(AIRFIELD_SUGGESTIONS)
@@ -490,8 +494,15 @@ public final class AutopilotCommand {
         }
         // Refused here rather than discovered by an aircraft in the air. Both ends are checked: the
         // departure has to be long enough to get off, and the destination long enough to get back on.
+        //
+        // Parking is checked at both ends too, and for the symmetrical reason: the departure is
+        // where the aircraft stands before it moves, and the destination is where it has to taxi to
+        // after it lands. Both are no-ops on an airfield surveyed before the rule existed.
         for (Airfield airfield : List.of(from, to)) {
             Component refusal = AirfieldBrowser.usabilityRefusal(airfield);
+            if (refusal == null) {
+                refusal = AirfieldBrowser.standsRefusal(airfield);
+            }
             if (refusal != null) {
                 source.sendFailure(refusal);
                 return 0;
@@ -537,6 +548,9 @@ public final class AutopilotCommand {
             return 0;
         }
         Component refusal = AirfieldBrowser.usabilityRefusal(destination);
+        if (refusal == null) {
+            refusal = AirfieldBrowser.standsRefusal(destination);
+        }
         if (refusal != null) {
             source.sendFailure(refusal);
             return 0;
@@ -656,6 +670,16 @@ public final class AutopilotCommand {
         source.sendSuccess(() -> Component.literal("Marked " + airfield.name() + " at "
             + airfield.thresholdA().toShortString() + "."), false);
         return 1;
+    }
+
+    /**
+     * Re-measures a registered airfield from its own stored thresholds. The one command that
+     * rewrites saved runway geometry — see {@link AirfieldBrowser#resurvey}.
+     */
+    private static int airfieldResurvey(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return AirfieldBrowser.resurvey(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "airfield")) ? 1 : 0;
     }
 
     private static int airfieldRemove(CommandContext<CommandSourceStack> context) {

@@ -240,7 +240,10 @@ public final class AutopilotSpawner {
         loadAirfield(level, departure);
         loadAirfield(level, destination);
 
-        RunwayEnd departureEnd = Airfield.departureEnd(level, departure);
+        // Where the sortie is going decides which way it leaves, so the destination goes in here and
+        // not only into the flight plan — see DeparturePlan. The parking spot is derived from the
+        // answer, so this is the moment it has to be settled.
+        RunwayEnd departureEnd = Airfield.departureEnd(level, departure, destination.centre());
         Airfield.ParkingSpot parking = Airfield.parkingPosition(level, departureEnd);
         loadAround(level, parking.position());
         // The heading comes from the parking spot rather than being derived here. Facing the
@@ -345,14 +348,31 @@ public final class AutopilotSpawner {
      * usually, sit there not ticking. The ticket is still added so the chunk stays resident
      * afterwards.
      */
-    /** Makes a whole runway resident: both thresholds and the ground between them. */
-    private static void loadAirfield(ServerLevel level, Airfield airfield) {
+    /**
+     * Makes a whole airfield resident: both thresholds, the ground between them, and every marked
+     * stand.
+     *
+     * <p><b>The stands are not covered by the centreline sweep and have to be listed separately.</b>
+     * Each {@link #loadAround} pulls in a 3x3 block of chunks about a point on the centreline, which
+     * is 24 blocks either side of it — and a stand beside a 25-wide strip sits further out than that.
+     * Two things went wrong measurably while it did not: a departure read "unknown terrain" for a
+     * perfectly good marked apron and fell back to parking on the centreline, and — worse, because it
+     * is silent — an arrival asking whether a stand was free got its answer from
+     * {@code Level#getEntities}, which reports an <em>empty</em> chunk as empty. Measured on the rig:
+     * two sorties into one field, the first parked on a stand and its chunk ticket expired 40 ticks
+     * later, and the second landed a thousand ticks after that, found the stand "free" because the
+     * aircraft standing on it was not loaded, and taxied on top of it.
+     */
+    public static void loadAirfield(ServerLevel level, Airfield airfield) {
         Vec3 a = airfield.pointA();
         Vec3 b = airfield.pointB();
         int steps = Math.max(1, (int) Math.ceil(airfield.length() / 16.0));
         for (int i = 0; i <= steps; i++) {
             double t = (double) i / steps;
             loadAround(level, new Vec3(a.x + (b.x - a.x) * t, a.y, a.z + (b.z - a.z) * t));
+        }
+        for (BlockPos spot : airfield.parkingSpots()) {
+            loadAround(level, new Vec3(spot.getX() + 0.5, spot.getY(), spot.getZ() + 0.5));
         }
     }
 

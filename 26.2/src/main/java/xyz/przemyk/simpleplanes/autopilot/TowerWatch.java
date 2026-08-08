@@ -40,7 +40,15 @@ public final class TowerWatch {
         /** Orbiting the approach fix because the runway was busy when it asked. */
         HOLDING,
         /** Standing on a parking spot, waiting for the departure clock or for the runway. */
-        WAITING
+        WAITING,
+        /**
+         * Landed, and driving to a stand. Its own role rather than a kind of {@link #OCCUPYING},
+         * because it stops occupying part way through: the aircraft gives the strip back the moment
+         * it is clear of the rectangle and goes on taxiing for as long again afterwards. Rolled into
+         * OCCUPYING it would vanish off the board at exactly the moment it is still moving about the
+         * field, which is the state a board exists to show.
+         */
+        TAXIING_IN
     }
 
     /** Half a second. Fine enough for a readout printed as m:ss, cheap enough to ignore. */
@@ -116,6 +124,11 @@ public final class TowerWatch {
         }
         if (autopilot.getMode() == AutopilotMode.HOLD) {
             return Role.HOLDING;
+        }
+        // Before the holdsRunway test, not after it: a taxi in is this role whether or not it still
+        // holds the strip, and it holds it for only the first part of the taxi.
+        if (autopilot.getMode() == AutopilotMode.TAXI_IN) {
+            return Role.TAXIING_IN;
         }
         // The autopilot's own test, not a copy of it: true exactly when the reservation is valid.
         if (!autopilot.holdsRunway(airfield)) {

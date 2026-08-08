@@ -258,15 +258,24 @@ Two modes, switched with **sneak + right-click the air**; the tooltip says which
 
 **Right-click the air** in either mode browses the airfields, nearest first.
 
+**Click anywhere on each end** — a corner is fine. The survey finds the middle of the strip for
+itself; see [The centreline is the middle of the strip](#the-centreline-is-the-middle-of-the-strip).
+The survey reports:
+A survey that registers a **new** runway switches the tool into parking mode by itself, because a
+runway with nowhere to park is not a finished airfield — see
+[A surveyed runway is not finished until a stand is marked](#a-surveyed-runway-is-not-finished-until-a-stand-is-marked).
+
 Mark the two **centreline ends** (not opposite corners), which is what makes the runway heading
 exact. The survey reports:
 
 * length, measured width, slope in degrees
-* both thresholds with their elevation and compass heading
+* both thresholds with their elevation and compass heading, and how far the thresholds had to move
+  sideways to reach the middle of the strip
 * both **runway designators** (`09/27` style, derived from the true heading)
 * surface roughness — the standard deviation of the centreline surface height, so `0.00` is a
   perfectly flat strip
-* obstacles in each approach funnel: terrain columns poking above the glide slope out to 200 blocks
+* obstacles in each approach funnel: 10-block segments of the funnel with something poking above the
+  glide slope, out to 200 blocks
 * the preferred landing direction
 * warnings for a short runway or a steep slope
 
@@ -275,7 +284,7 @@ exact. The survey reports:
 ## 3. The state machine
 
 ```
-IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► IDLE
+IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► DESCENT ─► APPROACH ─► FINAL ─► FLARE ─► ROLLOUT ─► TAXI_IN ─► IDLE
                              │          ▲         │  ▲                 │
                              │          └─ HOLD ◄─┘  └──── GO_AROUND ◄─┘
                              └──► STRIKE (one-way attack run, no landing)
@@ -283,17 +292,18 @@ IDLE ─► PARKED ─► TAXI ─► TAKEOFF ─► CLIMB ─► CRUISE ─► 
 
 | Mode | What it does |
 |---|---|
-| `PARKED` | Stationary on the parking spot, throttle shut, running the departure clock down and then asking for the runway |
+| `PARKED` | Stationary on the parking spot, throttle shut, running the departure clock down and then asking for the runway. Which end it will use, and the turn onto course, were decided before it was put there — see [4e](#4e-deciding-the-departure-before-the-aircraft-rolls) |
 | `TAXI` | Ground steering from the parking spot to the departure threshold at 0.20 speed, elevator neutral |
+| `TAXI_IN` | Ground steering from where the aircraft stopped, off the strip and on to a marked stand — see [Taxiing in](#4d-taxiing-in-runway--stand) |
 | `TAKEOFF` | Full power, ground steering on the runway heading, elevator aft, rotate at 0.35 speed, wings level |
 | `CLIMB` | Climb to cruise altitude on the first waypoint's bearing |
-| `CRUISE` | Fly waypoints, terrain-following, advancing within `max(30, turn radius)`, bleeding speed for the arrival |
+| `CRUISE` | Fly waypoints, terrain-following, advancing within `max(30, turn radius)`, bleeding speed for the arrival — and, on the last leg into a named airfield, handing over to `DESCENT` at the arrival decision range rather than overhead ([4d](#4d-deciding-the-arrival-at-range-and-then-flying-it)) |
 | `STRIKE` | Hold 100 above the ground, then dive at the target — see [The attack run](#the-attack-run) |
 | `DESCENT` | Fly to the initial approach fix, 300 blocks out at circuit height |
 | `APPROACH` | Track the extended centreline and capture the glide slope |
 | `FINAL` | As above, plus the landing gates are enforced |
 | `FLARE` | Nose up 4°, throttle closed, wings level |
-| `ROLLOUT` | Throttle closed, ground steering, until the aircraft stops |
+| `ROLLOUT` | Throttle closed, ground steering, until the aircraft stops — then either the taxi in or the end of the flight |
 | `HOLD` | Orbit the approach fix at circuit height until the runway frees up |
 | `GO_AROUND` | Full power, climb to circuit height, then rejoin via `HOLD` |
 
@@ -539,6 +549,80 @@ beyond that it commits to the landing rather than orbiting forever.
    runway aiming point, once a second above 15 blocks AGL. Unlike the heightmap this also catches
    overhangs. A blocked corridor triggers a go-around.
 
+### The centreline is the middle of the strip
+
+The user's report was that the aircraft "always takes off from the exact first point marked with
+right-click and lands on that point or on the opposite one, instead of down the middle of the runway
+end" — *"самолет всегда взлетает из крайней первой точки что отмечена ПКМ и садится туда же или на
+противоположную, а не по середине края"*. That was exactly what the code did: `Airfield.survey` took
+the two clicked blocks as the thresholds, literally, and **every number the aircraft flies hangs off
+the threshold** — the take-off lineup, the parking apron, the touchdown aim point, the glide slope,
+the lateral offset on the approach and the landing gates. Mark an edge and all of them move to the
+edge together.
+
+Nobody clicks the middle of a runway end, because there is nothing there to click. You stand on a
+corner, where you can see what you are marking.
+
+Measured on the rig, both ends clicked on the left edge of a 13-wide plinth running from x = −6.0 to
+x = 7.0 (true middle x = 0.5):
+
+| | before | after |
+|---|---|---|
+| stored thresholds | `-6 -57 0` / `-6 -57 -160` | `0 -57 0` / `0 -57 -160` |
+| parked and rolling, whole take-off | x = **−5.50** | x = **0.50** |
+| touchdown and stop | x = **−5.8** | x = **0.20** |
+| off the middle of the strip | **6.3 blocks**, on a strip 6.5 blocks wide either side | **0.3** |
+| lateral tracking error (`lat` in the trace) | −0.2 | −0.2 |
+
+That last row is the point. The aircraft was never flying badly; it was flying a perfect approach
+onto a line the survey had put on the runway edge, with the outboard wing over the drop-off.
+
+**Each end is centred on its own cross-section.** The survey measures how far the strip reaches
+either side of each clicked point, perpendicular to the current centreline, and moves that end to the
+middle of what it finds — then re-derives the heading and does it again, up to
+`SURVEY_CENTRING_PASSES` (3) times, because moving an end sideways changes the perpendicular.
+
+The obvious alternative was to keep the clicked heading exactly and shift both ends by one common
+amount. It was tried first and it is wrong on the case that matters most: the two corners easiest to
+reach at the two ends of a strip are usually on *opposite* sides, and averaging +6 and −6 gives 0, so
+the centreline stays diagonal — the very arrival being complained about. Measured with the near-left
+and far-right corners of the same 160×13 strip clicked, independent centring returns `0 -57 0` /
+`0 -57 -160` and designators 000/180: the two corner clicks become the true axis. The cost is that
+the survey may report a slightly different heading from the one clicked, which is a correction — the
+strip's own edges are better evidence of which way it runs than two clicks are.
+
+**Ground the survey cannot tell from the strip is left alone.** The cross-section stops at the first
+column more than a block off the threshold elevation, so a runway flush with the field around it —
+or anything on the superflat test world — has no edges to find, both probes run to the limit, the
+offset comes out zero and the clicked line is kept untouched. Verified: an off-centre survey on the
+open superflat produces exactly the thresholds that were clicked and prints no correction.
+
+**It also fixes the measured width.** The width probe ran ±`SURVEY_MAX_WIDTH/2` from the clicked
+line, which is only half the strip when the click is on an edge. A 25-wide strip clicked on its left
+edge measured **13**; clicked in the middle it measured 25. It now reports 25 either way, because the
+probe runs from a centreline that is actually central. Width feeds the landing lateral gate, the
+parking apron offset and now the approach funnel, so halving it was not cosmetic.
+
+> **Airfields already on disk are not touched.** `Airfield` persists its two thresholds, and
+> re-centring them on load would silently move every runway in every existing world — this codebase
+> has been bitten by silently reinterpreting persisted data before, and the correction here is up to
+> half a runway width. **Only newly surveyed airfields are centred.** A stored airfield keeps exactly
+> the geometry it was saved with, and there are two ways to bring it up to date, both of which a
+> human has to ask for:
+>
+> * re-click both ends with the survey tool, which already replaces an airfield whose thresholds land
+>   within 12 blocks of a registered pair, or
+> * **`/autopilot airfields resurvey <airfield>`**, new here, which re-measures the field from its own
+>   stored thresholds and keeps its name and its parking spots.
+>
+> `/autopilot airfields info` says when a field needs it — `centreline is 6 blocks off the middle of
+> the strip - run /autopilot airfields resurvey "airfield-1" while standing near it` — and says
+> nothing when the runway's chunks are not loaded, because an unloaded strip reads as having no edges
+> and a field nobody is standing near must not be accused of being crooked on no evidence. `resurvey`
+> refuses an unloaded field for the same reason `/autopilot survey` does, refuses while an aircraft
+> holds the runway, and is idempotent: run twice it reports `its centreline was already down the
+> middle of the strip`.
+
 ### Where on the runway it touches down
 
 The user's complaint was that a 183-block strip was being used from the very edge — "садятся
@@ -732,6 +816,90 @@ the next section that fixes it. What did change for a forest is the flare: a can
 approach used to bring AGL to four blocks while the aircraft was still well above the runway, and the
 height-above-threshold term now refuses that.
 
+### What the approach funnel can see, and the bamboo report
+
+The report was that **bamboo is not treated as an obstacle** — the modern bamboo, not sugar cane.
+Most of that does not reproduce, and the half that does is not about bamboo at all.
+
+**Bamboo is visible to every heightmap the mod uses.** `Blocks.BAMBOO` is registered
+`.forceSolidOn()`, and `BlockBehaviour.BlockStateBase#calculateSolid` returns true on that flag
+before it ever looks for a collision-shape cache — which matters, because bamboo is also
+`.dynamicShape()` and therefore has no cache. `blocksMotion()` is
+`block != COBWEB && block != BAMBOO_SAPLING && isSolid()`, so a stalk is in `MOTION_BLOCKING` *and* in
+`OCEAN_FLOOR`. Measured by flying over a 15-block bamboo wall on the superflat with the trace on:
+`gnd=-45` against a ground of −60, `landable=true`. Terrain following sees it, the survey counts it,
+and the flare treats its canopy as a surface.
+
+**Bamboo collides, and hard.** Its collision shape is a full-height column 3/16 of a block wide, and
+that is enough. Measured with planes summoned into a 61×101 bamboo grove 15 stalks tall, entering
+horizontally at canopy height with a known `Motion` (the same method as the water-impact recipe):
+
+| entry speed | outcome |
+|---|---|
+| 0.50 b/t | stopped 4 blocks inside the grove, **−2 HP**, and stayed there permanently |
+| 1.00 b/t | **destroyed**, 4 blocks in |
+| 2.00 b/t | **destroyed**, 2 blocks in |
+| 2.00 b/t into a stone wall of the same height (control) | destroyed |
+
+So an aircraft flown into a bamboo forest is stopped or destroyed exactly as it is by a wall. Nothing
+here needed fixing, and the "an aircraft that settles into a canopy really has come to rest on it"
+judgement recorded for leaves applies unchanged: the aircraft does come to rest on the bamboo, it is
+not on a runway, and `landingProblem` says so rather than reporting a landing.
+
+**What was actually broken is how the approach funnel was sampled**, and it lost stone just as
+happily as bamboo. `countApproachObstacles` took **one heightmap column every 10 blocks along the
+extended centreline** — 20 points, and nothing else, in a corridor 200 blocks long and as wide as the
+runway. Measured on a 160-block field with a 20-block-tall obstruction in its 36 funnel:
+
+| obstruction | before | after |
+|---|---|---|
+| bamboo wall 5 deep, on the centreline, **between** two stations | **0** | 1 |
+| bamboo clump 4–8 blocks **beside** the centreline, over a station | **0** | 2 |
+| **stone** wall 5 deep, on the centreline, between two stations | **0** | 1 |
+| bamboo wall 5 deep, moved 5 blocks so a station lands on it (control) | 1 | 2 |
+| nothing at all (control) | 0 | 0 |
+
+The preferred landing direction followed: before, only the control flipped the field to its other
+end; after, every one of them does.
+
+Each station is now a **cell** rather than a column — `SURVEY_APPROACH_SUBSTEPS` (5) positions along
+track, so there is a sample every 2 blocks instead of every 10, and
+`SURVEY_APPROACH_LATERAL_SAMPLES` (5) columns spread across the funnel width, which is the runway's
+own width with a floor of `SURVEY_FUNNEL_MIN_HALF_WIDTH` (5) either side. A station is flagged when
+the highest column in its cell pokes above the glide slope, so **the reported number keeps its old
+scale** — still 20 stations, still "n of 20" — and stays comparable with the counts already persisted
+on existing airfields. It can only ever go up, which is the safe direction. Cost is 25 heightmap
+lookups per station and 500 per funnel, paid at survey time and once per arrival for an airfield old
+enough to have no stored counts; nothing here runs per tick.
+
+`TerrainScanner.scan` samples the cruise profile the same way — 12 columns over 220 blocks — and was
+deliberately left alone. It is far less exposed, because the grid moves with the aircraft: an
+obstacle missed at 200 blocks out is sampled again at 180, at 160 and at every sample distance in
+between as the aircraft closes on it, which a one-shot survey of a fixed funnel never gets to do.
+
+**Other tall vegetation.** Bands laid across a cruise track on the superflat and read straight off
+the per-tick trace, with `random_tick_speed` set to 0 so nothing grows mid-measurement:
+
+| band | `gnd` | `landable` | in the heightmaps? |
+|---|---|---|---|
+| plain grass (control) | −60 | true | — |
+| **bamboo stalks**, 15 tall | **−45**, the canopy | true | both. `forceSolidOn` |
+| **bamboo saplings** | −60, the bare ground | true | **neither** — `blocksMotion` excludes them by name |
+| **sugar cane**, 3 tall | −60 | true | neither — `noCollision`, so not solid |
+| **cactus**, 3 tall | **−57**, its top | true | both — it has a nearly full collision box |
+| **kelp** in 4 of water | −59, the waterline | false | the water is seen, the kelp is not |
+| **big dripleaf** on a 2-block stem | −60 | true | neither — `forceSolidOff` |
+| **tall grass** (two blocks) | −60 | true | neither |
+| **sweet berry bushes** | −60 | true | neither |
+| **vines** on a wall face | −60 | true | neither |
+
+Nothing in that table is worth code. Everything invisible is at most three blocks tall against a
+`TERRAIN_CLEARANCE` of 22, and everything invisible except one has no collision either, so an
+aircraft passes straight through it — the same consistency powder snow has. The exception is worth
+knowing about: **big dripleaf is `forceSolidOff` but `BigDripleafBlock` does have a collision shape**,
+so it is the one plant that is invisible to the scanner and solid to `Entity#move`. A leaf on a stem
+is not an obstacle at aircraft scale, so it is recorded here rather than fixed.
+
 ### A landing report has to be true
 
 `tickRollout` used to announce a landing on `speed < ROLLOUT_STOP_SPEED && getOnGround()` and nothing
@@ -809,8 +977,7 @@ Extending is always tried before circling because it helps twice over — more t
 *and* a higher slope that far out — and because it makes progress towards the runway, which an orbit
 does not. `MAX_INTERCEPT_DISTANCE` is 900 (126 blocks above the threshold at 8°, nearly three times
 circuit height); past that the extension is a long way flown in the wrong direction and an orbit
-really is cheaper. The plan is re-decided every tick and converges: a high arrival typically reads
-`extended final 450 → 600 → straight in` and lands without orbiting at all.
+really is cheaper.
 
 `tickApproach` caps the commanded altitude at `glideSlopeAltitude(min(distance, interceptDistance))`
 rather than at circuit height. That cap was the reason an extended final could not work: an aircraft
@@ -824,7 +991,244 @@ landing over a hill to save a detour is exactly the trade this function exists t
 position settles is the case the old code settled arbitrarily: with both funnels clean it returned
 end A regardless of where the aircraft came from, so an arrival from the wrong side flew the length
 of the field, turned round and came back — 400 blocks and about 40 seconds at approach speed. A
-departure passes no position and gets the old answer unchanged.
+departure has its own scorer now; see [4d](#4d-deciding-the-arrival-at-range-and-then-flying-it).
+
+**The obstacle count is the larger of the surveyed one and what is visible now.** A survey is a
+photograph: it is trustworthy about the moment it was taken and says nothing about a hill built, or a
+chunk generated, afterwards. Taking the maximum keeps the survey as the *floor* — which is what stops
+an unloaded funnel scoring zero and winning, the bug this function was fixed for once already — while
+letting an obstacle the aircraft can now actually see be counted. Unknown columns are skipped in the
+live half for exactly that reason: the surveyed number already speaks for them.
+
+### 4d. Deciding the arrival at range, and then flying it
+
+The user's question was blunt: **"почему за 200 блоков нельзя сразу расчитать по какому маршруту
+удастся сесть? … сделать расчёт а потом уже садиться и взлетать"** — why can the whole route to a
+landing not be worked out a couple of hundred blocks out and then simply flown, take-off included.
+
+They were right, and for a worse reason than they knew. Nothing was worked out at range at all.
+
+**The arrival began overhead.** `AutopilotSpawner#launchInbound` and `#launchSortie` make the flight's
+last waypoint the **centre of the destination runway**, and `tickCruise` only started the arrival once
+that waypoint was reached. Measured on the rig, a straight-in down the extended centreline at the
+2.60 default:
+
+```
+trace #1 t=340 descent pos=0.5,-0.04,-50.7 … dthr=-51.2   ← DESCENT entered 51 blocks PAST the threshold
+trace #1 t=440 descent pos=-89.2,-12.79,-40.0 … lat=-89.7 ← 90 blocks off the centreline, coming back round
+```
+
+The aircraft flew the length of the field, out to 90 blocks abeam, and back to a fix 300 blocks out on
+the side it had just come from — **1578 blocks of track for a 780-block flight**. That loop is on
+every single arrival, and none of it was a decision.
+
+So `ArrivalPlan` grew three things: a range at which the decision has to be made, a feasibility test
+against what the airframe can actually do, and a commit point.
+
+#### The decision range is the aircraft's own geometry
+
+```
+decisionRange = interceptDistance + max(ARRIVAL_DECISION_FLOOR, 2 × turnRadius)
+```
+
+`turnRadius` is `v / yawRate`, and `tickYaw` clamps the yaw rate to `2.5°/tick × the airframe's
+getRotationSpeedMultiplier`. **That multiplier is the whole reason this is not a constant**: 1.0 on
+the starter plane, 0.5 on the large one, **0.2 on the cargo plane**. The same 0.50 b/t approach is an
+11.5-block turn on one airframe and a **57-block** turn on another.
+
+Two radii, because the manoeuvre the range has to pay for is the join onto the centreline and its
+worst case is a course reversal, which displaces the aircraft `2r` sideways before it rolls out.
+
+**On the user's 100 blocks.** It is the floor, not the rule, and the arithmetic says why. At cruise
+speed the starter airframe's radius is 59.6 blocks, so two of them are 119 and the floor never binds.
+At approach speed the radius is 11.5 and two are 23 — without a floor the aircraft would be deciding
+its arrival from inside the pattern, so 100 is what stops that. But on the cargo airframe the
+approach-speed radius is 57 blocks and two are 115: **100 blocks is under two turn radii there**,
+which is enough to *verify* a straight-in and not enough to *repair* a bad entry. Flown on the rig,
+`inbound 0 -30 120` — 120 blocks straight down the centreline — lands on both builds, so 100 blocks
+really is enough for the easy case on the light airframe. It is not enough for the case that matters.
+
+The range is measured to the **threshold**, not to the intercept fix. An arrival from abeam never
+passes near the fix at all, so a fix-referenced trigger would sail straight past the decision and end
+up overhead again, which is the behaviour being removed.
+
+**Only a flight whose last waypoint *is* the field cuts the corner.** Three conditions:
+this is the last leg; the destination is a named airfield; and that waypoint is within
+`ARRIVAL_WAYPOINT_IS_THE_FIELD` (300 blocks) of it. A route wand's last waypoint is somewhere a player
+pointed at, and it is still flown to exactly as before — verified with `/autopilot route`, which still
+reads `arrival at field-17/36: straight in, decided 45 blocks out` off its improvised strip.
+
+#### Feasibility, not merely geometry
+
+The old test was one line: can the height above the fix be lost on the way there at
+`MAX_DESCENT_ANGLE`. Two things the airframe knows and that line did not:
+
+* **The descent is sink-rate limited, not angle limited.** The altitude cascade clamps the commanded
+  vertical speed to `MAX_SINK_RATE` (0.30 b/t) *before* it becomes a flight path angle, so the
+  gradient really available is `min(tan(12°), 0.30 / v)`. At cruise speed that is 0.115 against the
+  0.213 of 12° — the old figure promised **nearly twice** the descent the aircraft could fly.
+  `AutopilotMath.descentAvailable` integrates it along `speedSchedule`, which is the same profile the
+  descent leg is actually flown on, because neither end is honest alone: the current speed
+  under-counts by the whole braked part of the run and the target speed over-counts by the fast part.
+* **The turn onto final has to fit.** Joining through `θ` displaces the aircraft `r(1 − cos θ)` to the
+  outside, up to `2r`; washing that off against the centreline costs `offset / tan(40°)` of track
+  (40° is the largest cut `tickApproach` takes), and all of it has to be spent before the gates arm at
+  `FINAL_HANDOVER_DISTANCE`. On the starter airframe at approach speed the worst case costs 27 of the
+  150 available and this never binds — nothing about an ordinary arrival changes. On a cargo plane it
+  costs 136, which only just fits, and from the transit speed it does not fit at all. That is the case
+  that used to be discovered at the gate: measured before `speedAtFix` existed, an aircraft reaching
+  the fix at 1.91 b/t swung **87 blocks** off the centreline and went around.
+
+Both failures are repaired the same way and in the same order as before — extend the final, orbit only
+when no final can absorb it — because a longer final buys track for the height *and* for the turn.
+
+#### Committed, and re-checked
+
+The plan used to be recomputed from scratch every tick. That is not a commitment, and the phrase gave
+it away: a 172-block-high arrival announced `extended final 600 → 450 → 600 → straight in` inside a
+single second, because the extension ladder is discrete and an aircraft between two rungs alternates
+between them.
+
+It is now decided once and held, and re-checked every `ARRIVAL_RECHECK_INTERVAL` (20 ticks). **What
+triggers a replan**, in the order they are tested:
+
+| Trigger | Phrase | Live in |
+|---|---|---|
+| The runway became busy, or free | `the runway is busy` / `the runway is free` | descent and approach |
+| The glide slope is blocked — raycast from the fix to the aim point | `terrain across the 36 glide slope` | descent and approach |
+| The end's approach obstacle count has risen since the plan was made | `5 columns now visible in the 36 approach` | descent and approach |
+| The committed profile no longer closes | `the profile no longer closes` | descent only |
+| A final a whole rung shorter now closes | `a shorter final now closes` | descent only |
+
+Everything else leaves the plan alone. Four details that were each found by getting them wrong first:
+
+* **The corridor raycast is the only probe that loads what it looks at.** `Level#clip` reads block
+  states and `Level#getBlockState` generates the chunk if it has to, where every heightmap probe in
+  this feature answers `UNKNOWN_HEIGHT`. The ground under a final is exactly the part of the world
+  nobody has generated when the arrival is decided 415 blocks out. With only the heightmap probe the
+  plan never changed at all on the wall test below — the wall's chunks were still unloaded every time
+  it was consulted. Its cost is bounded: the trace starts no further out than
+  `FINAL_INTERCEPT_DISTANCE`, so a 900-block extended final is checked over its last 300 and the first
+  call is about twenty chunks whatever the plan.
+* **It fires once per runway end.** An overhang is invisible to the heightmap, so a replan can land on
+  the same end again; firing every second after that would replan for ever and change nothing. Said
+  once, and the corridor raycast in `tickApproach` — unchanged — still produces the go-around.
+* **The profile test is not re-run once the aircraft is established on the final.** The plan has been
+  executed by then and the authority on whether the approach is good enough to land from is the
+  landing gates. Re-deciding there produced nothing but noise: a perfectly ordinary straight-in
+  announcing an extended final five blocks short of its own fix, because the distance still to run
+  goes to zero and any height above the slope reads as a failure. `ARRIVAL_PROFILE_SLACK` (5 blocks,
+  the cascade's steady-state lag with a block in hand) covers the same hair-trigger nearer the fix.
+* **A replan re-chooses the runway end — but not after a go-around.** `goAround` takes the end over at
+  that point (it switches to the opposite one after `MAX_GO_AROUNDS`), and a replan that re-ran
+  `bestEnd` would hand it straight back, swapping the aircraft between the two for ever.
+
+#### Measured
+
+Same rig, same world, same jar swapped underneath it; a 160×25 strip on the superflat, `tick sprint`
+throughout. **Ticks** is launch to wheels stopped, **track** is the summed horizontal chords, **lat**
+is the worst lateral offset once established on the approach.
+
+| Arrival | ticks | track | lat | go-arounds |
+|---|---|---|---|---|
+| straight in, 2.60 | 1396 → **889** | 1578 → **737** | 41.8 → **0.0** | 0 → 0 |
+| straight in, 2.80 | 1372 → **897** | 1575 → **736** | 39.5 → **0.0** | 0 → 0 |
+| straight in, 0.40 | 3389 → **1559** | 1477 → **736** | 47.4 → **0.0** | 0 → 0 |
+| from the wrong side | 1334 → **823** | 1409 → **575** | 42.2 → **0.0** | 0 → 0 |
+| 120 blocks high | 1649 → **1396** | 2174 → **1733** | 25.7 → **13.2** | 0 → 0 |
+| wrong side *and* high | 1585 → **1321** | 2017 → **1566** | 26.0 → **13.1** | 0 → 0 |
+| from abeam, 500/300 | 1317 → **971** | 1354 → **876** | 44.6 → 44.4 | 0 → 0 |
+| from abeam, 150/150 | 1193 → **974** | 1021 → **701** | 45.6 → 49.9 | 0 → 0 |
+| 120 blocks out, centreline | 1177 → **991** | 985 → **837** | — | 0 → 0 |
+| two arrivals, one runway (first) | 1423 → **947** | 1664 → **857** | 40.6 → 38.8 | 0 → 0 |
+| two arrivals, one runway (second) | 2509 → **2038** | 2622 → **1775** | 43.1 → 58.0 | 0 → 0 |
+| **wall across the funnel, built after the survey** | 2018 → **1353** | 2350 → **1502** | — | **3 → 0** |
+| southbound sortie, both ends | 2457 → **1868** | 3742 → **2715** | 40.9 → **4.2** | 0 → 0 |
+
+Replans fired 0 times on six of the nine clean arrivals, twice on each of the two high ones (walking
+the extension ladder down as the height came off), and once on the wall.
+
+**The two arrivals from abeam are the honest exception.** An aircraft 150 blocks from the runway and
+90° off it has to reposition whatever the planner says — the fix is behind it — so the lateral figure
+does not improve and should not. What improves is that it decides to reposition at range instead of
+arriving overhead and discovering it.
+
+**Nothing in `gateFailure` moved.** Heading, lateral offset, bank and sink rate are the values they
+were, and the corridor raycast in `tickApproach` is untouched. The wall case is the measure of
+success: the go-arounds went away because the approach became flyable, not because a gate stopped
+complaining.
+
+#### The one thing that was not the problem
+
+The premise "compute it 200 blocks out" is right in spirit and wrong in the arithmetic. On the flat,
+clean superflat **not one arrival went around before this change** — 8 scenarios, 0 go-arounds — so
+"how often does an arrival go around" was already zero for the easy cases and there was nothing there
+to fix. What was there to fix was a guaranteed 400–800 blocks of unplanned circuit on every arrival,
+and a plan that was recomputed rather than committed to. The go-arounds only appear when the world
+disagrees with the survey, and that is the case the replan triggers exist for.
+
+### 4e. Deciding the departure before the aircraft rolls
+
+`Airfield#departureEnd` called `bestEnd(level)` with no position and no destination, and `bestEnd`
+answers a different question: *which threshold would you rather cross on the way in*. It scores each
+end by its own **approach** funnel — the ground **before** that threshold. A departure that rolls from
+that threshold runs the other way down the strip and climbs out past the **far** one, over the
+opposite end's funnel: the one `bestEnd` had just rejected.
+
+**So on a field with a hill off one end, the aircraft landed away from the hill and took off straight
+at it.** Reproduced on the rig with a 36-block wall 20 to 60 blocks off the 36 threshold, surveyed
+(`approach obstacles: 36 -> 5, 18 -> 0`), with the destination due south so the departure climbs
+straight out:
+
+```
+Plane #100 cleared to taxi at airfield-1/18 …
+Plane #100 lost at 19, -27, 19 in climb.        ← flown into the wall
+```
+
+`DeparturePlan` scores it properly, and with the input the old call did not have — where the flight is
+going:
+
+```
+cost(end) = track from the far threshold to the first waypoint
+          + turnRadius × the turn onto course, in radians
+          + 400 × columns in the climb-out funnel
+```
+
+* The first two terms are what a wrong-way departure costs: a runway length flown in the wrong
+  direction plus the turn, about 210 blocks on a 160-block strip at climb speed.
+* The obstacle term is the same 400 blocks an arrival pays, so **one blocked column outweighs any
+  wrong-way departure** — turning the aircraft round is cheap and climbing out at a hillside is not.
+  The count comes from the survey, for the same reason `bestEnd` takes it from there: a departure is
+  decided while most of the climb-out is unloaded ground.
+* Both of the first two terms favour the same end (the one nearer the destination is also the one with
+  the smaller turn), so the airframe's turn rate can change the turn the plan *reports* but not the
+  end it picks. That matters because the choice is made twice — once by the spawner, which puts the
+  aircraft on a parking spot beside one threshold, and once by the flight director, which then taxis
+  to it — and the two must not disagree.
+
+Same wall, same sortie, after:
+
+```
+Plane #4 departure from airfield-1: depart 36, 180 deg turn to course.
+Plane #4 landed at airfield-3/18, 0, -60, 2537 (36 blocks down the 160-block runway, 23% used).
+```
+
+And with no obstacle at all, a sortie to a field 2660 blocks due south departs 18 (straight out)
+instead of 36 (180° turn): **2457 → 1868 ticks, 3742 → 2715 blocks of track, 28.4 → 15.7 full turns of
+heading change.**
+
+The phrase goes in the same `plan[…]` field as everything else, and is what `status` and the tower
+board show while the aircraft is on the ground:
+
+```
+#20 parked pos=17,-60,13 … dep=airfield-1/36 wait=clock 0:15 legs=0/1 plan[depart 36, 92 deg turn to course]
+airfield-1  36/18  FREE      2 waiting to depart, none cleared yet
+    #20 departure, parked, 0:05, 0:14 on the clock [depart 36, 92 deg turn to course]
+```
+
+`/autopilot status` also carries `replans=N` beside `go-arounds=N`. The two are read together: a
+replan is the plan being repaired in the air, which is the outcome this feature wants, and a
+go-around is the same failure discovered at the gate, which is the one it does not.
 
 ### How long a landing takes, and where the time went
 
@@ -902,14 +1306,17 @@ are standing; the console and command blocks have no position of their own, so t
 useless.
 
 ```
-2 airfields, nearest first, from 0, 0 (world origin):
+3 airfields, nearest first, from 0, 0 (world origin):
   airfield-1 36/18  180x25  662 blocks brg 081  parking 2
+  airfield-3 36/18  91x25  1.7km brg 088  NO PARKING
   airfield-2 36/18  66x25  2.7km brg 089  reserved by #1
 ```
 
 The list carries only what decides whether you want to open one: size, distance, bearing, marked
-parking, who has it reserved (`RunwayOccupancy.holder`), and `TOO SHORT` if an aircraft cannot use
-it. The full survey — slope, roughness, threshold elevations, approach obstacle counts, preferred
+parking, who has it reserved (`RunwayOccupancy.holder`), `TOO SHORT` if an aircraft cannot use it,
+and `NO PARKING` if it was surveyed under the stand rule and nobody has finished the job. Those last
+two are the same red for the same reason: both are states in which a sortie is refused, and a browser
+that shows a refusal as an absence gets blamed for the refusal. The full survey — slope, roughness, threshold elevations, approach obstacle counts, preferred
 landing direction, parking spots and their state — is one click away in `airfields info`, because
 twenty airfields' worth of that is not something anyone reads in chat.
 
@@ -1015,11 +1422,261 @@ the rest are where a queue forms behind it. Verified: two sorties launched a sec
 Anything that fails re-validation drops through to the next spot and finally to the derived apron, so
 a marked spot can never strand an aircraft that would otherwise have flown.
 
+Two of those rules had to change once arrivals started taxiing in and *staying* on stands, because
+both were written when every aircraft that ever stood on one was a departure about to leave it:
+
+* **The taxi distance is re-checked against the departure threshold**, not just against the nearest
+  one. A spot is validated when it is marked against whichever threshold it is closer to; which end
+  a sortie departs from is chosen per flight by `bestEnd`, so a stand 14 blocks behind one threshold
+  of a 183-block strip is 169 blocks from the other. Once the two nearer stands were occupied, a
+  departure took that one and spent the whole `TAXI_TIMEOUT` crawling to the threshold before
+  departing on `could not line up cleanly`. It now drops through.
+* **There is no "least bad" stand any more.** `markedParkingPosition` used to remember the first
+  *occupied* spot and return it when nothing was free, on the reasoning that known-good ground beats
+  a derived apron. With arrivals parked for good on those squares that reasoning spawns an aircraft
+  inside another one — measured, once the third stand was ruled out by the rule above. It now falls
+  through to the derived apron, and the derived candidates are checked for an aircraft standing on
+  them as well, which they never were: the apron is a fixed offset from the threshold, so every
+  departure from that end picks the same square.
+
 A marked spot is now also somewhere an aircraft **waits** rather than merely somewhere it appears:
 `PARKED` sits there for the ordered delay and then for as long as the runway is busy. That makes the
 "more than one spot" rule load-bearing instead of cosmetic — with two spots marked, two sorties
 ordered seconds apart wait on different squares while the first one uses the strip, and each is
 listed under the field on `/autopilot tower` with what it is waiting for.
+
+### A surveyed runway is not finished until a stand is marked
+
+Marking parking used to be optional, and an airfield with none fell back to an apron derived from the
+terrain — the heuristic that used to park aircraft in a hole. It is now **required**, and the
+requirement is carried by a stored flag rather than by "has this field got any spots", for one
+reason: a field surveyed before the rule existed also has no spots, and it has to go on working
+exactly as it did.
+
+`Airfield.requiresStands` is `Codec.BOOL.optionalFieldOf("requires_stands", false)`. An **absent key
+means grandfathered**, which is what every airfield already on disk is; only a survey run by this
+build writes `true`. Verified by reading the NBT of a world with all three cases in it — the two
+airfields surveyed by the previous build carry no such key at all after loading, saving and even
+being *re-surveyed*, and the one surveyed by this build carries it:
+
+```
+airfield-1  name threshold_a threshold_b width parking obstacles_a obstacles_b
+airfield-3  name threshold_a threshold_b width parking obstacles_a obstacles_b requires_stands
+```
+
+Four things follow from the flag, and none of them touches a grandfathered field:
+
+* **The survey says the job is not done**, in the report, with the next gesture spelled out:
+  `NOT FINISHED: no parking marked … Next: sneak + right-click the air to put the Runway Survey Tool
+  into parking mode, then right-click beside the runway. Or: /autopilot airfields park "airfield-3"
+  <x y z>`.
+* **The tool puts itself into parking mode** after such a survey. It is the same gesture sequence
+  either way and the report has just said in words what the tool does silently; re-surveying a field
+  that already has stands leaves the mode alone.
+* **The browser marks it `NO PARKING`**, in red, in the same column and the same tone as `TOO SHORT`,
+  and `airfields info` prints the whole instruction.
+* **Sorties are refused at the command**, at both ends — `flight` checks the departure and the
+  destination, `inbound` checks the destination. Refused rather than warned, and for the reason
+  `TOO SHORT` is: a field with no stand is one an aircraft departs from a square nobody surveyed and
+  arrives at by stopping on the landing area, which is the exact defect this feature exists to
+  remove, so completing the flight and leaving the mess behind is not an outcome worth having. It
+  costs nothing to obey — the refusal names the one command that fixes it.
+
+**Re-surveying never changes the grandfathering.** A fresh survey sets the flag; a survey that
+replaces a registered airfield keeps whatever that airfield had, alongside its name and its spots.
+Re-marking a threshold that was a few blocks out is how a player *fixes* a runway, not how they opt
+into a new requirement, and converting a working field into one whose sorties are refused would be
+exactly the silent reinterpretation this design exists to avoid.
+
+**Taxiing in is not gated on the flag.** Any field with a marked stand gets it, grandfathered or not;
+any field without one keeps the old behaviour and says so. The flag decides only who is nagged and
+who is refused.
+
+---
+
+## 4d. Taxiing in: runway → stand
+
+After `ROLLOUT` the aircraft used to simply stop wherever it stopped, and the flight ended there —
+on the runway. Measured on the rig before this change, six arrivals into one 183-block field:
+
+```
+654,-60,-47   654,-60,-44   654,-60,-42   654,-60,-39   654,-58.2,-45   654,-58.2,-41
+```
+
+Six aircraft inside eight blocks of runway, two of them **resting on the roofs of the others** at
+`y = -58.2`, and every one of them reporting `landed at airfield-1/36 … 21% used` as though the
+arrival had been tidy — `LANDING_ELEVATION_TOLERANCE` is 3 blocks, so a plane parked on another plane
+is still "on the runway surface". The runway reservation was released correctly each time; what was
+never released was the runway.
+
+`TAXI_IN` is the arrival's ground phase. It is entered from the roll-out stop when — and only when —
+the landing was real (`landingProblem` is null, so an aircraft that came to rest in the water or
+fifty blocks off the centreline never taxis anywhere) and the field has a marked stand it can reach.
+
+### The route is three straight legs
+
+There is still no taxiway network, and this is not a path search. It is: turn off the side of the
+strip, run down the apron, turn in. Both of the first two legs were forced by a measurement.
+
+**Turning off first, rather than heading straight for the stand.** A stand beside the *far* threshold
+of a 183-block runway is 150 blocks from where an arrival stops, and the straight line to it runs
+down the strip for most of that. Measured: the aircraft would still have been holding the runway 545
+ticks after touchdown, against 794 ticks for the whole arrival it is meant to improve on. Turning off
+sideways costs about 16 blocks of extra track — 80 ticks at `TAXI_SPEED` — and clears the landing
+surface in that time instead.
+
+**Running down the apron rather than cutting across it.** Stands are normally marked in a row, and a
+straight line from the runway to the far one goes through the near one, where an aircraft is very
+likely to be standing. Measured on the two-stand rig with the direct route: two arrivals seconds
+apart, the second correctly picked the further stand because the nearer was claimed, drove at it and
+came to rest **against the first aircraft, 18 blocks short**. The middle leg is now flown one
+`PARKING_SPOT_CLEARANCE` outboard of the outermost stand on that side — a taxiway lane in everything
+but name — and the aircraft turns in only when it is abeam its own stand. It costs 64 ticks on the
+183-block field (356 → 420) and converts that failure into two aircraft on two stands.
+
+A stand that is not off to one side at all — marked off the end of the runway, or on the strip itself
+— gets neither leg and is driven at directly. Every leg of whatever route comes out is checked for
+level ground every 2 blocks before the aircraft is committed to it, by the same
+`taxiPathIsRollable` a departure's spot is validated with, and a lane that fails falls back to the
+direct line rather than costing the aircraft its stand.
+
+### The runway comes back when the aircraft is off it
+
+Not when it stops, and not on the mode change. `AutopilotMode.usesRunway()` deliberately does **not**
+include `TAXI_IN`; `PlaneAutopilot.holdsRunway` keeps the reservation while the mode is `TAXI_IN` and
+a flag written by the tick that measured it says the aircraft is still on the strip.
+
+**"Clear" is a rectangle test against the survey, not a distance.** No distance answers this question.
+Measured from the threshold the aircraft gets *further away* the whole time it is still on the
+runway; measured from the centre it can be nearer after turning off than it was on the centreline.
+`Airfield.isOnStrip(Vec3, margin)` uses the two coordinates the survey actually measured — how far
+along and how far across — grown by `RUNWAY_CLEAR_MARGIN` (3) so that "clear" means the whole
+aircraft is off rather than its centre being on the edge. It is the same pair of numbers the landing
+report is written in.
+
+Measured on the rig, one arrival into a 183-block field at 2.60, identical approach either way:
+
+| | before | after |
+|---|---|---|
+| mode ticks: `approach` / `final` / `flare` / `rollout` | 626 / 947 / 1365 / 1412 | 626 / 947 / 1365 / 1412 — identical |
+| landing report | `654, -60, -47 (38 blocks down the 183-block runway, 21% used)` | identical |
+| flight ends | t = 1420, **on the runway** | t = 1841, on the stand at `672, -61, -8` |
+| runway **reserved** | 626 → 1420 = **794 ticks** | 626 → 1577 = **951 ticks** |
+| runway **physically obstructed** | 1412 → **for ever** | 1412 → 1577 = **165 ticks** |
+
+Not one tick of the arrival moved: the approach, the gates, the flare and the roll-out are untouched,
+and the landing line is the same to the block. The reservation is 157 ticks longer and that is the
+honest trade — it now covers the part of the taxi that is genuinely on the strip, which nothing used
+to cover at all. What used to end with an aircraft parked on the landing area for the rest of the
+session ends with it parked on a stand 43 blocks away.
+
+### Two aircraft must not want the same stand
+
+`Airfield.parkingPosition` already skipped occupied spots, but "occupied" meant *an entity is standing
+there* — which is the only state that existed when every aircraft that ever used a stand was already
+on it. A taxi takes hundreds of ticks, and for all of them the aircraft is somewhere between the
+runway and a square it fully intends to occupy. `PlaneEntity.canBeCollidedWith` is unconditionally
+true, so two arrivals that pick the same square meet on it.
+
+`Airfield.standFree` therefore asks three questions, and only the first of them existed before.
+
+**1. Is anything standing on it.** The entity search. Unchanged.
+
+**2. Is anything on its way to it.** `PlaneAutopilot.claimsStand`, **derived from the live autopilots**
+rather than kept in a reservation registry, for the reason `RunwayOccupancy.activeCount` is derived —
+a reservation with its own lifetime leaks one for every aircraft that goes away without running its
+release path, which is what happens on every crash. An aircraft destroyed mid-taxi stops claiming its
+stand in the same tick it stops existing. Both ends use this test, so a *departure* is not spawned
+onto a stand an arrival is taxiing to either: verified on the rig, with #51 taxiing to the stand at
+`672, -61, -8` a sortie ordered out of the same field was parked at `673, -59, 7`, the other stand.
+
+**3. Is one remembered as standing on it, in a chunk nobody has loaded.** This one is
+`StandOccupancy`, and it is the test that only shows up once you stop force-loading the rig.
+
+> A parked aircraft has no autopilot, so it renews no chunk ticket. Forty ticks after it arrives its
+> chunk unloads, the entity is written to disk and removed from the level, and every search of that
+> square comes back empty. Measured with no force-loading at all: two sorties into one field with
+> three stands, the first parked, the second landed 550 ticks later, searched the same square, found
+> nothing and taxied on top of it. The identical pair of flights *with* the field force-loaded picked
+> two different stands — which is the whole diagnosis in one pair of runs, and the reason this failure
+> was invisible for the first half of the work: `forceload` hid it.
+>
+> Loading the chunk before asking is not enough either. Block data comes back from `getChunk`
+> synchronously; entities do not, so a search run in the tick a chunk is pulled in still finds an
+> empty stand. (Loading the airfield's stands is still worth doing and is now part of
+> `AutopilotSpawner.loadAirfield`, because the *ground* test needs it — a stand in an unloaded chunk
+> reads as "no ground there" and gets skipped, which was silently costing departures their marked
+> apron.)
+>
+> So a stand is remembered from the moment an aircraft finishes taxiing onto it, by UUID, and the
+> record is believed **unless the level can actually see the square**: `ServerLevel.areEntitiesLoaded`
+> is exactly the vanilla predicate for "have this chunk's entities been deserialised", so the entity
+> search is only trusted where it means something. Where it is not, the answer is *taken* — the same
+> rule this feature already applies to unknown terrain, that "not loaded" must never be the cheapest
+> answer. A stand nobody can look at costs one aircraft a taxi in, and it stops on the runway and says
+> so; a stand wrongly called free costs two aircraft.
+>
+> It self-heals in the one way it has to: the first look at a loaded, empty square forgets the record,
+> so an aircraft a player flies away does not leave its stand blocked for the session. It is
+> runtime-only, like `RunwayOccupancy`, and a restart forgets everything — after which the plain
+> entity search is back in charge and is right whenever the chunk happens to be loaded. That is a real
+> hole and it is the cheap side of the trade; the alternative is persisting an occupancy that nothing
+> can validate on load.
+
+Measured end to end with **no force-loading**, three stands marked at one field, four arrivals:
+
+```
+#1 parked at airfield-2, 2673, -60, -178 (stand 2672, -61, -178, 343 ticks from the runway)
+#2 parked at airfield-2, 2673, -60, -6   (stand 2672, -61, -8,   930 ticks from the runway)
+#4 parked at airfield-2, 2673, -60, 7    (stand 2672, -61, 6,    487 ticks from the runway)
+#8 stopped on the runway at airfield-2: no free stand it can reach from here.
+```
+
+Three aircraft, three stands, one each; the fourth had nowhere to go and said so. All four alive.
+
+### What it does when it cannot
+
+Four outcomes, all of them reported, none of them a wait. An aircraft that has just landed is
+standing on the one surface every other aircraft at the field needs, so "hold here until something
+frees up" is the one answer that must never be given.
+
+| Situation | What happens | The line |
+|---|---|---|
+| No marked parking at all (grandfathered field) | Stops where it landed, exactly as every build before this | `stopped on the runway at airfield-2: no marked parking. Mark a stand with the Runway Survey Tool in parking mode, or /autopilot airfields park "airfield-2" <x y z>.` |
+| Every stand taken, or none reachable over level ground | Stops where it landed | `stopped on the runway at airfield-3: no free stand it can reach from here.` |
+| Blocked or stuck part way (100 ticks under `TAXI_IN_STALLED_SPEED`, or `TAXI_IN_TIMEOUT` = 2400 ticks) | Ends the flight where it stands | `stopped short of its stand at airfield-1, 679, -60, -24 (18 blocks to go, clear of the runway)` |
+| Stand marked **on the strip** | One leg, no turn-off; the reservation is held to the end of the taxi, because an aircraft parked on the strip really is occupying it | `taxiing to the stand at 1655, -60, -59 via 1 leg` and then `parked at airfield-3` |
+
+The stuck case was exercised deliberately by leaving a hulk on the apron lane: the taxiing aircraft
+came to rest against it at 0.2 blocks/tick, both aircraft finished at full health, the flight ended
+with the line above, and the tower board read `airfield-1 36/18 FREE` — the strip had been given back
+156 ticks earlier. "Clear of the runway" versus "STILL ON THE RUNWAY" is spelled out in that message
+because it is the only thing about a failed taxi that matters to anyone else.
+
+### Watching it happen
+
+`/autopilot status` gains three fields on a taxiing aircraft, because on the ground almost every
+other field on the line reads the same as a stopped one:
+
+```
+#46 taxi_in pos=2668,-60,-153 agl=0 hdg=088 spd=0.18 thr=3 want[hdg=088 alt=-60 spd=0.20]
+    tgt=2673,-60,-8 dist=145 rwy=airfield-2/18 stand=2673,-60,-8 to_go=145 rwy_held plan[straight in]
+```
+
+`rwy_held` becomes `rwy_clear` on the tick the rectangle test passes. `tgt`/`dist` follow the stand
+rather than the threshold the aircraft has already crossed.
+
+The tower board grows a section, and the aircraft moves into it at the moment it stops being the
+runway's occupant, which is exactly when it would otherwise have vanished off the board while still
+trundling across the field:
+
+```
+> autopilot tower
+3 runways in this dimension, 0 occupied, 0 holding, 0 waiting to depart, 1 taxiing in.
+airfield-2  36/18  FREE      no traffic
+  taxiing to a stand (runway already released):
+    #46 arrival 18, taxi_in, 0:30, 57 blocks to the stand [straight in]
+```
 
 ---
 
@@ -1109,11 +1766,14 @@ you want a reliable one.
 | Data | Where | Survives restart |
 |---|---|---|
 | Airfields, including marked parking spots | `SavedData` per dimension, `data/simpleplanes/airfields.dat` | **Yes** |
+| Whether an airfield is held to the stand rule | `requires_stands` on the airfield, optional, default false | **Yes** — an absent key means grandfathered |
+| The stand an arrival is taxiing to, and the legs to it | Flight director only | No — see §9; a reloaded `TAXI_IN` simply stays parked where it is |
 | In-progress route flight | Plane entity NBT, via `FlightPlan.CODEC` | **Yes** |
 | Departure delay *ordered* | Plane entity NBT, `departure_delay` on the plan | **Yes** |
 | Departure delay *remaining* | Flight director only | No — a reloaded `PARKED` becomes `TAKEOFF`, see §9 |
 | Half-drawn route / half-marked runway | Data component on the item | **Yes** |
 | Runway reservations | In memory | No — and correctly so, they are re-derived on load |
+| Which stands have an aircraft parked on them | In memory (`StandOccupancy`) | No — a restart falls back to the entity search; see §4d |
 | Strike flights | Not written | No — see below |
 
 Strike flights are deliberately **not** persisted. `addAdditionalSaveData` also backs
@@ -1174,6 +1834,7 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
 /autopilot airfields                             browse, nearest first
 /autopilot airfields info <airfield>             the full survey of one field
 /autopilot airfields show <airfield>             draw it in world with particles
+/autopilot airfields resurvey <airfield>         re-measure it from its own stored thresholds
 /autopilot airfields rename <airfield> <name>    rename it
 /autopilot airfields remove <airfield>           delete it
 /autopilot airfields park <airfield> <x y z>     mark a parking spot
@@ -1522,9 +2183,11 @@ A name that is not registered still gets a row when traffic is flying to it — 
 strip (`field-52  --/--  OCCUPIED  #52 arrival, final, 0:29  (not registered)`), or a field that was
 removed while an aircraft was already inbound.
 
-Every aircraft's row ends with the flight director's own account of its plan, in brackets —
-`straight in`, `extended final 600`, `orbit to lose 120`, `holding, runway busy`, or en route
-`around right 30 deg, saves 44 of climb`. It comes from the aircraft rather than being re-derived,
+Every aircraft's row ends with the flight director's own account of its plan, in brackets — on the
+ground `depart 36, straight out` or `depart 18, 92 deg turn to course`, en route
+`around right 30 deg, saves 44 of climb`, and arriving `straight in`, `extended final 600`,
+`orbit to lose 120` or `holding, runway busy`. Three planners, one field, in the order the flight uses
+them. It comes from the aircraft rather than being re-derived,
 so the board cannot describe an arrival differently from the way it is being flown, and it is the
 answer to the question a board full of holding traffic exists to raise. The same phrase is the
 `plan[…]` field on every `/autopilot status` line and is reported to the console whenever it changes.
@@ -1616,7 +2279,26 @@ world cannot double-count either.
   extended centreline inbound. There is no downwind/base leg — an aircraft that arrives high extends
   the final rather than flying a circuit, and the hold is a simple circular orbit rather than a
   racetrack. Coming from the far side of the field the join is therefore a 180° turn, flown at
-  approach speed so it rolls out on the line.
+  approach speed so it rolls out on the line. `ArrivalPlan` now *checks* that turn fits (§4d) and
+  lengthens the final until it does, but it still cannot construct a different shape of join.
+* **An arrival from abeam still has to reposition, and the planner does not make that cheaper.** The
+  intercept fix is on the far side of an aircraft that arrives 150 blocks out and 90° off the runway,
+  so it flies away from the field to get onto the final. Measured on the rig, the lateral excursion in
+  that case is the same before and after (45.6 → 49.9 blocks). What changed is that it *decides* to
+  reposition at range instead of discovering it overhead. A base leg is what would actually fix it.
+* **The corridor raycast used for planning forces chunk generation.** It is the only probe in this
+  feature that does; every heightmap probe declines to answer for unloaded ground instead. That is
+  deliberate — the ground under a final is exactly what nobody has generated when the arrival is
+  decided 400 blocks out — but it means a committed arrival generates about twenty chunks under its
+  own glide slope, once, and that cost lands on a single tick.
+* **The departure's climb-out obstacles come from the survey and nowhere else.** A hill built after
+  the survey, or in a chunk nobody has loaded, does not enter the choice of departure end: unlike the
+  arrival, a departure has no time in which to notice. Re-survey the field after changing the ground
+  off either threshold.
+* **The decision range is derived from the turn radius, not from the terrain.** It says how much room
+  the *join* needs; it knows nothing about how far out the aircraft would have to start descending
+  over a ridge. `RoutePlanner` still owns the en-route half of that and only sees as far as the
+  loaded horizon.
 * **The route planner is a heading search, not a path search.** It scores candidate headings along
   straight rays out to the loaded horizon; it has no notion of a gap it could aim at, and it cannot
   plan a route that needs two turns. It re-decides every second, which is what makes that adequate
@@ -1630,7 +2312,19 @@ world cannot double-count either.
   in a turn, flip the sign of `desiredRoll` in `PlaneAutopilot#applyControls` — it will not change the
   flight path. The *magnitude* does matter, though: a banked aircraft yawing hard couples into pitch
   through the quaternion, which is why bank is surrendered at low speed.
-* **Improvised landings are rough** by nature. Survey a runway for anything reliable.
+* **Improvised landings are rough** by nature. Survey a runway for anything reliable. They are also
+  not centred on anything: `Airfield.improvise` builds its thresholds straight from the terrain
+  rather than going through `survey`, so the centring described in
+  [The centreline is the middle of the strip](#the-centreline-is-the-middle-of-the-strip) does not
+  apply to them. There is nothing to centre on — the strip is a guess, not a built runway.
+* **A runway the survey cannot see the edges of keeps the clicked centreline.** The cross-section
+  stops at the first column more than a block off the threshold elevation, so a strip laid flush with
+  the ground around it — mown grass, a dirt road, anything on the superflat — offers no evidence of
+  where its middle is and the two clicks are used as given. Build a lip, a verge or a step of two
+  blocks or more if you want the survey to find the middle for you.
+* **Approach obstacles are counted in a corridor as wide as the runway**, out to 200 blocks and no
+  further, with a floor of 5 blocks either side on a narrow strip. A mast standing 30 blocks off the
+  centreline of a 13-wide field is not in the count, and neither is anything past 200 blocks.
 * **The touchdown aim point is derived from the runway's length and nothing else.** Not from the
   approach speed, which the arrival does not inherit anyway; not from the surface, which changes the
   roll-out by less than the block-to-block scatter of the float; and not from what stands past the
@@ -1657,9 +2351,33 @@ world cannot double-count either.
   `APPROACH_SPEED` and never inherit it; the aircraft sheds the difference on the final cruise leg.
   A route whose last leg is shorter than the deceleration distance will arrive at the descent still
   fast and rely on the descent to finish the job.
-* **There is no taxiway network.** Marked parking makes the *start* of the taxi a human decision;
-  the taxi itself is still a straight line to the threshold, which is why a marked spot is validated
-  along that line and capped at 64 blocks from it.
+* **There is no taxiway network.** Marked parking makes both ends of a taxi a human decision, and the
+  arrival's taxi in has three fixed legs (off the strip, down the apron, in to the stand) rather than
+  one — but there is still no route search, no obstacle avoidance and nothing that reads a path a
+  player has built. Every leg is validated for level ground before the aircraft sets off; nothing
+  validates it against *entities*, which is why an aircraft can still come to rest against a hulk
+  someone left on the apron and has a stall timeout for exactly that.
+* **A taxi in holds one of the 24 traffic slots for the length of the taxi**, which on a 183-block
+  field with the stands beside the far threshold is about 950 ticks. Before this change the flight
+  ended at the roll-out, so a busy field now carries more concurrent autopilots than it used to for
+  the same number of sorties.
+* **A stand marked on the strip keeps the runway reserved for the whole taxi.** Correctly — an
+  aircraft standing there is standing on the landing area — but it means the one placement the
+  validation accepts with a warning is also the one that gets no benefit from the early release.
+* **A restart during a taxi in abandons it.** `PlaneAutopilot.load` does not restore `TAXI_IN`: the
+  stand and the legs to it were never written to disk, and promoting it the way `TAXI` and `PARKED`
+  are promoted would send an aircraft that has already completed its flight back down the runway.
+  The aircraft stays where it stands, off the runway, and the flight is over. That is a worse parking
+  job than it asked for, not a lost aircraft.
+* **Nothing re-parks an aircraft that stopped on the runway.** All three "cannot taxi in" outcomes
+  end the flight where the aircraft is; there is no retry when a stand later frees up, and no
+  dispatcher to notice. `/autopilot tower` shows the strip as free — because the *reservation* is —
+  while an aircraft is physically sitting on it.
+* **Stand occupancy does not survive a restart.** `StandOccupancy` is in memory, so after a restart a
+  stand with an aircraft parked on it in an unloaded chunk reads as free until something loads it. A
+  sortie ordered in that window can be spawned on top of a parked aircraft, exactly as it could
+  before this feature existed. Persisting it would mean writing an occupancy nothing can validate on
+  load, which is a different and worse failure.
 * **There is no runway sequencing.** One reservation per airfield, now taken by departures as well
   as arrivals, but still no queue behind it: waiting aircraft re-poll every 20 ticks and whoever
   polls first is next, so a long-waiting aircraft can be passed over and the order between two

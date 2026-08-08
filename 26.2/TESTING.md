@@ -95,6 +95,11 @@ none. Two things to know if you reach for it anyway:
   2601 chunks and simply prints `Too many chunks in the specified area` and does nothing. An earlier
   version of this file recommended a command in that shape, so tests that "passed with forceload"
   were in fact running with none.
+* **Anything about aircraft that are left standing somewhere must be tested without it.** A plane with
+  no autopilot renews no chunk ticket and is unloaded 40 ticks after it stops, at which point it is
+  invisible to `@e`, to `data get` and to every entity search in the mod. Force-loading the field
+  papers over that completely: the marked-parking and taxi-in tests below pass force-loaded and fail
+  without, which is the wrong way round for a test.
 * Force-loading a corridor and then flying out of it is a good way to *reproduce* the chunk bug
   rather than avoid it: the aircraft freezes at the boundary, keeping its velocity exactly.
 
@@ -160,6 +165,30 @@ because ticks are still ticks. A 2000-block sortie that takes 90 s of wall clock
 3 s. `/tick sprint stop` aborts it, and the server prints `Sprint completed with N ticks per second`
 when it finishes — which is also the signal to poll for, since an aircraft that never produces an
 outcome will otherwise keep you waiting for the full sprint.
+**`kill @e` only sees loaded chunks, and that will cost you a whole comparison.** `@e` selects
+entities in chunks that are resident, so after a server restart — which is exactly what swapping the
+jar between a baseline run and an "after" run requires — the aircraft the previous runs parked on the
+runway are invisible to it and survive. The next arrival then lands *on top of one of them* and
+reports
+
+```
+Plane #1 did not land at airfield-1/36: came to rest 4 blocks above the runway surface, at 1, -56, -25.
+```
+
+which reads like a landing bug and is a stale hulk. The trace gives it away: `og=true` with
+`agl=3.60` and `gnd=-60.0`, i.e. standing on something the heightmap cannot see, because entities are
+not in a heightmap. **Force-load the runway before the kill**, every run:
+
+```sh
+./cmd.sh "forceload add -32 -240 32 32"; sleep 3
+./cmd.sh "kill @e[type=simpleplanes:plane]"; sleep 1
+./cmd.sh "forceload remove all"
+```
+
+**`/fill` over 32768 blocks does nothing, quietly enough to fool you.** Building test terrain, a
+`fill` of 41×37×41 = 62 197 blocks prints its refusal and changes not one block — and the next survey
+then reports `approach obstacles: 36 -> 0`, which looks exactly like an obstacle test that has
+disproved itself. Split the fill and re-read the survey line before trusting the run.
 
 `start.sh` keeps a FIFO open on the server's stdin, so `cmd.sh` can feed console commands to a
 running server at any time; `console.log` is the transcript. Command output (`sendSuccess`) is
@@ -180,6 +209,8 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 | `flight <from> <to> [speed] [delay <s>]` | full sortie between two registered airfields — park, wait, taxi, take-off, cruise, approach, landing. `delay` is seconds spent on the parking spot before the runway is asked for |
 | `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
 | `survey <t1> <t2>` | register a runway |
+| `airfields [info\|show\|resurvey\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
+| `survey <t1> <t2>` | register a runway — and it is only half the job now, see `airfields park` |
 | `airfields [info\|show\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
 | `tower [<airfield>]` | runway states — free/occupied, by which aircraft, in what mode, for how long, and who is holding |
 | `status` | live list of autopilot aircraft with a status line each |
@@ -202,9 +233,18 @@ sleep 8
 ./cmd.sh "autopilot survey 2654 -60 -9 2654 -60 -192"
 ./cmd.sh "autopilot airfields"
 
+./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 6'    # a field is not usable without a stand
+./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 -8'
+./cmd.sh 'autopilot airfields park "airfield-2" 2672 -60 6'
+./cmd.sh 'autopilot airfields park "airfield-2" 2672 -60 -8'
+
 ./cmd.sh "forceload remove all"               # prove the flight loads its own chunks
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
 ```
+
+The four `park` calls are not optional any more: a runway surveyed by this build refuses sorties
+until at least one stand is marked beside it, and the sortie now ends on a stand rather than on the
+strip. See the marked-parking and taxi-in recipes below.
 
 Airfields persist in `SavedData`, so the survey only has to be done once per world. A 2000-block
 sortie takes about **two minutes** of wall clock at the 2.60 default (it was nearer four at the old
@@ -218,6 +258,11 @@ Plane #7 landed at airfield-2/36, 2655, -60, -21 (18 blocks down the 66-block ru
 The percentage is the assertion worth making on a landing, not the distance: "3 blocks down the
 runway" is a tidy arrival on a short field and an aircraft parked on the lip of a 183-block one, and
 for a long time it was the latter without anything in the output saying so.
+
+That line is no longer the *last* one, though — a sortie into a field with marked parking goes on to
+taxi off the strip and park, and ends with `Plane #7 parked at airfield-2, 2673, -60, -6 (stand
+2672, -61, -8, 978 ticks from the runway).` A script that stops reading at `landed at` will call the
+flight finished about a thousand ticks early.
 
 Every terminal event now goes through `AutopilotFeedback.report`, which logs to the console when
 there is no owning player — landings, go-arounds (with the reason), runway switches and
@@ -392,6 +437,36 @@ three times, switches ends, goes around once more, commits, and prints
 `did not land at airfield-1/18: came to rest in the water, at 1, -63, -142`. That is five approaches
 — eight minutes of real time, or about ten seconds under `tick sprint 30000`.
 
+### Recipe: a runway whose edges the survey can see
+
+**The superflat has no runway edges, and that hides a whole class of bug.** `Airfield.measureWidth`
+and the threshold centring both walk sideways until the surface is more than a block off the
+threshold elevation; on open superflat that never happens, so every strip surveyed there reports the
+maximum width of 25 and every click is already "on the centreline". Testing anything about runway
+width or centreline position needs a strip with a detectable lip.
+
+Build a plinth. Superflat is bedrock −64, dirt −63/−62, grass −61, so `surfaceHeight` is −60; filling
+the strip up to −58 puts its surface at −57, three blocks proud of the field:
+
+```sh
+./cmd.sh "forceload add -64 -240 64 80"
+./cmd.sh "fill -6 -60 -160 6 -58 0 minecraft:stone"    # 13 wide (x -6..6), 161 long
+./cmd.sh "autopilot survey -6 -58 0 -6 -58 -160"       # both ends clicked on the LEFT EDGE
+```
+
+**Three blocks, not two, and the reason is the departure.** Two is enough for the width probe (its
+tolerance is ±1) but not for parking: `PARKING_MAX_ELEVATION_DIFFERENCE` is 2, so a two-block plinth
+lets the derived apron sit on the grass *beside* the strip, and the aircraft then has to taxi up a
+step the ground handling cannot climb. Seen on this rig as `takeoff pos=-3,-60,2 spd=0.000 thr=10`
+repeating for 22 000 ticks and then `Plane #4 lost at -3, -60, 2 in takeoff` — a perfect-looking
+freeze that is entirely an artefact of the test terrain. At three blocks the apron is refused and the
+departure starts on the strip, which is what the code intends.
+
+Read the answer off `airfields info` (the stored thresholds are printed) and off the trace: `pos=` in
+`parked`/`takeoff`/`rollout` is where the aircraft actually is across the strip, while `lat=` is only
+its error against the *surveyed* line and reads 0.2 whether that line is down the middle or on the
+edge. Comparing the two is the whole test.
+
 ### Recipe: what the surface probes read
 
 Lay bands of a surface across a cruise track and fly over them with the trace on; there is no need to
@@ -409,6 +484,54 @@ grep "trace #" console.log        # read gnd= and landable= per band
 Measured at 100 blocks up: grass `gnd=-60 landable=true`, lava `gnd=-60 landable=false`, leaves
 `gnd=-57 landable=true`, powder snow `gnd=-60 landable=true` — the ground *under* the snow, because
 powder snow is in neither heightmap. See `AUTOPILOT.md`, "Water is not ground".
+
+**Vegetation needs three extra precautions**, all learned the hard way here. The measured table for
+ten species is in `AUTOPILOT.md`, "What the approach funnel can see, and the bamboo report".
+
+* **Turn random ticking off, and note the gamerule was renamed.** 26.2 namespaces them:
+  `/gamerule random_tick_speed 0`, not `randomTickSpeed`. The old name is a *parse error* on the
+  console, which prints as `gamerule randomTickSpeed 0<--[HERE]` and is easy to read as success. Two
+  runs were wasted on a band of bamboo saplings that had quietly grown into 3-block stalks during a
+  `tick sprint 4000`, which is exactly the reading the band exists to take.
+* **Most plants pop off when `fill` updates their neighbours, and each has its own rule.** Cactus
+  breaks when any horizontal neighbour is solid, and cactus is solid, so a filled slab of it deletes
+  itself — place a lattice, one column every 2 blocks in x *and* z. Sugar cane needs water beside the
+  block underneath it, so lay water channels every third row and cane in the two rows between. Vines
+  need a face to hang on: a stone pillar in the next column along, `minecraft:vine[east=true]` in the
+  column you are measuring.
+* **Check what actually survived before flying.** `execute if block <x y z> minecraft:cactus run say
+  OK cactus` per band, and read the log — a band that silently failed to place reads exactly like a
+  block that is invisible to the heightmap.
+
+### Recipe: flying into something with a known speed
+
+`Motion` in the summon NBT plus `tick freeze` / `tick step` is the cleanest impact measurement on
+this rig, and it is not only for water. An unridden plane is simulated server-side, so it flies the
+real collision path; freezing the clock and stepping it 2 ticks at a time is what makes "where
+exactly did it die" answerable.
+
+```sh
+./cmd.sh "tick freeze"
+./cmd.sh "summon simpleplanes:plane 430 -53.0 390 {Motion:[0.0,0.0,2.0]}"
+./cmd.sh "tick step 2"
+./cmd.sh "execute as @e[type=simpleplanes:plane] run data get entity @s Pos"
+./cmd.sh "execute as @e[type=simpleplanes:plane] run data get entity @s health"
+```
+
+Three traps:
+
+* **Select on `type`, not on a tag.** `Tags:["b20"]` in the summon NBT and `@e[tag=b20]` did not
+  match on this build; `@e[type=simpleplanes:plane]` always does. Kill the previous aircraft and run
+  one at a time instead.
+* **Everything must be inside a `forceload`d region**, including the control. An entity in an
+  unloaded chunk is not in the entity list, so `data get` prints nothing at all — which is
+  indistinguishable from "the aircraft was destroyed", and cost a control run here.
+* **A plane summoned with no throttle sinks while it flies**, about 0.1 blocks/tick at 2.0 b/t
+  forward, so aim the entry a little high if the obstacle is short.
+
+Measured against a 61×101 grove of 15-block bamboo: free until the grove, then 0.50 b/t stops 4
+blocks in at −2 HP and stays there for ever, 1.00 destroys at 4 blocks in, 2.00 destroys at 2 blocks
+in, and 2.00 into a stone wall of the same height destroys likewise.
 
 ### Recipe: how fast an airframe can actually turn
 
@@ -550,6 +673,72 @@ Two traps:
   position twice; drop consecutive identical `pos=` samples before summing anything, or the
   track comes out short and the climb comes out zero.
 
+### Recipe: is the arrival being planned, or discovered
+
+The question `AUTOPILOT.md` §4d exists to answer, and it is answered by two numbers off the trace and
+one line out of the log. Fly the same arrival on the two jars and compare:
+
+```sh
+./cmd.sh 'autopilot inbound 0 -30 700 "airfield-1" 2.60'
+./cmd.sh "tick sprint 9000"
+strings console.log | grep -E "arrival at|replanning|going around|landed at"
+```
+
+* **Where `DESCENT` is entered.** `grep " descent "` the trace and read the first `dthr=`. Positive is
+  blocks before the threshold; **negative means the arrival began over the runway**, which is what a
+  waypoint-triggered arrival does. Before this work it read `dthr=-51.2`; it now reads about `+415`,
+  and the log says so in as many words: `straight in, decided 415 blocks out`.
+* **Track flown against the direct distance.** Sum the horizontal chords between consecutive `pos=`
+  samples. A straight-in launched 780 blocks out flew **1578** blocks of track when the arrival began
+  overhead and **737** when it is decided at range; the difference is one whole unplanned circuit.
+* **Peak `lat=` while the mode is `approach` or `final`.** Not while it is `descent` — an aircraft
+  legitimately running in from abeam is a long way off the centreline and that is not an excursion.
+  41.8 blocks before, 0.0 after, on the same flight.
+
+`plan[…]` on `/autopilot status` and `replans=N` beside `go-arounds=N` are the same story live.
+
+### Recipe: terrain the survey never saw
+
+The case the replan triggers exist for, and the only one on a flat rig that produces a go-around at
+all. Survey the field **first**, then build the obstacle, so the stored obstacle counts are honest
+about a world that has since changed:
+
+```sh
+./cmd.sh "forceload add -32 -240 32 160"; sleep 4
+./cmd.sh "fill -15 -61 90 15 -40 130 minecraft:stone"     # 21 blocks tall, 90-130 out on the 36 funnel
+./cmd.sh "forceload remove all"
+./cmd.sh 'autopilot inbound 0 -30 700 "airfield-1" 2.60'
+./cmd.sh "tick sprint 30000"
+```
+
+Expect, on a build that only plans overhead, three `going around (n/3): terrain in the approach
+corridor` and then a switch to the other end — 2018 ticks and 2350 blocks of track. On one that
+re-checks its committed plan, one line:
+
+```
+Plane #2 replanning the arrival at airfield-1/18: straight in, decided 529 blocks out (terrain across the 36 glide slope).
+```
+
+1353 ticks, no go-arounds. **Restore the ground afterwards in two fills** — the wall replaced the
+grass layer, so `air` over `-60…-40` and `grass_block` at `-61` — and re-survey if you changed
+anything inside 200 blocks of a threshold.
+
+The departure half of the same test needs the obstacle *where a climb-out actually is*, which is much
+closer in: an aircraft turns on course within about 40 blocks of the far threshold, so a wall 90
+blocks out is never overflown and proves nothing. Put it 20 to 60 blocks off the threshold, survey,
+and send a sortie to a field **in line with the runway** so the departure climbs straight out:
+
+```sh
+./cmd.sh "fill -20 -61 20 20 -25 40 minecraft:stone"      # two fills: one would exceed 32768
+./cmd.sh "fill -20 -61 41 20 -25 60 minecraft:stone"
+./cmd.sh "autopilot survey 0 -60 0 0 -60 -160"            # -> approach obstacles: 36 -> 5, 18 -> 0
+./cmd.sh 'autopilot flight "airfield-1" "airfield-3" 2.60'
+```
+
+`airfield-3` here is a strip 2660 blocks due south. The assertion is one line either way:
+`Plane #100 lost at 19, -27, 19 in climb.` against
+`Plane #4 departure from airfield-1: depart 36, 180 deg turn to course.`
+
 ### Recipe: several arrivals at once
 
 Four aircraft at one runway is the cheapest way to exercise `HOLD`, the stack separation and the
@@ -645,9 +834,114 @@ sleep 6
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
 ```
 
+**A freshly surveyed runway now refuses sorties until a stand is marked**, so `survey` is no longer
+the last step of setting a field up on this rig — `park` is. Both `flight` and `inbound` print
+`airfield-3 has no parking marked, so an aircraft has nowhere to start from and nowhere to taxi to
+after landing…` and spawn nothing, which looks exactly like an aircraft that failed to spawn if you
+are not reading the refusal. Airfields already in a world are **grandfathered** and are unaffected;
+see `AUTOPILOT.md`, "A surveyed runway is not finished until a stand is marked".
+
+That flag is the thing to check after any change near the airfield codec, and the check is to read
+the NBT rather than the browser:
+
+```sh
+python3 -c "
+import gzip, re
+d = gzip.open('/home/user/testserver/world/dimensions/minecraft/overworld/data/simpleplanes/airfields.dat','rb').read()
+print(re.findall(rb'[ -~]{4,}', d))"
+# a grandfathered airfield has no requires_stands key at all; one surveyed by this build does
+```
+
+**Mark stands at both ends of a long field.** A stand is validated within 64 blocks of the *nearest*
+threshold, so on a 183-block strip a field with stands at only one end sends every arrival that lands
+on the other end on a 150-block taxi. Two stands per end, on the same side, is the layout that
+exercises the apron lane and the "second aircraft picks the other stand" rule.
+
 The refusals are worth exercising too, and each has its own message: a spot more than 64 blocks from
 the threshold, one raised or sunk more than 2 blocks (`fill` a 4-block plinth next to the runway),
 one within 5 blocks of an existing spot, and one on unloaded ground.
+
+### Recipe: the taxi in
+
+The arrival's ground phase, and it is the half of an arrival that `tick sprint` makes affordable: the
+taxi alone is 400–1000 ticks, which is 20–50 seconds of wall clock at normal speed and under a second
+sprinting. Every step prints, so the whole thing is assertable from the log:
+
+```sh
+./cmd.sh 'autopilot inbound 654 -20 700 "airfield-1" 2.60'
+./cmd.sh "tick sprint 9000"
+strings console.log | grep -a "Plane #" | grep -av trace
+```
+
+```
+Plane #2 landed at airfield-1/36, 654, -60, -47 (38 blocks down the 183-block runway, 21% used).
+Plane #2 vacating airfield-1/36, taxiing to the stand at 673, -60, -7 via 3 legs.
+Plane #2 is clear of airfield-1/36 after 156 ticks, 40 blocks still to taxi.
+Plane #2 parked at airfield-1, 673, -60, -7 (stand 672, -61, -8, 420 ticks from the runway).
+```
+
+The landing line is unchanged and is still the assertion to regress an arrival against; the three
+lines under it are the new phase. **`is clear of` is the one to watch** — it is the tick the runway
+reservation is given back, and it is neither the roll-out nor the end of the taxi.
+
+To see the state rather than the transitions, poll while it runs. Do *not* sprint for this: the taxi
+is the one phase slow enough to watch at 20 ticks a second, and `status` gains three fields for it.
+
+```sh
+./cmd.sh "tick sprint 1480"      # lands at about t=1420 on a 183-block field from 800 blocks out
+for i in $(seq 1 12); do ./cmd.sh "autopilot status"; sleep 2; done
+./cmd.sh "autopilot tower"
+```
+
+```
+#46 taxi_in pos=2668,-60,-153 … stand=2673,-60,-8 to_go=145 rwy_held
+#46 taxi_in pos=2676,-60,-153 … stand=2673,-60,-8 to_go=146 rwy_clear
+3 runways in this dimension, 0 occupied, 0 holding, 0 waiting to depart, 1 taxiing in.
+  taxiing to a stand (runway already released):
+    #46 arrival 18, taxi_in, 0:30, 57 blocks to the stand [straight in]
+```
+
+**The case worth running is two arrivals, not one.** Order them a few seconds apart at the same
+field; the second holds while the first is on the strip, lands where the first landed, and must go to
+a *different* stand:
+
+```sh
+./cmd.sh 'autopilot inbound 654 -20 900 "airfield-1" 2.60'
+sleep 1
+./cmd.sh 'autopilot inbound 700 -20 1100 "airfield-1" 2.60'
+./cmd.sh "tick sprint 9000"
+./cmd.sh "execute as @e[type=simpleplanes:plane] run data get entity @s Pos"
+```
+
+Both must end on their own stands and both must survive — a plane-to-plane contact at speed destroys
+both, and `PlaneEntity.canBeCollidedWith` is unconditionally true. Before this feature the same pair
+ended 2.5 blocks apart on the strip, and six arrivals in a row ended with two aircraft resting on the
+roofs of others at `y = -58.2`, each reporting a clean landing.
+
+**Do not force-load the field for that test.** This is the one place on this rig where `forceload`
+does not merely fail to help but actively hides the bug, and it hid this one for half a day. A parked
+aircraft has no autopilot, so it renews no chunk ticket; 40 ticks after it arrives its chunk unloads
+and it stops being findable by `@e`, by `data get`, and by the entity search that decides whether its
+stand is free. **The same two flights pass force-loaded and fail without it**, and the failure — two
+aircraft driven onto one square — is exactly what the test exists to catch. It is also why
+`execute as @e[type=simpleplanes:plane] run data get entity @s Pos` prints nothing at the end of a
+clean run: the aircraft are all there, in chunks nobody is loading. `forceload add` around the field
+*afterwards* is the way to look at them, and `autopilot airfields info` will read `UNUSABLE: no ground
+there (the chunk is not loaded…)` for every stand until you do.
+
+**Reproducing a blocked taxi** takes one summoned hulk on the apron lane. The lane is
+`halfWidth + PARKING_SPOT_CLEARANCE` outboard of the outermost stand, so for a 25-wide strip on
+`x = 654` with stands at `x = 672` it is `x = 677`:
+
+```sh
+./cmd.sh 'summon simpleplanes:plane 677 -60 -22 {Tags:["blocker"]}'
+./cmd.sh 'autopilot inbound 654 -20 700 "airfield-1" 2.60'
+./cmd.sh "tick sprint 9000"
+# -> Plane #21 stopped short of its stand at airfield-1, 679, -60, -24 (18 blocks to go, clear of the runway).
+```
+
+Check both aircraft afterwards with `data get entity @s` and read `health: 10` off each; the taxi is
+flown at 0.20 blocks/tick, so a contact there is a shove and not a crash.
 
 **Check the aircraft is on the spot, not in it.** The launch line prints the spawn position and
 `status` prints where it settled, and those are one block apart on purpose:
