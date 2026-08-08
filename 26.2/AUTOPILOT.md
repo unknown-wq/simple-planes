@@ -661,6 +661,98 @@ on the climb-out (see [Departure delay and the runway gate](#departure-delay-and
 A second aircraft arriving at a busy field enters `HOLD` and orbits the approach fix at circuit
 height until the runway frees up; one departing from a busy field stays on its parking spot.
 
+Aircraft in a hold are separated by entity id: the level is `id mod 4` times 10 blocks and the
+starting angle round the fix is `id * 137°`. `PlaneEntity#canBeCollidedWith` is unconditionally
+true, so planes are hard-colliding entities and several of them orbiting one fix at one altitude
+eventually block each other's `move()`, which `PlaneCollisions` correctly reads as an impact — seen
+in the field as two aircraft destroyed three blocks apart, at the same altitude, in the same tick,
+both in `HOLD`. This is **separation, not sequencing**: there is still no queue, and whoever polls a
+free runway first takes it. The spacing is deliberately only 10 blocks — the stack is bought with
+height the aircraft has to give back before it can land, and at 20 blocks a level the fourth
+aircraft held 60 blocks above the fix and then could not get down again.
+
+### 4c. Choosing the arrival: `ArrivalPlan`
+
+**The pattern is not the default any more, and neither is the fixed 300-block fix.** Every arrival
+used to fly to a point exactly `FINAL_INTERCEPT_DISTANCE` out at `PATTERN_HEIGHT`, whatever height
+it happened to arrive carrying, and an aircraft that could not get down in that distance simply
+pressed on, crossed the threshold still airborne and went around. Measured on the rig with an
+arrival 172 blocks above the runway: it flew the whole 300-block final still ~100 high, went around,
+and took **150 seconds** from top of descent to wheels stopped, against 66 for the same arrival flown
+from a sane height. The orbits users report are mostly that loop, not a deliberate hold.
+
+`ArrivalPlan.decide` picks one of four, and says which in one phrase:
+
+| Entry | When | Phrase |
+|---|---|---|
+| `STRAIGHT_IN` | the height above the standard fix can be lost on the way to it at `MAX_DESCENT_ANGLE` | `straight in` |
+| `EXTENDED` | it cannot — so join the same glide slope further out, in 150-block steps to 900 | `extended final 600` |
+| `ORBIT` | even the longest final cannot absorb the height | `orbit to lose 120` |
+| `TRAFFIC` | someone else has the runway | `holding, runway busy` |
+
+Extending is always tried before circling because it helps twice over — more track to descend across
+*and* a higher slope that far out — and because it makes progress towards the runway, which an orbit
+does not. `MAX_INTERCEPT_DISTANCE` is 900 (126 blocks above the threshold at 8°, nearly three times
+circuit height); past that the extension is a long way flown in the wrong direction and an orbit
+really is cheaper. The plan is re-decided every tick and converges: a high arrival typically reads
+`extended final 450 → 600 → straight in` and lands without orbiting at all.
+
+`tickApproach` caps the commanded altitude at `glideSlopeAltitude(min(distance, interceptDistance))`
+rather than at circuit height. That cap was the reason an extended final could not work: an aircraft
+joining 700 blocks out was ordered down to circuit height at once and then flew the rest of the
+final level, arriving exactly as high as before.
+
+**Which end, for an aircraft that is already somewhere.** `Airfield#bestEnd` now takes an optional
+position and scores each end as `track to fly + 400 × flagged columns − 40 if uphill`. Obstacles
+still dominate — 400 blocks of track per flagged column is more than any plausible overfly, because
+landing over a hill to save a detour is exactly the trade this function exists to refuse. What the
+position settles is the case the old code settled arbitrarily: with both funnels clean it returned
+end A regardless of where the aircraft came from, so an arrival from the wrong side flew the length
+of the field, turned round and came back — 400 blocks and about 40 seconds at approach speed. A
+departure passes no position and gets the old answer unchanged.
+
+### How long a landing takes, and where the time went
+
+The user's second report was simply **"долго слишком садятся"** — landings take far too long. The
+clock that matters is top of descent to wheels stopped, and almost all of it was being spent flying
+slowly in a straight line.
+
+* **The descent leg was flown at `APPROACH_SPEED` from its first tick** — 0.5 blocks/tick for however
+  many hundred blocks the fix happened to be away, measured at 31 seconds of straight-line flying on
+  an ordinary arrival. Worse than merely slow: the flight path angle is capped, so the sink rate
+  available is `v × tan(12°)`, and flying slowly is precisely what makes an aircraft unable to get
+  down. It now uses the same measured deceleration schedule the cruise brakes with, aimed at
+  `APPROACH_TRANSIT_SPEED` (1.20) *at* the fix rather than from the start of the leg.
+* **The approach leg likewise**, aimed at `APPROACH_SPEED` by `APPROACH_SETTLED_DISTANCE` (240) and
+  handed to `FINAL` at 150 as always.
+
+Two measured corrections in that, both of which cost a whole set of go-arounds before they were made:
+
+* **A turn onto final has to be flown slowly.** The turn radius is `v / yawRate`, so a 180° join —
+  which is what an arrival from the far side of the field always is — displaces the aircraft
+  `2v / yawRate` sideways before it rolls out. With the transit speed applied regardless, the
+  aircraft reached the fix at 1.91 b/t, swung **87 blocks** off the centreline coming round, was
+  still 12 off and 15° skewed at the gate, and went around. `speedAtFix` drops to `APPROACH_SPEED`
+  whenever the turn still to be made exceeds 30°; at 0.50 the same turn displaces 11 blocks.
+* **Slower is not automatically safer.** Aiming the approach schedule at `FINAL_SPEED` rather than
+  `APPROACH_SPEED` put the aircraft *below* the old profile for the last 240 blocks, where the
+  throttle sits on its floor with the airbrake on, and three arrivals in a row went around on
+  "sinking 0.46 blocks/tick" against a 0.45 gate. The gates were not weakened for any of this.
+
+Measured on the rig, arriving at a runway 8 blocks above the surrounding sea with an 89-block summit
+off the north threshold (`/autopilot inbound … "airfield-1" 2.60`):
+
+| arrival | top of descent → stopped | track | total climb | turns flown | go-arounds |
+|---|---|---|---|---|---|
+| from the north, offset 150 | 67 s → **47 s** | 1587 → 1600 | 2 → 3 | 0.7 → 0.8 | 0 → 0 |
+| from the north, over the summit | 66 s → **47 s** | 1562 → 1598 | 16 → 11 | 0.9 → 0.9 | 0 → 0 |
+| from the north, 172 blocks high | 150 s → **59 s** | 2361 → 2111 | 49 → 3 | 2.1 → 0.7 | 1 → 0 |
+
+The high arrival is the one to read: it used to fly a 300-block final still 100 blocks above the
+slope, cross the threshold airborne, go around and come back — 2.1 full turns of heading change and
+49 blocks of climb spent on it. It now reads `extended final 450 → 600 → straight in` and lands
+first time.
+
 **Which end to land on** is chosen from the approach obstacle counts **recorded by the survey**;
 ties go to the uphill direction, because landing uphill shortens the roll-out. There is no wind —
 Minecraft has no wind API, so runway selection deliberately ignores it rather than inventing one.
@@ -809,12 +901,69 @@ Deliberately cheap and predictable — no A*, no world search:
   heightmap lookup, not a block scan. `Level#getHeight` checks `hasChunk` first and returns
   `getMinY()` for absent chunks, so this never forces chunk loading.
 * Commanded altitude is raised to `highest terrain ahead + 22`.
-* Only if the ridge genuinely cannot be out-climbed in the distance available does the aircraft
-  sidestep, biasing its heading 30° towards whichever side is at least 4 blocks lower. That
-  hysteresis is what stops it weaving over flat ground.
 
 Total cost is roughly 20 heightmap lookups per aircraft per tick, and the number of live autopilots
 is capped at 24.
+
+### Over it or round it: `RoutePlanner`
+
+Raising the altitude is the right answer for a hill and the wrong one for a mountain. Reported from
+a user's world: a runway at 69 with a summit at **158 immediately off the north threshold** and open
+water at **61** a short way west. The aircraft climbed ~90 blocks to cross the summit and then dived
+back down onto the threshold — buying height exactly where it needed to be low and slow — when a
+small sidestep west was clear the whole way.
+
+`TerrainScanner.avoidanceBias` did have a sidestep, but it was a reflex, not a decision: it only
+fired when the ridge could not be out-climbed **at all**, and it chose its side by comparing two
+fixed ±35° probes. Measured on the rig, that sent the aircraft into the *higher* flank and down to
+**15 blocks of ground clearance against its own 22-block minimum**.
+
+`RoutePlanner` makes it a choice, scored in one currency:
+
+```
+cost(heading) = extra track flown  +  CLIMB_TRACK_COST x blocks of climb needed
+```
+
+* **Candidates** are the current heading plus 0, ±10 … ±60°. Flying straight on is one of them, so
+  "over" wins whenever it really is cheaper — which over open or rolling ground it always is.
+* **A block of climb is worth six blocks of track.** A block of height at `MAX_CLIMB_ANGLE` costs
+  `1/tan(18°)` = 3.1 blocks of track, and every block bought to cross a ridge is given back on the
+  far side. Six is that round trip. Deliberately not larger: this exists to refuse 90 blocks of
+  climb for a summit a 60-block sidestep clears, not to detour round every hummock.
+* **Extra track** for a deviation of `d` held for `L` and then undone is `2L(1/cos d − 1)`: 46
+  blocks at 30° over a 150-block horizon, 300 blocks at 60°.
+* **Unknown ground is never cheap.** The *horizon* is how far the ground straight ahead is actually
+  loaded; nothing is planned beyond it, and a candidate with a single `UNKNOWN_HEIGHT` column inside
+  that horizon is **discarded**, not optimistically scored. Flying straight on needs no evidence and
+  is always available, so with nothing loaded the planner returns zero and the old terrain following
+  is exactly what happens. This is the same rule that `Airfield#bestEnd` was fixed with, applied
+  before it could be broken again.
+* **Hysteresis.** A chosen deviation is held for 60 ticks, and the side already being flown keeps a
+  25-block bonus, so a marginal choice cannot alternate. Without it the aircraft weaves.
+
+Cost: the search runs **only when the terrain ahead would force a climb**, and then at most every 20
+ticks — 13 candidates × 8 samples = 104 lookups a second per aircraft, about 5 a tick. That is a
+quarter of what the always-on scanner profile already costs. Over flat ground it never runs at all.
+
+The chunk-ticket lead was raised from 20 to 40 ticks for it. Deciding to go *round* something needs
+more warning than deciding to climb over it: at cruise speed a 20-tick lead put the edge of the
+loaded area ~116 blocks ahead — half of `SCAN_DISTANCE`, so the outer half of the profile was always
+blind — and 116 blocks is 45 ticks against a 60-block turn radius. 40 ticks puts it near 170 and the
+two ticket bubbles still overlap (each makes 64 blocks resident; the lead is 104 at cruise speed).
+
+Measured on the rig, arriving down the extended centreline with the summit 89 blocks above the
+runway and clear water 60 blocks west (`/autopilot inbound 0 -30 -1000 "airfield-1" 2.60`):
+
+| | before | after |
+|---|---|---|
+| highest ground crossed | runway + 59 | runway + 39 |
+| minimum clearance | **15** (inside the 22-block minimum) | **27** |
+| side chosen | east, into the higher flank | west, over the water |
+| what `status` said | nothing | `plan[around right 20 deg, saves 37 of climb]` |
+
+The control matters as much as the case: on the open superflat the same build prints `plan[direct]`
+for every sample of a 2800-block route and never leaves its track, and a 1-block ridge reads
+`plan[over, 1 to climb]` rather than being detoured around.
 
 **Improvised landings.** With no surveyed airfield in range, `Airfield.flattestHeading` scores 12
 candidate directions around the first waypoint by summed height change and builds a throwaway 80×8
@@ -1061,19 +1210,31 @@ ground at the departure field, plus `wait=clock 0:14` or `wait=runway` while it 
     want[hdg=324 alt=-60 spd=0.00] tgt=2655,0,-100 dist=1987 dep=airfield-1/36 wait=clock 0:14 legs=0/1
 ```
 
+
+Per runway: the designator pair, `FREE` or `OCCUPIED`, and for an occupant its id, the end it picked,
+its mode and how long it has held the reservation. Aircraft orbiting for that runway are listed under it,
+longest-wait-first, with the same elapsed time and their horizontal range to the field.
+`/autopilot tower <airfield>` adds the runway geometry, both thresholds, and everything else on the
+way in that has not asked for the runway yet.
+
 A name that is not registered still gets a row when traffic is flying to it — an improvised landing
 strip (`field-52  --/--  OCCUPIED  #52 arrival, final, 0:29  (not registered)`), or a field that was
 removed while an aircraft was already inbound.
 
-**The board is read-only and it does not smooth anything over.** Two things it deliberately does
-not claim, both of them true of the code as it stands:
+Every aircraft's row ends with the flight director's own account of its plan, in brackets —
+`straight in`, `extended final 600`, `orbit to lose 120`, `holding, runway busy`, or en route
+`around right 30 deg, saves 44 of climb`. It comes from the aircraft rather than being re-derived,
+so the board cannot describe an arrival differently from the way it is being flown, and it is the
+answer to the question a board full of holding traffic exists to raise. The same phrase is the
+`plan[…]` field on every `/autopilot status` line and is reported to the console whenever it changes.
+
+**The board is read-only and it does not smooth anything over.** One thing it deliberately does
+not claim, and it is true of the code as it stands:
 
 * **No queue order.** There is none: an aircraft in `HOLD` or in `PARKED` polls
   `RunwayOccupancy` every 20 ticks and whichever one polls first takes the runway, arrivals and
   departures alike. Numbering them would draw an order that does not exist, so they are listed by
   wait time with the poll rule printed.
-* **No runway end in use.** Which of the two ends an arrival picked is private to the flight
-  director; the board prints the pair the airfield has.
 
 The third thing it used to not claim was **departures**, and that is now fixed rather than
 documented: a departure holds a reservation from the start of the taxi to the climb-out, so the
@@ -1150,9 +1311,19 @@ world cannot double-count either.
   `PlaneEntity`. Attaching one to a helicopter will fly badly rather than crash.
 * **No wind.** Minecraft 26.2 has no wind API, so runway selection uses approach obstacles and slope
   only. Nothing was invented here.
-* **Circuit joins are simplified.** The aircraft flies direct to the initial approach fix and tracks
-  the extended centreline inbound. There is no downwind/base leg — the holding pattern is a simple
-  circular orbit rather than a racetrack.
+* **Circuit joins are simplified.** The aircraft flies direct to the intercept point and tracks the
+  extended centreline inbound. There is no downwind/base leg — an aircraft that arrives high extends
+  the final rather than flying a circuit, and the hold is a simple circular orbit rather than a
+  racetrack. Coming from the far side of the field the join is therefore a 180° turn, flown at
+  approach speed so it rolls out on the line.
+* **The route planner is a heading search, not a path search.** It scores candidate headings along
+  straight rays out to the loaded horizon; it has no notion of a gap it could aim at, and it cannot
+  plan a route that needs two turns. It re-decides every second, which is what makes that adequate
+  for a ridge and not adequate for a maze.
+* **The planning horizon is however much terrain is loaded.** With nothing loaded the planner
+  declines to answer (`direct (terrain not loaded)`) and the aircraft holds altitude, exactly as it
+  always did. The chunk-ticket lead sets how far it can see, so at high speed it sees relatively
+  less.
 * **Bank direction is cosmetic, but bank angle is not free.** Turns are produced by the yaw control,
   as in the base game; bank is commanded only so the aircraft looks right. If it banks the wrong way
   in a turn, flip the sign of `desiredRoll` in `PlaneAutopilot#applyControls` — it will not change the
@@ -1189,6 +1360,16 @@ world cannot double-count either.
   re-resolve the departure runway and a restored `PARKED` would have nothing to ask for and no way
   to leave the spot. The remaining delay is lost. Departing from where it stands is the same
   compromise a half-finished taxi has always made.
+* **There is no en-route separation, and nothing diverts.** Aircraft converging on the same field
+  from different directions fly through each other's airspace, and planes are hard-colliding
+  entities: two arrivals launched 120 blocks apart towards the same runway were reproducibly
+  destroyed against each other in `DESCENT` on the rig, before and after the work above. A second,
+  completely free runway in the same dimension attracts nothing. Both belong to a dispatcher that
+  does not exist yet.
+* **A go-around from short final over water is unreliable.** From ~30 blocks above the surface at
+  final speed the aircraft frequently does not climb away and ends up in the sea. Reproduced on the
+  unmodified build as well, so it is not new, but it is what turns one failed gate into a lost
+  aircraft rather than a second approach.
 * **Taxi is a straight line to the threshold.** There is no taxiway network and no obstacle
   avoidance on the ground: the aircraft steers directly at the lineup point. On a surveyed field with
   a sane parking apron that is enough; it will not thread a hangar.

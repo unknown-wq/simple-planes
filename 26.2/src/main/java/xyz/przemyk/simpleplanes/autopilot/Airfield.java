@@ -138,6 +138,29 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * answer.
      */
     public RunwayEnd bestEnd(Level level) {
+        return bestEnd(level, null);
+    }
+
+    /**
+     * As {@link #bestEnd(Level)}, but for an aircraft that is already somewhere: two ends with
+     * equally clean funnels are no longer equal if one of them is behind the aircraft.
+     *
+     * <p>Obstacles still decide. {@link AutopilotConfig#APPROACH_OBSTACLE_COST} is 400 blocks of
+     * track per flagged column, which no plausible overfly can outweigh — landing over a hill to
+     * save a detour is exactly the trade this function exists to refuse. What the position does is
+     * settle the case the old code settled arbitrarily: with both funnels clean it returned end A
+     * regardless of where the aircraft was coming from, so an arrival from the wrong side flew the
+     * length of the field, turned round and came back. Measured on the rig, that overfly is 400
+     * blocks and about 40 seconds at approach speed.
+     *
+     * <p>The uphill preference survives as a tie-break rather than as a rule: it is worth
+     * {@link AutopilotConfig#UPHILL_END_BONUS} blocks, which decides a level choice and never buys a
+     * detour.
+     *
+     * @param from where the aircraft is now, or null to ask the question without one — which is what
+     *             a departure does, since it is standing on the runway either way
+     */
+    public RunwayEnd bestEnd(Level level, @Nullable Vec3 from) {
         RunwayEnd a = endA();
         RunwayEnd b = endB();
         int obstaclesA;
@@ -149,11 +172,22 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             obstaclesA = scoreApproach(level, a);
             obstaclesB = scoreApproach(level, b);
         }
-        if (obstaclesA != obstaclesB) {
-            return obstaclesA < obstaclesB ? a : b;
+        if (from == null) {
+            if (obstaclesA != obstaclesB) {
+                return obstaclesA < obstaclesB ? a : b;
+            }
+            // Equal obstacles: land towards the higher threshold (uphill).
+            return pointB().y >= pointA().y ? a : b;
         }
-        // Equal obstacles: land towards the higher threshold (uphill).
-        return pointB().y >= pointA().y ? a : b;
+        return arrivalCost(a, obstaclesA, from) <= arrivalCost(b, obstaclesB, from) ? a : b;
+    }
+
+    /** Track an arrival at {@code from} has to fly to land on this end, plus what its funnel costs. */
+    private static double arrivalCost(RunwayEnd end, int obstacles, Vec3 from) {
+        Vec3 fix = end.approachPoint(AutopilotConfig.FINAL_INTERCEPT_DISTANCE, 0);
+        double track = AutopilotMath.horizontalDistance(from, fix) + AutopilotConfig.FINAL_INTERCEPT_DISTANCE;
+        double uphill = end.farEnd().y > end.threshold().y ? AutopilotConfig.UPHILL_END_BONUS : 0;
+        return track + obstacles * AutopilotConfig.APPROACH_OBSTACLE_COST - uphill;
     }
 
     /**
