@@ -88,6 +88,26 @@ unbuilt:
 * **A restart during a departure delay departs the aircraft immediately.** `load()` maps a saved
   `PARKED` to `TAKEOFF`, exactly as it already does for `TAXI`, because it does not re-resolve the
   departure runway. The ordered delay persists on the flight plan; the remaining delay does not.
+* **A sortie interrupted by a restart resumes but nothing wakes it up.** Chunk-ticket renewal
+  walks `AutopilotRegistry`, which lives only in memory, so after a restart no ticket is held for
+  an aircraft nobody has loaded, and it hangs until something else happens to load that chunk.
+  Measured: a helicopter sortie stopped 880 blocks out froze, then finished on the pad 0.13 blocks
+  from the centre the instant its chunk was force-loaded. **A fixed-wing `route` flight has the
+  identical hole** — this is not a rotorcraft defect, it is the registry's persistence. The fix is
+  to re-seed the ticket set from `AutopilotSavedData` on load.
+
+* **No mob can ever target an aircraft.** `Mob#getTarget` is typed `LivingEntity` and
+  `PlaneEntity extends Entity`, so nothing in vanilla will ever attack a plane or a helicopter,
+  manned or not. Everything the flight model does about being shot down is reachable only through
+  splash damage, crossfire, or a player firing deliberately. If aircraft are meant to be
+  attackable, this is the single place it has to change — and it is a large change, because it
+  means making the airframe a `LivingEntity` or teaching the mobs a new target type.
+
+* **A hard crash mid-sortie leaves an orphan gunship.** The clean shutdown path is verified, but a
+  `kill -9` leaves an armed helicopter with no sortie object, and `SORTIE_TIMEOUT` cannot reap it
+  because the timeout lives on the object that died. Closing it needs the sortie state persisted on
+  the entity rather than in the registry.
+
 * **A full dispatcher** — an `AirfieldTower` class, per-end reservations, parallel runways,
   taxiways, hangars, navaids, approach lighting, fuelling stations, persisted queues, in-trail time
   spacing, wind. Judged out of scale for a Minecraft mod: the useful version is the smallest one
