@@ -49,7 +49,6 @@ public class SimplePlanesMod implements ModInitializer {
         AutopilotRegistry.init();
         TowerWatch.init();
         AutopilotCommand.register();
-        xyz.przemyk.simpleplanes.autopilot.TempGestureTest.register(); // TEMPORARY - not for commit
 
         registerUpgradeItems();
     }

@@ -35,28 +35,34 @@ import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
  * tickets, the terrain scanner, the geometry helpers, the persistence hook and the reporting.
  *
  * <h2>What the control loops are written against</h2>
- * <b>Quantities, not constants.</b> The helicopter flight model is being replaced, so anything tuned
- * against the numbers this airframe produces today would have to be re-tuned tomorrow. Every loop
- * here therefore closes on something measurable — vertical speed, ground speed, heading — and drives
- * the same controls a player has until the measurement matches the demand:
+ * <b>Quantities, not constants.</b> This controller was written while {@code HelicopterEntity} was
+ * being replaced underneath it, so every loop closes on something <em>measurable</em> — vertical
+ * speed, velocity error, heading — and drives the same controls a player has until the measurement
+ * matches the demand:
  *
  * <ul>
- *   <li><b>Collective / throttle</b> integrates the vertical-speed error. Whatever thrust a notch is
- *       worth, the integrator finds the notch that holds the demanded rate, so a model that changes
- *       the thrust per notch changes only how long it takes to settle.</li>
- *   <li><b>Cyclic / {@code moveForward}</b> is the forward-acceleration demand, switched with
- *       hysteresis on the ground-speed error.</li>
- *   <li><b>Pedals / {@code moveStrafing}</b> are the yaw demand, proportional to the heading error
- *       with a rate lead so the same law works whether yaw rate follows the input directly (as it
- *       does today) or through an acceleration (as a plane's does).</li>
+ *   <li><b>Collective</b> ({@code setThrottle}) is a search for the notch whose <em>equilibrium</em>
+ *       vertical speed is the one demanded. Whatever thrust a notch is worth, the search finds the
+ *       notch that holds the demanded rate, so a model that changes the thrust per notch changes
+ *       only how long it takes to settle. See {@link #collective}.</li>
+ *   <li><b>Cyclic</b> ({@code setCyclicForward} / {@code setCyclicRight}) is proportional-plus-
+ *       integral on the <em>velocity error</em>, integrated in the <b>world</b> frame and resolved
+ *       into the two sticks every tick. See {@link #trim} for the two ways this was got wrong
+ *       first.</li>
+ *   <li><b>Pedal</b> ({@code setPedal}) is {@link AutopilotMath#bangBang} on the heading error,
+ *       unchanged from the fixed-wing rudder, because the pedal is a rate command on an integrator
+ *       with a ramp — the same double-integrator shape {@code PlaneEntity#tickYaw} has.</li>
  * </ul>
  *
- * <p><b>The one place the current model shows through</b> is {@link #actuate}, which maps those
- * three demands onto the entity's controls, and it is deliberately the only place. Today's
- * {@code HelicopterEntity} turns on {@code moveStrafing} and only while {@code MOVE_UP} is false, and
- * accelerates by pitching its nose down when {@code moveForward} is positive; the sign conventions
- * and that coupling are the merge point when the new model lands. Everything above {@code actuate}
- * is written in blocks per tick and degrees.
+ * <p><b>The flight model shows through in exactly three methods</b> — {@link #collective},
+ * {@link #cyclic} and {@link #pedal}, at the bottom of the class — and nowhere above them.
+ * Everything above is written in blocks per tick and degrees. That was the whole bet while the
+ * airframe was in flux, and it paid: when the rewrite landed, the profile, the timeouts, the survey
+ * and the reporting did not move at all.
+ *
+ * <p>{@code setPitchUp} is never called on a helicopter. It does nothing on this airframe
+ * <em>and</em> its sign convention is the opposite of the cyclic's, so a controller reaching for it
+ * out of fixed-wing habit would be writing into a control that is both dead and backwards.
  */
 public final class HelicopterAutopilot {
 

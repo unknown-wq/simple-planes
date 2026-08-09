@@ -1925,7 +1925,7 @@ existing reader keep working.
 | `TAKEOFF` | Straight up to `DEPARTURE_HEIGHT` (30 blocks). **No translation at all** until it is reached — the survey guarantees the column above the pad and a ring around it, and nothing else, so a departure that starts moving sideways early is a departure over ground nobody measured |
 | `CRUISE` | To the hover point at cruise altitude, terrain-following, bleeding speed inside `DECELERATION_DISTANCE` (90 blocks) |
 | `DESCENT` | The run-in: down to the departure height above the pad while closing on the hover point |
-| `FINAL` | Overhead: stop, then go down |
+| `FINAL` | Overhead: stop, then go down, with the nose held on the bearing the run-in was flown on rather than chasing the pad |
 | `ROLLOUT` | On the ground, throttle shut, waiting for `SETTLED_TICKS` (20) before the outcome is called |
 | `HOLD` | Orbiting above an occupied pad, 15 blocks higher than the arrival height so two machines waiting are not in the same block of air |
 
@@ -2024,14 +2024,19 @@ accelerate, go past it again.
 The rewritten airframe has a second axis. `setCyclicRight` tips the disc sideways, and below
 `HelicopterEntity.TURN_COORDINATION_SPEED` (0.80 b/t of *forward* speed) that is a pure sidestep
 with no turn in it at all; an arrival flown at `APPROACH_SPEED` is comfortably inside that band. So
-the arrival law is: take the velocity the machine wants — towards the point, at a speed proportional
-to how far away it is — subtract the velocity it has, and put the difference on the two sticks. The
-nose is left pointing at the target and never has to be turned to correct a drift.
+the arrival law is: take the velocity the machine wants — towards the point, at the fastest it could
+be going and still stop on it — subtract the velocity it has, and put the difference on the two
+sticks. A drift is corrected by tipping the disc sideways, not by turning. Where the nose points is a
+separate question, and inside the let-down the answer is "hold the bearing you ran in on" — see
+"Four things flying it found" below for what happens when it is allowed to chase the pad instead.
 
 Braking is the same command with the sign reversed, which on a position-command cyclic is simply a
 negative stick. Full aft is 24 blocks/s to a stop in 60 ticks and 43 blocks (`HELICOPTER-PHYSICS.md`
-§3), so there is **no deceleration schedule anywhere in this arrival** — no braking table, no
-`speedSchedule`, nothing of what the fixed-wing side needs 270 blocks of runway-in to do.
+§3), so there is **no deceleration table anywhere in this arrival** — nothing of what the fixed-wing
+side needs 270 blocks of runway-in to do. What there is instead is one line of arithmetic: the
+closure demand is `sqrt(2·CLOSURE_BRAKING·distance)` capped at `APPROACH_SPEED`, a constant-
+deceleration profile rather than a schedule fitted to anything. It replaced a demand proportional to
+distance, and the 2x2 that chose it is in `RotorcraftConfig#CLOSURE_BRAKING`.
 
 Two laws, chosen by phase. The transit uses bearing-and-speed, which is right while the target is
 hundreds of blocks away and is what the fixed-wing cruise does; it drives the longitudinal stick only
@@ -2039,43 +2044,123 @@ and leaves the lateral one centred, because at transit speed a bank is a turn ra
 and the pedal is this airframe's turn control. Everything from the run-in inwards uses
 `HelicopterAutopilot#station`, which drives both.
 
-#### Measured, nine sorties
+#### Measured, eight sorties on a world built from nothing
 
-All on the headless rig with the current flight model, one machine at a time, no force-loading, pads
-cleared between runs. `helipad-3` is a 9x9 stone plinth 3 blocks proud of the superflat; the rest
-are flush 7x7 pads.
+All on the headless rig, one machine at a time, **no force-loading during any flight**, world wiped
+and rebuilt for this table, pads cleared between runs. The world:
+
+| pad | what it is | how it was marked |
+|---|---|---|
+| `helipad-1`, `helipad-2` | flush 7x7 on the superflat | `/autopilot helipad survey` |
+| `helipad-3` | 15x15 stone plinth, 2 blocks proud | survey, from **two adjacent corners** |
+| `helipad-4` | 7x7 in a walled courtyard with one 9-block gap on the east side | survey |
+| `helipad-5` | 3x3 — the smallest the survey registers | survey |
+| `helipad-6` | flush 7x7 | **the Helipad Marker, two right-clicks** |
+| `helipad-7` | flush 7x7 | **the Helipad Marker, sneak + right-click the air** |
 
 | from → to | distance | commanded | cruise made good | off the pad centre | lift-off → touchdown |
 |---|---|---|---|---|---|
-| 1 → 2 | 600 | 1.20 | 1.101 | **0.81** | 1107 |
-| 2 → 1 | 600 | 1.20 | 1.10 | 0.81 | 1107 |
-| 1 → 3 | 1414 | 1.20 | 1.052 | **0.19** | 1818 |
-| 3 → 1 | 1414 | 1.20 | 1.051 | 0.48 | 1842 |
-| 1 → 4 | 400 | 1.20 | 0.899 | 0.31 | 903 |
-| 4 → 5 | 640 | 1.20 | 0.981 | 0.97 | 1162 |
-| 5 → 3 | 1118 | 1.20 | 1.038 | 0.98 | 1584 |
-| 3 → 4 | 1720 | 1.20 | 1.061 | 0.43 | 2110 |
-| 1 → 2 | 600 | **0.40** | **0.416** | 0.37 | 1846 |
+| 1 → 2 | 600 | 1.20 | 1.099 | 0.13 | 1087 |
+| 2 → 3 | 400 | 1.20 | 1.072 | **0.09** | 898 |
+| 3 → 4 | 600 | 1.20 | 1.102 | 0.12 | 1047 |
+| 4 → 5 | 600 | 1.20 | 1.100 | 0.13 | 1092 |
+| 5 → 6 | 600 | **0.50** | **0.524** | **0.02** | 1604 |
+| 6 → 7 | 600 | 1.20 | 1.101 | 0.12 | 1094 |
+| 7 → 1 | 3400 | **1.75** | 1.107 | 0.13 | 3626 |
+| 1 → 3 | 1000 | **0.80** | **0.814** | 0.12 | 1740 |
 
-**Nine of nine landed on the pad. Worst lateral error 0.98 blocks, mean 0.59.** The other numbers are
-the same on every sortie to the tick, because none of the phases is speed-dependent:
+**Eight of eight landed on the pad. Worst lateral error 0.13 blocks, mean 0.11.** Two `heliinbound`
+arrivals flown separately — one from 300 blocks off the pad's axis, one into the courtyard from the
+opposite side to its only gap — landed 0.14 and 0.15 off. The other numbers are the same on every
+sortie to the tick, because none of those phases is speed-dependent:
 
-* **spawn to airborne: 7 ticks** — one block off the pad, every run.
+* **spawn to airborne: 2 ticks.** The machine is spawned one block above the pad and is climbing on
+  the third tick.
 * **the vertical departure: 138 ticks** to `DEPARTURE_HEIGHT`, every run.
-* **the run-in: entered `FINAL` 23.5–24.0 blocks from the pad**, 28.5–34.6 above it.
-* **arrival to parked: 433–510 ticks** from the run-in call to the machine standing still.
+* **the run-in: `FINAL` entered 23.5–24.0 blocks from the pad**, 30 above it.
+* **run-in call to standing still: 376–491 ticks.**
 
-**The cruise is 1.10 against a commanded 1.20 and that is not a defect.** Level flight at full
+**The cruise is 1.10 whatever it is told above that, and it now says so.** Level flight at full
 forward cyclic wants collective 3.31, the collective is an integer, and the loop dithers 3/4 —
-`HELICOPTER-PHYSICS.md` §3 says exactly this. Commanded 0.40 is made good at 0.416, i.e. the loop
-holds what it is told whenever what it is told is inside the envelope, and saturates gracefully when
-it is not. Commanding 2.00 flies the same 1.10 as commanding 1.20, for the same reason.
+`HELICOPTER-PHYSICS.md` §3 says exactly this. Commanded 0.50 is made good at 0.524 and commanded 0.80
+at 0.814, with the cyclic off its stop 96% of the time; commanded 1.20 and commanded 1.75 both fly
+1.10 with the stick pinned for the whole leg. That last case used to be silent, and it was a real
+piece of dishonesty — a 3400-block leg ordered at 1.75 and the same leg ordered at 1.20 took the same
+number of ticks with two different numbers echoed back at the player. One line, once, in the air:
 
-**The plinth is the row that proves the geometry.** `helipad-3` was marked with two corners whose
-midpoint is `999, 999`, the survey derived `1000, 1000` from the plinth's own edges and reported
-`touchdown at 1000.5, -57.0, 1000.5`, and the two arrivals onto it touched down at
-`1000.3, -57.0, 1000.6` and `1001.2, -57.0, 1001.2`. The marked shape and the used shape are the
-same shape.
+```
+Helicopter #253 cannot make good 1.75 blocks/tick in level flight - full forward cyclic is holding 1.11. The leg will take that much longer.
+```
+
+The test is "the stick is on its stop **and** the speed is short", not "the speed is short": a machine
+short because it is climbing, turning or still accelerating is not being lied to about anything, and
+200 ticks of settling keeps the departure out of it.
+
+**The plinth is the row that proves the geometry.** `helipad-3` was marked by clicking two *adjacent*
+corners of the plinth, so the midpoint of the clicks — the thing a naive survey would use — is on the
+plinth's southern edge, seven blocks off centre. It is the pad version of the runway survey bug that
+put thresholds on the blocks the player clicked and then landed aircraft on the edge of the strip.
+Survey and landing, printed by two different pieces of code:
+
+```
+marked centre 1000, -59, -7 -> pad centre 1000, -59, 0 (moved 7.0 blocks); touchdown at 1000.5, -58.0, 0.5
+Helicopter #118 landed at helipad-3, 1000.6, -58.0, 0.5 (0.09 blocks from the pad centre 1000.5, -58.0, 0.5, tolerance 7.0; …)
+```
+
+`touchdown at 1000.5, -58.0, 0.5` and `pad centre 1000.5, -58.0, 0.5` are the same coordinate. **The
+marked shape and the used shape are the same shape**, and the correction is never silent: both
+coordinates and the distance between them are on the survey line every time.
+
+#### Four things flying it found that compiling it did not
+
+Every one of these passed a build and read as ordinary telemetry.
+
+**The nose pirouetted over the pad.** The station-keeping law points the nose at its target, with a
+2.5-block deadband to stop it hunting once it is on top of it. That deadband cannot help, because the
+event that starts the spin is bigger than it: the machine overshoots the pad by about 3 blocks — the
+stopping distance from `APPROACH_SPEED` — the bearing to the pad reverses, and the pedal is asked for
+180° at 3 °/tick. Measured, with the machine wandering 603.7 → 598.0 → 601.3 on one axis while it did
+so: 298 ticks in `FINAL` against the 146 the commanded descent rates need. The let-down now holds the
+bearing the run-in was flown on and does not turn at all; the lateral cyclic corrects the drift.
+
+**The last ten blocks were under-braked, and it took two changes to see it.** The closure demand was
+proportional to distance and the proportional gain of the velocity loop was 250, i.e. full stick at
+0.40 b/t of error — so a machine 2.6 blocks out doing 0.29 b/t was asking for 45% of a stick it needed
+most of. Neither change alone did much; the pair is a factor of six.
+
+| | gain 250 | gain 500 |
+|---|---|---|
+| demand ∝ distance (0.04/block) | 0.20–0.86 | 0.69, 0.69, 0.71 |
+| demand = √(2·0.003·distance) | 0.72, 0.72, 0.75 | **0.12, 0.12, 0.13** |
+
+They interact because they are the two halves of one loop: the proportional demand collapses faster
+than the machine can follow it near the pad (0.04 b/t at one block out, against the 0.077 the braking
+profile asks for), so the stick centres and the machine coasts the last block on drag — and at the old
+gain the loop could not track either demand well enough for the difference to show. Gain 900 was also
+tried: it buys ten ticks, spends a block of overshoot on them and stops improving the touchdown, so
+500 is the interior point.
+
+**A machine that came to rest on a roof reported `landed`.** A pad was surveyed clear, a stone roof
+was built 16 blocks over it, and the arrival flew a faultless approach onto the roof:
+
+```
+Helicopter #1 landed at helipad-6, 2800.5, -44.0, 0.5 (0.03 blocks from the pad centre 2800.5, -60.0, 0.5, …)
+```
+
+Two coordinates in one sentence that contradict each other, and nothing was comparing them: the
+verdict was `miss <= tolerance && onGround && !onWater`, with **no vertical term at all**. This is the
+rotorcraft form of the plane that reported `landed` after ditching in the sea. `landingProblem` now
+applies the same elevation test, and the same `LANDING_ELEVATION_TOLERANCE`, that the fixed-wing side
+has had since that bug was fixed there:
+
+```
+Helicopter #100 did not land on helipad-6: came to rest 16 blocks above the pad surface - on something the survey did not measure, at 2800.5, -44.0, 0.5 (pad centre 2800.5, -60.0, 0.5, tolerance 3.0). …
+```
+
+**A refused survey printed `clear approach bearings: none`.** A pad refused for its size, or for
+standing on unloaded ground, never reaches the sector scan, and the empty array read out as a
+measurement. "Never looked" and "looked, and there is no way in" are different facts and the second is
+much worse news; the line now says `not measured - the pad was refused before the sector scan`.
 
 #### The descent is gated on the lateral error
 
@@ -2135,8 +2220,10 @@ ordering another gets `helipad-2 already has an aircraft on it` for about one se
 
 `AircraftType.HELICOPTER` exists now, so `/autopilot status` and the tower board can name what they
 are looking at, and `AircraftType.of` returns it — matched before the three fixed-wing airframes,
-because `HelicopterEntity extends LargePlaneEntity` and a check written on the class rather than on
-the entity type would call every rotorcraft a large plane.
+matched on the `EntityType` and never on the class. `HelicopterEntity` used to extend
+`LargePlaneEntity` and now extends `LargeAirframeEntity` beside it, so an `instanceof` written
+against either would have been silently wrong on one side of that change; an `EntityType` comparison
+was right before it and is right after it.
 
 It is **not** in the list `random` draws from, and `/autopilot route|flight|inbound … type helicopter`
 is refused rather than substituted:
@@ -2783,8 +2870,20 @@ world cannot double-count either.
 * **The default cruise is the fastest level flight there is, so it is never quite made good.**
   Holding altitude at full forward cyclic wants collective 3.31 and the collective is an integer, so
   the loop dithers 3/4 and the machine settles around **1.10 blocks/tick against the 1.20 it is
-  commanded** (`HELICOPTER-PHYSICS.md` §3). Nothing complains, because nothing is wrong: it is flying
-  as fast as level flight goes. Ask for less and it holds exactly what it was asked for.
+  commanded** (`HELICOPTER-PHYSICS.md` §3). Ask for less and it holds exactly what it was asked for —
+  0.50 flies 0.524, 0.80 flies 0.814. What it does *not* do is refuse a speed it cannot make good:
+  `/autopilot heliflight … 1.75` is inside the argument's range, is accepted, is echoed back in the
+  launch line and then flies 1.10. It now says so once from the air, which is the honest half of the
+  answer; the dishonest half — a launch line quoting a speed nothing will ever fly — is still there,
+  because the ceiling is a property of the loaded airframe (a machine without a booster has a lower
+  one) and the command does not have the entity when it prints.
+* **A helicopter sortie interrupted by a server restart resumes, but nothing wakes it up.** The plan,
+  the mode and the pads all come back off the entity NBT and the flight continues correctly the moment
+  the aircraft ticks — measured, a sortie stopped 880 blocks out finished on the pad 0.13 blocks from
+  the centre after the restart. But the chunk-ticket renewal walks `AutopilotRegistry`, which is
+  memory-only, so after a restart nothing holds the ticket of an aircraft nobody has loaded and it
+  hangs where it was until something else loads that chunk. This is not specific to rotorcraft: an
+  in-progress `route` flight has exactly the same hole.
 * **Nothing on the vertical axis can damage a helicopter, so the let-down proves less than a landing
   does.** Autorotation is 0.432 b/t and the free-landing band is 0.60, so every descent this
   controller can command arrives undamaged whatever it does. The number the arrival is judged on is

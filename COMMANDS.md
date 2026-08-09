@@ -275,12 +275,34 @@ marked centre 999, -58, 999 -> pad centre 1000, -58, 1000 (moved 1.4 blocks); to
 Отчёт о посадке всегда называет **промах от центра площадки**, а не просто «сел»:
 
 ```
-Helicopter #132 landed at helipad-2, 600.8, -60.0, 1.1 (0.69 blocks from the pad centre
-600.5, -60.0, 0.5, tolerance 3.0; 1247 ticks from lift-off, 478 ticks from the run-in).
+Helicopter #64 landed at helipad-2, 600.6, -60.0, 0.5 (0.13 blocks from the pad centre
+600.5, -60.0, 0.5, tolerance 3.0; 1087 ticks from lift-off, 436 ticks from the run-in).
 ```
+
+Слово `landed` печатается только если сходятся **три** измерения: борт на земле, не в воде, и стоит
+на самой площадке — и по горизонтали, и по высоте. Иначе строка другая, и в ней написано, что
+именно не сошлось:
+
+```
+Helicopter #100 did not land on helipad-6: came to rest 16 blocks above the pad surface -
+on something the survey did not measure, at 2800.5, -44.0, 0.5 (pad centre 2800.5, -60.0, 0.5,
+tolerance 3.0). 3007 ticks from lift-off, 390 ticks from the run-in.
+```
+
+Это настоящий случай с полигона: площадка была обмерена, потом над ней построили каменную крышу, и
+борт аккуратно сел **на крышу** в 0.03 блока от центра площадки по горизонтали. Без проверки по
+высоте это печаталось как `landed`.
 
 Если долететь не удалось — в логе будет строка с причиной и координатой: не смог взлететь, сдался в
 пути, не смог выйти на зависание, не смог сесть, площадка так и не освободилась, или борт потерян.
+
+**Заказанная скорость выше 1.10 блока/тик недостижима в горизонтальном полёте**, и об этом говорится
+вслух — один раз, в воздухе, а не постфактум по времени рейса:
+
+```
+Helicopter #253 cannot make good 1.75 blocks/tick in level flight - full forward cyclic is
+holding 1.11. The leg will take that much longer.
+```
 
 **Вертолёт нельзя отправить по-самолётному.** `/autopilot flight`, `route` и `inbound` с
 `type helicopter` отклоняются: у вертолёта нет разбега и к нему не применимо ничего из захода по
