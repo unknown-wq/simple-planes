@@ -5,7 +5,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import xyz.przemyk.simpleplanes.container.ModifyUpgradesContainer;
 import xyz.przemyk.simpleplanes.datapack.PlanePayloadReloadListener;
-import xyz.przemyk.simpleplanes.entities.LargePlaneEntity;
+import xyz.przemyk.simpleplanes.entities.LargeAirframeEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 
 public class PlaneUpgradeSlot extends Slot {
@@ -20,7 +20,7 @@ public class PlaneUpgradeSlot extends Slot {
     @Override
     public boolean mayPlace(ItemStack stack) {
         return SimplePlanesUpgrades.ITEM_UPGRADE_MAP.containsKey(stack.getItem()) ||
-                (gui.planeEntity instanceof LargePlaneEntity &&
+                (gui.planeEntity instanceof LargeAirframeEntity &&
                         (SimplePlanesUpgrades.LARGE_ITEM_UPGRADE_MAP.containsKey(stack.getItem()) || PlanePayloadReloadListener.payloadEntries.containsKey(stack.getItem())));
     }
 }

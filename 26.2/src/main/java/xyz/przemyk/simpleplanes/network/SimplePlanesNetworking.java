@@ -22,6 +22,7 @@ public class SimplePlanesNetworking {
         // ---- serverbound ----
         PayloadTypeRegistry.serverboundPlay().register(RotationPacket.TYPE, RotationPacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(MoveHeliUpPacket.TYPE, MoveHeliUpPacket.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(HeliCyclicPacket.TYPE, HeliCyclicPacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(OpenPlaneInventoryPacket.TYPE, OpenPlaneInventoryPacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(CycleItemsPacket.TYPE, CycleItemsPacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(DropPayloadPacket.TYPE, DropPayloadPacket.STREAM_CODEC);
@@ -41,6 +42,7 @@ public class SimplePlanesNetworking {
         // ---- server receivers ----
         ServerPlayNetworking.registerGlobalReceiver(RotationPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(MoveHeliUpPacket.TYPE, (payload, context) -> payload.handle(context.player()));
+        ServerPlayNetworking.registerGlobalReceiver(HeliCyclicPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(OpenPlaneInventoryPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(CycleItemsPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(DropPayloadPacket.TYPE, (payload, context) -> payload.handle(context.player()));

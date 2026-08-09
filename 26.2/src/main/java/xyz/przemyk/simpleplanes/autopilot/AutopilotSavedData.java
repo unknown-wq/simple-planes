@@ -26,7 +26,11 @@ import java.util.Map;
 public class AutopilotSavedData extends SavedData {
 
     public static final Codec<AutopilotSavedData> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-        Airfield.CODEC.listOf().optionalFieldOf("airfields", List.<Airfield>of()).forGetter(AutopilotSavedData::airfieldList)
+        Airfield.CODEC.listOf().optionalFieldOf("airfields", List.<Airfield>of()).forGetter(AutopilotSavedData::airfieldList),
+        // Beside the runways rather than among them - see Helipad for why a pad is not an airfield.
+        // Optional with an empty default, so every world saved before helipads existed loads
+        // unchanged and a world with no pads writes no key at all.
+        Helipad.CODEC.listOf().optionalFieldOf("helipads", List.<Helipad>of()).forGetter(AutopilotSavedData::helipadList)
     ).apply(instance, AutopilotSavedData::new));
 
     public static final SavedDataType<AutopilotSavedData> TYPE = new SavedDataType<>(
@@ -37,12 +41,28 @@ public class AutopilotSavedData extends SavedData {
 
     private final Map<String, Airfield> airfields = new LinkedHashMap<>();
 
+    /**
+     * Helicopter landing sites, in their own map.
+     *
+     * <p>A separate namespace as well as a separate list: pads are named {@code helipad-N} and
+     * runways {@code airfield-N}, so {@code /autopilot heliflight "airfield-1" …} cannot silently
+     * pick up a runway and no command has to disambiguate.
+     */
+    private final Map<String, Helipad> helipads = new LinkedHashMap<>();
+
     public AutopilotSavedData() {
     }
 
     public AutopilotSavedData(List<Airfield> airfields) {
+        this(airfields, List.of());
+    }
+
+    public AutopilotSavedData(List<Airfield> airfields, List<Helipad> helipads) {
         for (Airfield airfield : airfields) {
             this.airfields.put(airfield.name(), airfield);
+        }
+        for (Helipad helipad : helipads) {
+            this.helipads.put(helipad.name(), helipad);
         }
     }
 
@@ -77,6 +97,49 @@ public class AutopilotSavedData extends SavedData {
 
     public boolean isEmpty() {
         return airfields.isEmpty();
+    }
+
+    // ------------------------------------------------------------------ helipads
+
+    public List<Helipad> helipadList() {
+        return new ArrayList<>(helipads.values());
+    }
+
+    public void put(Helipad helipad) {
+        helipads.put(helipad.name(), helipad);
+        setDirty();
+    }
+
+    public Helipad helipad(String name) {
+        return helipads.get(name);
+    }
+
+    public boolean removeHelipad(String name) {
+        boolean removed = helipads.remove(name) != null;
+        if (removed) {
+            setDirty();
+        }
+        return removed;
+    }
+
+    public boolean hasHelipads() {
+        return !helipads.isEmpty();
+    }
+
+    /** Nearest helipad to a point, or null if none is within {@code maxDistance}. */
+    public Helipad nearestHelipad(double x, double z, double maxDistance) {
+        Helipad best = null;
+        double bestDistance = maxDistance * maxDistance;
+        for (Helipad pad : helipads.values()) {
+            double dx = pad.centre().getX() + 0.5 - x;
+            double dz = pad.centre().getZ() + 0.5 - z;
+            double distance = dx * dx + dz * dz;
+            if (distance <= bestDistance) {
+                bestDistance = distance;
+                best = pad;
+            }
+        }
+        return best;
     }
 
     /** Nearest airfield to a point, or null if none is within {@code maxDistance}. */

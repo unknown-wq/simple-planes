@@ -321,6 +321,81 @@ public final class AutopilotSpawner {
         return plane;
     }
 
+    /**
+     * Flies a helicopter sortie: stand on {@code departure}, lift off vertically, transit, and let
+     * down onto {@code destination}.
+     *
+     * <p>Spawned <em>on the pad, stationary</em> — the same rule a runway departure follows and for
+     * a stronger reason: a helicopter has no take-off roll to accelerate over, so a machine given an
+     * initial velocity would simply be a machine that started the flight somewhere other than the
+     * pad the survey measured.
+     *
+     * <p>One block above the pad surface, exactly as a fixed-wing sortie is placed one block above
+     * its stand. {@code Helipad#touchdown} is the top face of the centre block, so the machine
+     * settles onto it in the first few ticks and the position the landing report compares against is
+     * the position it started from.
+     */
+    public static @Nullable PlaneEntity launchHelicopterSortie(ServerLevel level, Helipad departure,
+                                                               Helipad destination, @Nullable Player owner,
+                                                               double cruiseSpeed, int departureDelayTicks) {
+        HelipadReport.load(level, departure);
+        HelipadReport.load(level, destination);
+
+        Vec3 pad = departure.touchdown();
+        double heading = AutopilotMath.headingTo(pad, destination.touchdown());
+        PlaneEntity plane = create(level, pad.x, pad.y + 1.0, pad.z, heading, AircraftType.HELICOPTER);
+        if (plane == null) {
+            return null;
+        }
+        fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
+        plane.setDeltaMovement(Vec3.ZERO);
+        plane.setThrottle(0);
+        addToWorld(level, plane);
+
+        int cruiseAltitude = Helipad.cruiseAltitude(level, departure, destination);
+        PlaneAutopilot autopilot = new PlaneAutopilot();
+        plane.setAutopilot(autopilot);
+        autopilot.start(plane, FlightPlan.heliSortie(destination.centre(), cruiseAltitude,
+            destination.name(), departure.name(), cruiseSpeed, departureDelayTicks), true, true, owner);
+        return plane;
+    }
+
+    /**
+     * The arrival half of a helicopter sortie on its own: launched in the air at {@code from} and
+     * sent one-way to a pad. The rotorcraft counterpart of {@code inbound}, and it exists for the
+     * same reason — so the let-down can be iterated on without flying the departure first.
+     */
+    public static @Nullable PlaneEntity launchHelicopterInbound(ServerLevel level, Vec3 from,
+                                                                Helipad destination, @Nullable Player owner,
+                                                                double cruiseSpeed) {
+        HelipadReport.load(level, destination);
+        int cruiseAltitude = Math.max((int) from.y,
+            Helipad.cruiseAltitude(level, destination, destination));
+        Vec3 start = new Vec3(from.x, cruiseAltitude, from.z);
+        double heading = AutopilotMath.headingTo(start, destination.touchdown());
+
+        PlaneEntity plane = create(level, start.x, start.y, start.z, heading, AircraftType.HELICOPTER);
+        if (plane == null) {
+            return null;
+        }
+        fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
+        // Launched already making way, like every other airborne launch here: a machine dropped in
+        // with no speed spends its first seconds accelerating, which on a rotorcraft it does by
+        // pitching its nose down and descending.
+        Vec3 run = destination.touchdown().subtract(start);
+        if (run.lengthSqr() > 1.0E-6) {
+            plane.setDeltaMovement(run.normalize().scale(cruiseSpeed).multiply(1, 0, 1));
+        }
+        plane.setThrottle(BoosterUpgrade.MAX_THROTTLE);
+        addToWorld(level, plane);
+
+        PlaneAutopilot autopilot = new PlaneAutopilot();
+        plane.setAutopilot(autopilot);
+        autopilot.start(plane, FlightPlan.heliSortie(destination.centre(), cruiseAltitude,
+            destination.name(), null, cruiseSpeed, 0), true, true, owner);
+        return plane;
+    }
+
     /** Cruise altitude for a sortie: clear of the terrain at both fields and everything between. */
     public static int sortieCruiseAltitude(ServerLevel level, Airfield from, Airfield to) {
         double highest = Math.max(from.centre().y, to.centre().y);
@@ -374,6 +449,11 @@ public final class AutopilotSpawner {
         for (BlockPos spot : airfield.parkingSpots()) {
             loadAround(level, new Vec3(spot.getX() + 0.5, spot.getY(), spot.getZ() + 0.5));
         }
+    }
+
+    /** {@link #loadAround} for callers outside this class — a helipad is one region and no more. */
+    public static void loadRegion(ServerLevel level, Vec3 centre) {
+        loadAround(level, centre);
     }
 
     private static void loadAround(ServerLevel level, Vec3 centre) {

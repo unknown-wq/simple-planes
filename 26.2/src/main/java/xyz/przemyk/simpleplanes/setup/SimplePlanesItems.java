@@ -15,6 +15,7 @@ import net.minecraft.world.item.ItemStack;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.container.PlaneWorkbenchContainer;
 import xyz.przemyk.simpleplanes.items.DescriptionItem;
+import xyz.przemyk.simpleplanes.items.HelipadToolItem;
 import xyz.przemyk.simpleplanes.items.ParachuteItem;
 import xyz.przemyk.simpleplanes.items.PlaneArmorItem;
 import xyz.przemyk.simpleplanes.items.PlaneItem;
@@ -108,6 +109,9 @@ public class SimplePlanesItems {
         register("route_wand", RouteWandItem::new, new Item.Properties());
     public static final Supplier<RunwayToolItem> RUNWAY_TOOL =
         register("runway_tool", RunwayToolItem::new, new Item.Properties());
+    // A separate item from the runway tool, not a third mode of it - see HelipadToolItem for why.
+    public static final Supplier<HelipadToolItem> HELIPAD_TOOL =
+        register("helipad_tool", HelipadToolItem::new, new Item.Properties());
 
     public static final Supplier<CreativeModeTab> PLANES_TAB = registerTab("planes_tab", FabricCreativeModeTab.builder()
         .icon(() -> PLANE_ITEM.get().getDefaultInstance())
@@ -133,6 +137,7 @@ public class SimplePlanesItems {
             output.accept(PLANE_STRIKE_TOOL.get());
             output.accept(ROUTE_WAND.get());
             output.accept(RUNWAY_TOOL.get());
+            output.accept(HELIPAD_TOOL.get());
 
             BuiltInRegistries.BLOCK.get(PlaneWorkbenchContainer.PLANE_MATERIALS_TAG).ifPresent(tag -> tag.forEach(block -> {
                 ItemStack planeStack = new ItemStack(PLANE_ITEM.get());
