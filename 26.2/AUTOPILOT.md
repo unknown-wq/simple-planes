@@ -2060,16 +2060,16 @@ and rebuilt for this table, pads cleared between runs. The world:
 
 | from → to | distance | commanded | cruise made good | off the pad centre | lift-off → touchdown |
 |---|---|---|---|---|---|
-| 1 → 2 | 600 | 1.20 | 1.099 | 0.13 | 1087 |
+| 1 → 2 | 600 | 1.20 | 1.101 | 0.12 | 1094 |
 | 2 → 3 | 400 | 1.20 | 1.072 | **0.09** | 898 |
 | 3 → 4 | 600 | 1.20 | 1.102 | 0.12 | 1047 |
-| 4 → 5 | 600 | 1.20 | 1.100 | 0.13 | 1092 |
+| 4 → 5 | 600 | 1.20 | 1.101 | 0.12 | 1094 |
 | 5 → 6 | 600 | **0.50** | **0.524** | **0.02** | 1604 |
 | 6 → 7 | 600 | 1.20 | 1.101 | 0.12 | 1094 |
-| 7 → 1 | 3400 | **1.75** | 1.107 | 0.13 | 3626 |
-| 1 → 3 | 1000 | **0.80** | **0.814** | 0.12 | 1740 |
+| 7 → 1 | 3400 | **1.75** | 1.107 | 0.08 | 3623 |
+| 1 → 3 | 1000 | **0.80** | **0.817** | 0.12 | 1741 |
 
-**Eight of eight landed on the pad. Worst lateral error 0.13 blocks, mean 0.11.** Two `heliinbound`
+**Eight of eight landed on the pad. Worst lateral error 0.12 blocks, mean 0.10.** Two `heliinbound`
 arrivals flown separately — one from 300 blocks off the pad's axis, one into the courtyard from the
 opposite side to its only gap — landed 0.14 and 0.15 off. The other numbers are the same on every
 sortie to the tick, because none of those phases is speed-dependent:
@@ -2083,7 +2083,7 @@ sortie to the tick, because none of those phases is speed-dependent:
 **The cruise is 1.10 whatever it is told above that, and it now says so.** Level flight at full
 forward cyclic wants collective 3.31, the collective is an integer, and the loop dithers 3/4 —
 `HELICOPTER-PHYSICS.md` §3 says exactly this. Commanded 0.50 is made good at 0.524 and commanded 0.80
-at 0.814, with the cyclic off its stop 96% of the time; commanded 1.20 and commanded 1.75 both fly
+at 0.817, with the cyclic off its stop 96% of the time; commanded 1.20 and commanded 1.75 both fly
 1.10 with the stick pinned for the whole leg. That last case used to be silent, and it was a real
 piece of dishonesty — a 3400-block leg ordered at 1.75 and the same leg ordered at 1.20 took the same
 number of ticks with two different numbers echoed back at the player. One line, once, in the air:
@@ -2111,7 +2111,7 @@ Helicopter #118 landed at helipad-3, 1000.6, -58.0, 0.5 (0.09 blocks from the pa
 marked shape and the used shape are the same shape**, and the correction is never silent: both
 coordinates and the distance between them are on the survey line every time.
 
-#### Four things flying it found that compiling it did not
+#### Six things flying it found that compiling it did not
 
 Every one of these passed a build and read as ordinary telemetry.
 
@@ -2162,6 +2162,33 @@ standing on unloaded ground, never reaches the sector scan, and the empty array 
 measurement. "Never looked" and "looked, and there is no way in" are different facts and the second is
 much worse news; the line now says `not measured - the pad was refused before the sector scan`.
 
+**Two machines bound for one pad deadlocked each other over empty ground.** `Helipad#free` asks the
+live autopilots whether any of them claims the pad, and `claims` returned the *destination* for every
+mode after take-off — so a machine claimed its destination from the moment it lifted off, 1600 blocks
+away. Three sent to one pad from 600, 1000 and 1600 blocks out therefore all reported the pad
+occupied while it was bare ground, two ran the full 3601-tick hold timeout out and gave up, and the
+third only landed because the other two had by then stopped being live autopilots:
+
+```
+Helicopter #78 holding over helipad-4: the pad is occupied.        <- the pad is empty
+Helicopter #78 helipad-4 never became free - held over it for 3601 ticks
+Helicopter #77 helipad-4 never became free - held over it for 3601 ticks
+```
+
+Going somewhere is not being there. `CRUISE` and `HOLD` now claim nothing and the claim starts at
+`DESCENT`, which is the point the machine is committed to the pad; the departure end is claimed in
+every mode, because a machine standing on a pad is on it. Re-flown, the nearest machine runs in and
+lands 0.12 from the centre and the other two hold — correctly, because the pad now genuinely has
+something on it.
+
+**Machines holding for the same pad flew into the same block of air.** The orbit point walks round
+the pad on `modeTicks`, so two holders converge on it: measured at `1618.3, 17.1` for both, 0.3 blocks
+apart vertically. Helicopters are hard-colliding entities and `PlaneCollisions` reads a blocked
+`move()` as an impact, so that is a way to destroy two aircraft rather than to separate them. The
+hold now takes its level *and* its starting angle from the entity id, the same rule the fixed-wing
+stack uses — four slots, 10 blocks apart, a quarter of the orbit apart. Re-flown with four machines
+converging: `agl=45.0`, `55.1`, `64.8`.
+
 #### The descent is gated on the lateral error
 
 `FINAL` holds height until the machine is over the pad *and* has stopped, then lets down — and stops
@@ -2210,6 +2237,13 @@ is loading.
 An arrival that finds the pad taken enters `HOLD` and polls every `PAD_POLL_INTERVAL` (20) ticks —
 the same interval a fixed-wing departure polls its runway on, so neither can poll the other out by
 asking more often.
+
+**What a machine claims depends on where it is in the flight, and that is not a detail.** A
+destination is claimed from `DESCENT` onwards and not before: `CRUISE` and `HOLD` claim nothing,
+because going somewhere is not being there. Claimed from the launch — which is what it did first —
+any two machines bound for one pad deadlock over empty ground; see "Six things flying it found"
+below. The departure pad is claimed in every mode it applies to, because a machine standing on a pad
+is on it whatever its mode says.
 
 One consequence worth knowing on a test rig: `StandOccupancy` keeps a record until a look at a
 *loaded* chunk has read the square empty for a second, so killing a machine on a pad and immediately
@@ -2853,10 +2887,13 @@ world cannot double-count either.
   whole of it (§4h). A rotorcraft cannot be dispatched onto a runway — `route`, `flight` and
   `inbound` refuse `type helicopter` outright — and there is no rotorcraft equivalent of a waypoint
   route, of a strike or of the route wand. A helicopter is also not in the set `random` draws from.
-* **A helipad has no traffic board.** `/autopilot tower` is about runways and `TowerWatch` filters
-  rotorcraft out of it; the only view of pad occupancy is `/autopilot helipads`, which says
-  `OCCUPIED` and nothing about who is holding for what. Two machines holding over the same pad are
-  on the same 30-block orbit at the same height and nothing separates them.
+* **A helipad has no traffic board, and the hold is a stack rather than a queue.**
+  `/autopilot tower` is about runways and `TowerWatch` filters rotorcraft out of it; the only view of
+  pad occupancy is `/autopilot helipads`, which says `OCCUPIED` and nothing about who is holding for
+  what. Holders are separated — four levels 10 blocks apart, phased a quarter-orbit each, chosen by
+  entity id — but they are not *sequenced*: whichever machine next polls a free pad takes it,
+  regardless of who has been waiting longest, and two machines whose ids are congruent modulo four
+  share a slot. Both are the same trades the fixed-wing hold makes.
 * **The rotorcraft controller has no terrain avoidance beyond climbing.** It raises its commanded
   altitude for whatever `TerrainScanner` sees ahead, and that is all: there is no `RoutePlanner`
   equivalent, so it will try to climb over a mountain rather than going round it, and it has no

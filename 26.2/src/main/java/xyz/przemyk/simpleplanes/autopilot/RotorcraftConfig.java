@@ -399,6 +399,20 @@ public final class RotorcraftConfig {
     public static final double HOLD_HEIGHT = 15.0;
 
     /**
+     * How many distinct levels and orbit phases the hold has, chosen by entity id.
+     *
+     * <p>Four rather than two, so a third and a fourth machine are separated from each other and not
+     * only from the first; and not more, because every extra slot is another
+     * {@link #HOLD_LEVEL_SPACING} blocks of altitude to climb to and then give back on the descent.
+     * Machines whose ids are congruent modulo four share a slot, which is the same limitation the
+     * fixed-wing stack has and the same trade.
+     */
+    public static final int HOLD_STACK_SLOTS = 4;
+
+    /** Vertical spacing between hold levels, in blocks. */
+    public static final double HOLD_LEVEL_SPACING = 10.0;
+
+    /**
      * Slack on the en-route timeout: the leg is allowed this many times the time a machine flying
      * the commanded speed in a straight line would need, plus {@link #TRANSIT_TIMEOUT_MARGIN}.
      *

@@ -203,16 +203,42 @@ public final class HelicopterAutopilot {
      * The pad this machine is using, as a block, so {@link Helipad#free} can ask the other live
      * autopilots whether it is spoken for. Reuses {@code claimsStand} rather than inventing a second
      * registry for the same question — a pad and a parking stand are both "one square, one aircraft".
+     *
+     * <p><b>A destination is claimed from the run-in, not from the launch, and that distinction is a
+     * deadlock.</b> Claimed from the launch it deadlocks any two machines bound for the same pad:
+     * each sees the other's claim on a pad that is standing empty, each holds, and neither ever
+     * arrives to release it. Measured on the rig with three machines sent to one pad from 600, 1000
+     * and 1600 blocks out — every one of them reported "the pad is occupied" while it was bare
+     * ground, two of them ran the full {@link RotorcraftConfig#HOLD_TIMEOUT} out and gave up, and the
+     * third only landed because the other two had by then stopped being live autopilots:
+     *
+     * <pre>
+     * Helicopter #78 holding over helipad-4: the pad is occupied.     &lt;- pad empty
+     * Helicopter #78 helipad-4 never became free - held over it for 3601 ticks
+     * Helicopter #77 helipad-4 never became free - held over it for 3601 ticks
+     * </pre>
+     *
+     * <p>So a machine in {@code CRUISE} or {@code HOLD} claims nothing: it is going there, which is
+     * not the same as being there, and the pad is a square of ground rather than a slot in a queue.
+     * From {@code DESCENT} onwards it is committed — it is inside the run-in, on the way down, and
+     * anything else arriving has to wait — so it claims. The transition into {@code DESCENT} tests
+     * the pad first and entities tick one at a time, so two machines cannot both commit in one tick.
+     *
+     * <p>The departure end is the other way round and always claimed, because a machine sitting on a
+     * pad is on it whatever its mode says.
      */
     boolean claims(BlockPos spot) {
-        Helipad pad = mode == AutopilotMode.PARKED || mode == AutopilotMode.TAKEOFF
-            ? departure : destination;
-        return pad != null && pad.centre().equals(spot);
+        BlockPos pad = claimedPad();
+        return pad != null && pad.equals(spot);
     }
 
     @Nullable BlockPos claimedPad() {
-        Helipad pad = mode == AutopilotMode.PARKED || mode == AutopilotMode.TAKEOFF
-            ? departure : destination;
+        Helipad pad = switch (mode) {
+            case PARKED, TAKEOFF -> departure;
+            case DESCENT, FINAL, ROLLOUT -> destination;
+            // CRUISE and HOLD claim nothing. See claims(BlockPos).
+            default -> null;
+        };
         return pad == null ? null : pad.centre();
     }
 
@@ -412,14 +438,24 @@ public final class HelicopterAutopilot {
     private void tickHold(PlaneEntity plane) {
         transitTicks++;
         Vec3 pad = destination.touchdown();
-        double altitude = pad.y + RotorcraftConfig.DEPARTURE_HEIGHT + RotorcraftConfig.HOLD_HEIGHT;
+        // Separated in the stack by entity id, exactly as the fixed-wing hold is, and for the same
+        // reason: helicopters are hard-colliding entities and PlaneCollisions reads a blocked move()
+        // as an impact. Without this two machines waiting for one pad chase the same walking point at
+        // the same height and converge on it — measured at 1618.3, 17.1 for both, 0.3 blocks apart
+        // vertically, which is not separation from anything. The slot sets both the level and the
+        // starting angle, so two machines are 10 blocks apart vertically and a quarter of the orbit
+        // apart horizontally before either has moved.
+        int slot = Math.floorMod(plane.getId(), RotorcraftConfig.HOLD_STACK_SLOTS);
+        double altitude = pad.y + RotorcraftConfig.DEPARTURE_HEIGHT + RotorcraftConfig.HOLD_HEIGHT
+            + slot * RotorcraftConfig.HOLD_LEVEL_SPACING;
         // Chase a point walking round the pad, on the station-keeping law rather than the bearing
         // one. With the bearing law the machine cannot keep up with a moving target and simply drifts
         // to the middle: measured, a hold that should have been 30 blocks out sat 8.9 blocks from the
         // pad centre for the whole wait, which is not a separation from anything. The orbit rate is
         // sized so the point moves slower than the machine can fly - 0.8 deg/tick on a 30-block
         // radius is 0.42 blocks/tick.
-        double angle = (modeTicks * RotorcraftConfig.HOLD_TURN_RATE) % 360.0;
+        double angle = (modeTicks * RotorcraftConfig.HOLD_TURN_RATE
+            + slot * (360.0 / RotorcraftConfig.HOLD_STACK_SLOTS)) % 360.0;
         Vec3 point = AutopilotMath.pointAlong(pad, angle, RotorcraftConfig.HOLD_RADIUS);
         station(plane, point, Math.max(altitude, terrainFloor()), RotorcraftConfig.APPROACH_SPEED,
             RotorcraftConfig.CLIMB_RATE);
