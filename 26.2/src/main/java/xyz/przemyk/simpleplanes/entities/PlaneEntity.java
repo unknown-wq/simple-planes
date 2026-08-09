@@ -80,6 +80,10 @@ public class PlaneEntity extends Entity {
     public static final EntityDataAccessor<Integer> THROTTLE = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.INT);
     public static final EntityDataAccessor<Byte> PITCH_UP = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BYTE);
     public static final EntityDataAccessor<Byte> YAW_RIGHT = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BYTE);
+    // autopilot: true while the flight director is flying this aircraft. This has to be synched: the
+    // PlaneAutopilot object lives on the server only, so without it a riding player's client still
+    // believes it is the pilot and keeps steering the aircraft out from under the flight director.
+    public static final EntityDataAccessor<Boolean> AUTOPILOT_FLYING = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BOOLEAN);
     public static final int MAX_THROTTLE = 5;
     public Quaternionf Q_Client = new Quaternionf();
     public Quaternionf Q_Prev = new Quaternionf();
@@ -153,12 +157,21 @@ public class PlaneEntity extends Entity {
     // autopilot:
     public void setAutopilot(@Nullable PlaneAutopilot autopilot) {
         this.autopilot = autopilot;
+        if (!level().isClientSide()) {
+            entityData.set(AUTOPILOT_FLYING, isAutopilotEngaged());
+        }
     }
 
     // autopilot: true when the flight director is flying this plane, i.e. control inputs come from
     // the autopilot rather than from a controlling passenger.
     public boolean isAutopilotEngaged() {
         return autopilot != null && autopilot.isActive();
+    }
+
+    // autopilot: the same question as isAutopilotEngaged(), but answerable on both sides. The server
+    // owns the truth in the field above; the client reads the synched mirror of it.
+    public boolean isAutopilotFlying() {
+        return level().isClientSide() ? entityData.get(AUTOPILOT_FLYING) : isAutopilotEngaged();
     }
 
     // autopilot: exposes the protected rotation-rate multiplier so the controllers can size their
@@ -195,6 +208,7 @@ public class PlaneEntity extends Entity {
         pBuilder.define(THROTTLE, 0);
         pBuilder.define(PITCH_UP, (byte) 0);
         pBuilder.define(YAW_RIGHT, (byte) 0);
+        pBuilder.define(AUTOPILOT_FLYING, false);
     }
 
     @Override
@@ -291,7 +305,10 @@ public class PlaneEntity extends Entity {
     public boolean isPowered() {
         // autopilot: aircraft conjured by the autopilot tools run on autopilot fuel; a plane the
         // player built still needs a working engine (PlaneAutopilot#providesPower).
-        return isAlive() && !level().dimensionTypeRegistration().is(BLACKLISTED_DIMENSIONS_TAG) && (isCreative() || (autopilot != null && autopilot.providesPower()) || (engineUpgrade != null && engineUpgrade.isPowered()));
+        // The client has no PlaneAutopilot to ask and, while the flight director is flying, no
+        // controlling passenger to make isCreative() true either, so it uses the synched flag. This
+        // only drives the propeller animation — the physics that reads isPowered() is server-side.
+        return isAlive() && !level().dimensionTypeRegistration().is(BLACKLISTED_DIMENSIONS_TAG) && (isCreative() || (autopilot != null && autopilot.providesPower()) || (level().isClientSide() && isAutopilotFlying()) || (engineUpgrade != null && engineUpgrade.isPowered()));
     }
 
     @Override
@@ -548,8 +565,14 @@ public class PlaneEntity extends Entity {
 
         // autopilot: the flight director runs before the control inputs are read below, so the
         // throttle/pitch/yaw it sets this tick are the ones the physics acts on. Server only.
-        if (!level().isClientSide() && autopilot != null) {
-            autopilot.tick(this);
+        if (!level().isClientSide()) {
+            if (autopilot != null) {
+                autopilot.tick(this);
+            }
+            // autopilot: publish who is flying so the client agrees about authority. isActive() can
+            // flip inside the tick above (a flight reaching its end), hence setting it afterwards.
+            // SynchedEntityData#set only marks dirty on a real change, so this costs nothing.
+            entityData.set(AUTOPILOT_FLYING, isAutopilotEngaged());
         }
 
         TempMotionVars tempMotionVars = getMotionVars();
@@ -1165,8 +1188,36 @@ public class PlaneEntity extends Entity {
         return relPos;
     }
 
+    /**
+     * autopilot: while the flight director is flying, nobody aboard is the pilot.
+     *
+     * <p>This one seam is what stops a riding player from fighting the autopilot, because vanilla
+     * hangs everything that matters off the controlling passenger:
+     * {@code Entity#isClientAuthoritative} and {@code #isLocalClientAuthoritative} both derive from
+     * it, so the server stays authoritative and the rider's client stops sending
+     * {@code ServerboundMoveVehiclePacket}; {@code ServerGamePacketListenerImpl#handleMoveVehicle}
+     * applies a client's vehicle movement only for the vehicle's controlling passenger, so a stray
+     * packet is ignored rather than overwriting the server's position; and every control packet in
+     * this mod ({@code RotationPacket}, {@code PitchPacket}, {@code YawPacket},
+     * {@code ChangeThrottlePacket}) is gated on the same test, so the rider's stick inputs stop
+     * arriving. The tick's control-input branch then falls through to the autopilot arm, and
+     * {@link #transformPosPhysics} takes the server's quaternion instead of the client's, so thrust
+     * points where the flight director aimed it.
+     *
+     * <p>Why it matters: with a rider aboard the aircraft was client-authoritative, so the altitude
+     * loop read {@code position.y} from the client while its only damping term — the flight path
+     * angle, taken from {@code getDeltaMovement().y} — came from the server's own discarded
+     * integration. Decorrelated, the damping vanished and the loop became a pure proportional law on
+     * altitude, saturating its climb/sink demand and oscillating without ever settling.
+     *
+     * <p>Vanilla's floating kick is guarded by the same test, so an autopiloted aircraft can no
+     * longer get its rider disconnected for "flying" either.
+     */
     @Nullable
     public LivingEntity getControllingPassenger() {
+        if (isAutopilotFlying()) {
+            return null;
+        }
         if (getFirstPassenger() instanceof LivingEntity livingEntity) {
             return livingEntity;
         }
