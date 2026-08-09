@@ -109,6 +109,13 @@ public final class TowerWatch {
         if (autopilot == null || !autopilot.isActive() || autopilot.getPlan() == null) {
             return null;
         }
+        // A helicopter's plan names two helipads, and a helipad is not a runway. Without this the
+        // board would file a rotorcraft under an "airfield" that does not exist, print it as
+        // waiting for or holding over a strip, and count it in the traffic totals for a field it is
+        // nowhere near. The tower board is about runways; pads are their own thing.
+        if (autopilot.isRotorcraft()) {
+            return null;
+        }
         String departure = autopilot.departureAirfieldName();
         return departure != null ? departure : autopilot.getPlan().airfieldName();
     }

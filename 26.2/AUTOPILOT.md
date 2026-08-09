@@ -211,8 +211,10 @@ authoritative here". See `PHYSICS-AUDIT.md`, "Thrust does not go through it".
 | **Plane Strike Tool** (`plane_strike_tool`) | 2 iron ingots diagonally + TNT | Scripted attack run |
 | **Route Wand** (`route_wand`) | 2 sticks diagonally + diamond | Waypoint routes |
 | **Runway Survey Tool** (`runway_tool`) | 2 iron ingots diagonally + compass | Survey and register runways |
+| **Helipad Marker** (`helipad_tool`) | 2 gold ingots diagonally + compass | Survey and register helicopter landing pads |
 
-All three are in the Simple Planes creative tab.
+All four are in the Simple Planes creative tab. The helipad marker is a separate item rather than a
+mode of the runway tool, and §4h argues why.
 
 ### Plane Strike Tool
 
@@ -1680,6 +1682,597 @@ airfield-2  36/18  FREE      no traffic
 
 ---
 
+## 4h. Helipads and helicopter sorties
+
+A helicopter flies pad to pad the way a plane flies field to field, and almost nothing in between is
+shared. This section is the whole of it: what a helipad is, why it is not an `Airfield`, how it is
+marked, and why the rotorcraft flight director is a separate 600-line class rather than a mode of
+the 2400-line one.
+
+```
+/autopilot helipad survey <corner1 x y z> <corner2 x y z>
+/autopilot helipads [info|show|resurvey|remove|rename] …
+/autopilot heliflight <"pad"> <"pad"> [speed] [delay <seconds>]
+/autopilot heliinbound <x y z> <"pad"> [speed]
+```
+
+### A helipad is not a short runway
+
+An `Airfield` is two thresholds and a width, and **everything** derived from it is a function of the
+line between them. `RunwayEnd` exists only to name one direction along that line. The glide slope is
+measured back down it, the aim point is a fifth of the way along it, the approach funnel is the
+extended centreline, the parking apron is an offset from it, `isOnStrip` is a rectangle in its
+coordinates, and the designators are its compass bearing.
+
+A pad has no line. Encoding one as an airfield with the two thresholds on top of each other gives a
+length of zero, a heading of whatever `atan2(0, 0)` returns, a designator that means nothing, an aim
+offset of six blocks down a runway that is not there, and two "ends" that are the same point — and
+every one of those numbers would then be printed by `/autopilot airfields`, sorted by
+`AirfieldBrowser` and put on the tower board as a runway. Spreading the pad out into a short strip
+instead is worse: it would make the arrival fly a centreline, which is the one thing a helicopter
+arrival should not do.
+
+So `Helipad` is its own record with its own list, **stored in the same `airfields.dat`** under its
+own `helipads` key. That key is `optionalFieldOf` with an empty default, so a world saved before
+this existed loads unchanged and a world with no pads writes no key at all. Names live in their own
+space too — `helipad-1`, not `airfield-1` — so no command has to disambiguate and
+`/autopilot heliflight "airfield-1"` simply says there is no such pad.
+
+What is stored is the centre block, the radius, and a bitmask of which approach bearings were clear
+when it was surveyed. Everything else is derived. The centre is stored as the **surface block**, the
+same convention `Airfield` uses for a threshold, so `centre.y + 1` is where the skids rest and a pad
+elevation and a runway elevation are directly comparable.
+
+Nothing in the fixed-wing path can see a pad, and `TowerWatch` filters rotorcraft out of the tower
+board outright: the board is about runways, and a helicopter filed under an "airfield" that does not
+exist would be counted in the traffic totals of a field it is nowhere near.
+
+### Marking one: a separate tool, and two corners
+
+**A separate item, `Helipad Marker` (`helipad_tool`)**, not a third mode of the Runway Survey Tool.
+The parking mode on that tool earned its place by being *the second half of the same job* — an apron
+only means anything beside a runway that has already been surveyed, so the survey ends by switching
+the tool into parking mode and the player carries on clicking. A helipad is not the second half of
+anything. Three concrete reasons on top of that:
+
+* **The gestures are already spent.** The runway tool uses right-click-block, sneak +
+  right-click-block, right-click-air and sneak + right-click-air, and the last of those is the mode
+  switch. A third mode makes the mode indicator the only way to know what a click will do, on a tool
+  where one of the modes registers a permanent object.
+* **The clicks mean different things.** Two clicks on the runway tool are two ends of a *line*; two
+  clicks here are two corners of an *area*. One item means the same gesture builds a strip or a
+  square depending on a mode set five minutes ago, and gets it wrong silently.
+* **A half-marked shape is stateful.** Both tools remember the first click on the stack. Sharing one
+  anchor component between two shapes would let a mode switch turn half a runway into half a
+  helipad; giving them separate components on one item is two anchors on one tool, which is a
+  separate tool with extra steps.
+
+Gestures:
+
+| Gesture | What it does |
+|---|---|
+| right-click a block | mark one corner of the pad, then the opposite one — which runs the survey |
+| sneak + right-click a block | cancel a half-marked pad |
+| right-click the air | list the helipads, nearest first |
+| sneak + right-click the air | survey the 7×7 you are standing in the middle of |
+
+**Two corners, because a pad is an area.** It is the selection idiom every Minecraft player already
+knows, and unlike a runway's two thresholds it gives the extent directly: the centre is the middle of
+the box and the radius is the larger of its two half-spans, so clicking opposite corners of a 7×7 pad
+produces exactly that pad. The same block clicked twice is a 1×1 and is refused, because a one-block
+pad has no cross-section to centre on and gives the arrival no lateral tolerance at all.
+
+The last gesture exists because the pad a player wants is nearly always the one they are standing on,
+and walking to two corners of a 7×7 to say so is three gestures where one will do.
+
+### The marked shape and the used shape are the same shape
+
+This is the lesson the runway survey learned expensively — it took the clicked blocks as the
+thresholds, so a strip clicked on its edge was *flown* on its edge, and the whole take-off roll and
+touchdown happened 6 blocks off the middle of a 13-wide plinth. The fix here is the same shape of
+fix: **the seed centre is moved onto the middle of the pad the terrain actually shows**, probing
+north/south/east/west for as long as the surface stays within a block of the seed's elevation and
+moving to the middle of what it finds, iterated `SURVEY_CENTRING_PASSES` (3) times because moving the
+centre changes what the probes see. The probe limit is the pad radius plus one — this is a correction
+to a marked pad, not a search for a pad somewhere nearby.
+
+**Both coordinates are always printed, and the derived one is the one the machine flies to.**
+Measured on the rig against a 9×9 stone plinth 3 blocks proud of the superflat, with the two clicked
+corners deliberately not symmetric about its middle:
+
+```
+Helipad helipad-3 registered - 7x7 at 1000, -58, 1000
+  marked centre 999, -58, 999 -> pad centre 1000, -58, 1000 (moved 1.4 blocks); touchdown at 1000.5, -57.0, 1000.5
+```
+
+and then, from a sortie flown into it from 1414 blocks away:
+
+```
+Helicopter #254 landed at helipad-3, 1001.0, -57.0, 999.7 (0.96 blocks from the pad centre 1000.5, -57.0, 1000.5, tolerance 3.0; 2430 ticks from lift-off, 691 ticks from the run-in).
+```
+
+The touchdown coordinate in the survey and the pad centre in the landing report are the same number,
+and the machine is within a block of it. That pair of lines is the assertion.
+
+**Ground with no edges is left alone**, exactly as for a runway: on the open superflat both probes
+run to the limit, the offset comes out zero and the clicked box is used unchanged. Testing the
+centring needs a pad with a detectable lip; build a plinth.
+
+### What the survey checks, and what it refuses
+
+A pad has to pass four measurements. Every one of them reads **every block column** in its area —
+there is no sampling step anywhere in this survey, for the reason in the next paragraph.
+
+1. **The pad surface.** Every column of the `(2r+1)²` square: all loaded, all landable
+   (`TerrainScanner.isLandable`, so a pond or a lava pool is not a pad however good the heightmap
+   makes it look), and within `PAD_MAX_ROUGHNESS` (1 block) of the pad elevation. The elevation
+   itself is the **modal** surface of the pad rather than whatever the middle column reads — see
+   below.
+2. **The column above it.** Every column of the pad *plus* a `PAD_CLEARANCE_MARGIN` (2 block) ring
+   must be clear to `PAD_CLEAR_HEIGHT` (24 blocks). `MOTION_BLOCKING` reports the top of the highest
+   thing in a column, so a branch overhanging the pad with air underneath it is caught — which a
+   "walk up from the ground" test would miss. A departure is vertical, so everything in that volume
+   is on the flight path.
+3. **The approach sectors.** Eight bearings, 45° apart, each a wedge out to `APPROACH_LENGTH` (64
+   blocks) checked against a 25° path that ends on the pad. A runway has one approach direction per
+   end and an obstacle in it is fatal; a pad has as many as the terrain allows, and the question is
+   not "is the funnel clear" but "is there *a* way in".
+4. **At least one sector clear.** A pad in a courtyard with a single way in is a real helipad and
+   refusing it would be wrong; a pad with no way in at all is a hole, and registering it would
+   produce a machine that arrives overhead and cannot get down.
+
+**A pad that fails is not registered at all.** That is the opposite of the runway rule, which
+registers a too-short strip and marks it `TOO SHORT` in the browser — and the difference is that a
+short runway is still a runway. A pad that fails here is not a pad; putting its name in the list
+would mean a name no flight can ever use. Every refusal names the measurement that failed, the
+coordinate, and what would fix it:
+
+```
+REFUSED: the pad is not all solid ground - 1197, -60, -3 is water or lava
+REFUSED: the pad surface varies by 6 blocks (highest at 1300, -54, 0); flatten it to within 1
+REFUSED: something stands 6 blocks above the pad at 1300, -54, 0; a departure is vertical, so the column above the pad and 2 blocks of ring around it must be clear to 24 blocks
+REFUSED: no clear approach: every one of the 8 bearings has terrain across it inside 64 blocks. A machine could hover over this pad but not fly to it
+```
+
+#### Every block, because two blocks was not enough
+
+The approach sectors were first written the way the runway funnel is written — sample along the
+centre line every *n* blocks, a few lanes across — with `n` reduced from the runway's 10 to 2, on the
+reasoning that 2 was small enough to be safe. It was not.
+
+Measured on the rig with a **closed one-block-thick stone ring, 20 blocks tall, 9 blocks out from a
+pad**: two of the eight sectors reported clear, and the pad registered. Nine is not a multiple of
+two, so on those two bearings the wall sat exactly between the sample at 8 blocks and the sample at
+10 and was invisible. This is the same defect as the bamboo report, at a fifth of the scale, and it
+does not have a smaller step as its fix: a step small enough for a stone wall is still too big for a
+fence post.
+
+The sectors are now scanned by **one pass over the square that contains all of them**, reading each
+column's surface once and testing it against whichever sectors it falls inside. A sector is a wedge
+of half-angle 22.5° — so the eight tile the compass with no gaps between them — capped at
+`APPROACH_MAX_HALF_WIDTH` (8 blocks) so that a sector at 64 blocks is a 16-block-wide corridor rather
+than a 53-block one. The cost is the *area* rather than the area times the number of sectors: 129×129
+heightmap lookups, once, at survey time. After the change the same ring reads `0 of 8` and the pad is
+refused.
+
+An unloaded column counts *against* a sector rather than being skipped, for the reason the whole
+feature applies to unknown terrain: a survey is run standing on the pad and refuses unloaded ground
+under it, so a column out here that cannot be read is genuinely unknown, and "nobody has loaded it"
+must never be the cheapest way to pass.
+
+#### The pad elevation is the pad's, not the middle column's
+
+Found on the rig with a single stone block floating five above the middle of an otherwise perfect
+pad. The elevation came from that column, so the survey decided the pad was at that height and then
+reported the other 48 columns as being **six blocks below the pad** — it refused, which is right, but
+for a reason that reads as nonsense, and the obstacle check said "nothing standing over the pad".
+
+The elevation is now the **modal** surface across the pad. Modal rather than lowest, because a pad
+with a one-block hole in it should not have its datum dragged into the hole; both are refused anyway,
+and the modal answer is the one whose message a player can act on. The same block is now described as
+what it is, twice, with the coordinate both times.
+
+### Flying it: `HelicopterAutopilot`
+
+**A separate class beside `PlaneAutopilot`, not a mode inside it.** About nine tenths of the 2400
+lines describe things a helicopter does not have: the arrival planner reasons in turn radii,
+intercept distances and extended centrelines; the throttle loop is fitted to a drag polynomial and a
+stall speed; there is a departure plan that chooses which end of a strip to roll down, a taxi, a
+taxi-in, a hold pattern sized on a bank angle, a go-around counter and a glide slope. A machine that
+can stop in the air needs none of it, and adding a helicopter branch to each would mean touching the
+arrival planner — the part of this feature that took three agents to get right and that is working,
+tested and shipped — in order to teach it about an aircraft it will never fly.
+
+It is also the split the airframe itself makes: `HelicopterEntity` overrides all six of
+`PlaneEntity`'s flight hooks, so **not one line of the fixed-wing flight model runs on it** — no
+wing, no lift, no stall speed, no take-off speed (`HELICOPTER-PHYSICS.md` §1.2). A controller shared
+with the plane would be a controller with two disjoint halves.
+
+The fixed-wing state machine is therefore **not modified at all**. `PlaneAutopilot` gains one field,
+one guard at the top of `tick`, and a handful of one-line delegations:
+
+```java
+if (rotorcraft != null) {
+    rotorcraft.tick(plane);
+    return;
+}
+```
+
+placed *after* the registry heartbeat and the chunk ticket, because a helicopter needs those exactly
+as much as a plane does and nothing below them. When the field is null the fixed-wing path is
+byte-for-byte what it was. What the two genuinely share is shared: the registry and its chunk
+tickets, `TerrainScanner`, `AutopilotMath`, the persistence hook, `StandOccupancy` and
+`AutopilotFeedback`.
+
+The entity owns exactly one autopilot field and it is typed `PlaneAutopilot`, which is why the
+rotorcraft controller arrives through that reference rather than through a second field. What it does
+not have to do is share the state machine.
+
+#### The profile
+
+```
+PARKED ─► TAKEOFF ─► CRUISE ─► DESCENT ─► FINAL ─► ROLLOUT ─► IDLE
+                        │
+                        └──► HOLD (pad occupied) ──┘
+```
+
+Existing `AutopilotMode` values, reused rather than added to, so `/autopilot status` and every
+existing reader keep working.
+
+| Mode | What it does |
+|---|---|
+| `PARKED` | On the departure pad, throttle shut, running the departure clock down |
+| `TAKEOFF` | Straight up to `DEPARTURE_HEIGHT` (30 blocks). **No translation at all** until it is reached — the survey guarantees the column above the pad and a ring around it, and nothing else, so a departure that starts moving sideways early is a departure over ground nobody measured |
+| `CRUISE` | To the hover point at cruise altitude, terrain-following, bleeding speed inside `DECELERATION_DISTANCE` (90 blocks) |
+| `DESCENT` | The run-in: down to the departure height above the pad while closing on the hover point |
+| `FINAL` | Overhead: stop, then go down, with the nose held on the bearing the run-in was flown on rather than chasing the pad |
+| `ROLLOUT` | On the ground, throttle shut, waiting for `SETTLED_TICKS` (20) before the outcome is called |
+| `HOLD` | Orbiting above an occupied pad, 15 blocks higher than the arrival height so two machines waiting are not in the same block of air |
+
+The arrival geometry is one number, `HOVER_CAPTURE_RADIUS`, where the fixed-wing arrival needs a
+dozen — a rotorcraft arrival has no shape to get wrong. The bearing it runs in on is the clear sector
+nearest the direction it is already coming from, so a pad with one way in is approached from that way
+and a pad with eight is approached from wherever the machine happens to be.
+
+#### Written against quantities, and what that bought when the airframe changed
+
+This controller was written while `HelicopterEntity` was being replaced underneath it. Every loop
+therefore closes on something **measurable** — vertical speed, velocity error, heading — and the
+mapping onto actual controls is confined to three short methods at the bottom of the class. When the
+new flight model landed, the profile, the timeouts, the survey, the reporting and both flight laws
+did not move at all; three actuators and four constants did. That is the whole argument for writing
+it this way, and it is worth recording as a result rather than as an intention.
+
+| control | how the loop uses it |
+|---|---|
+| **collective** (`setThrottle`) | a search for the notch whose *equilibrium* vertical speed is the one demanded — one notch every 2 ticks, with a one-step slam for the case that has no ticks to spare |
+| **cyclic** (`setCyclicForward` / `setCyclicRight`) | proportional-plus-integral on the **velocity error**, integrated in the **world** frame and resolved into the two sticks every tick |
+| **pedal** (`setPedal`) | `AutopilotMath.bangBang` on the heading error, unchanged from the fixed-wing rudder |
+
+**The collective is a search, not a table and not a PID.** `HELICOPTER-PHYSICS.md` §2 measures the
+ladder exactly — notches 0 to 5 settle at −8.6, −6.2, −3.5, 0.0, +2.7, +4.8 blocks per second, with
+0.000 blocks of drift in 400 ticks at the hover notch — so "pick the notch nearest the demand" is
+the entire vertical controller. Copying that table into the autopilot would have been the wrong way
+to use it: those are the equilibria at a *level* disc, and level flight at 25° of tilt wants notch
+3.31, which is not a notch. Searching finds 3 in a hover, dithers 3/4 in the cruise (which is what
+§3 says to do, and what the fixed-wing throttle loop already does), and needs no revision if the
+ladder moves.
+
+**The pedal is bang-bang because the pedal is a rate command on an integrator.** `setPedal` is a
+sign rather than a proportion, with a `YAW_RAMP` of 0.5 °/tick² — the same double-integrator shape
+`PlaneEntity#tickYaw` has — so `AutopilotMath.bangBang`, which subtracts the angular stopping
+distance `rate·|rate| / (2·accel)` from the error, is the correct controller for it with not a line
+of change. Yaw is 3.0 °/tick at every airspeed and attitude, so a heading is a heading whether the
+machine is hovering or at cruise.
+
+**`setPitchUp` is never called on a helicopter.** It does nothing on this airframe *and* its sign
+convention is the opposite of the cyclic's, so a controller reaching for it out of fixed-wing habit
+would be writing into a control that is both dead and backwards.
+
+#### The cyclic loop, and two ways of getting it wrong
+
+The cyclic is a **position** command: hold the stick and the machine settles at a speed. That single
+property decides the shape of the controller, and this loop was written wrong twice before it was
+written right. Both failures are worth keeping, because both look like tuning problems and neither
+is.
+
+**First: proportional alone leaves a permanent shortfall.** `stick = G·(demand − v)` closes a loop
+whose plant already has a finite gain `v = k·stick`, so its equilibrium is
+`v = demand · kG/(1 + kG)` — not an offset that decays, a shortfall that stays. Measured with
+G = 160 and the airframe's k of about 0.0125: a cruise commanded at 1.20 blocks/tick flew **0.815**,
+and the predicted ratio for that loop gain is 0.67 against the observed 0.68. The cure is to
+integrate the error onto the stick instead, whose equilibrium is where the error is zero whatever
+the plant gain is.
+
+**Second: integral alone oscillates, and it oscillates because of what is already in the chain.**
+Tilt sets an acceleration, acceleration integrates to velocity, velocity integrates to position —
+two integrations before the loop is closed, plus a proportional outer law on position. Making the
+inner loop a third integration puts 270° of phase lag round it. Measured: an arrival held station to
+within 2 to 3.5 blocks of the pad and oscillated there at 0.1 to 0.2 blocks/tick for the whole
+2400-tick descent timeout, never slow enough to be allowed to let down, and reported honestly that
+it could not settle. The proportional term is a velocity damper and is what stops that; the integral
+stays, small and slow, purely to remove the shortfall on a constant demand.
+
+**And the integrator has to live in the world frame.** Held in the body frame it goes into a limit
+cycle for a reason that has nothing to do with gains: the body is turning at up to 3 °/tick under
+it, so a stick position that meant "forward" a second ago means "sideways" by the time the pedal has
+finished. Measured with the integrator in the body frame, an arrival limit-cycled at 4 to 7 blocks
+and spun through 200° of heading doing it. Integrating in world coordinates and resolving into the
+two sticks every tick makes the loop independent of what the nose is doing. The clamp is on the
+vector rather than per axis, because the disc has one tilt: clamping x and z separately would let a
+diagonal command ask for 1.41 times full stick.
+
+#### Two axes, and why the arrival needs both
+
+The one control idea in here worth reading, and it came out of a failure on the *previous* flight
+model that the new one made easy to fix.
+
+The first arrival law was the obvious one and the same one the fixed-wing controller uses: point the
+nose at the pad and ask for a speed. Measured on the rig, a machine arriving over a pad on that law
+**never got closer than 10.5 blocks**. It orbited the pad for the whole descent timeout and
+reported, correctly, that it could not settle:
+
+```
+Helicopter #25 could not settle onto helipad-2 - 12.8 blocks off the pad centre and 30.5 blocks up after 2401 ticks, at 599.7, -29.5, 13.3 in final.
+```
+
+What made that an orbit rather than a wobble was that the only translational control was "accelerate
+along the nose", so correcting a lateral error meant turning — and the machine kept its old velocity
+while it turned. Point at the pad, accelerate, go past it; point at it again from the far side,
+accelerate, go past it again.
+
+The rewritten airframe has a second axis. `setCyclicRight` tips the disc sideways, and below
+`HelicopterEntity.TURN_COORDINATION_SPEED` (0.80 b/t of *forward* speed) that is a pure sidestep
+with no turn in it at all; an arrival flown at `APPROACH_SPEED` is comfortably inside that band. So
+the arrival law is: take the velocity the machine wants — towards the point, at the fastest it could
+be going and still stop on it — subtract the velocity it has, and put the difference on the two
+sticks. A drift is corrected by tipping the disc sideways, not by turning. Where the nose points is a
+separate question, and inside the let-down the answer is "hold the bearing you ran in on" — see
+"Four things flying it found" below for what happens when it is allowed to chase the pad instead.
+
+Braking is the same command with the sign reversed, which on a position-command cyclic is simply a
+negative stick. Full aft is 24 blocks/s to a stop in 60 ticks and 43 blocks (`HELICOPTER-PHYSICS.md`
+§3), so there is **no deceleration table anywhere in this arrival** — nothing of what the fixed-wing
+side needs 270 blocks of runway-in to do. What there is instead is one line of arithmetic: the
+closure demand is `sqrt(2·CLOSURE_BRAKING·distance)` capped at `APPROACH_SPEED`, a constant-
+deceleration profile rather than a schedule fitted to anything. It replaced a demand proportional to
+distance, and the 2x2 that chose it is in `RotorcraftConfig#CLOSURE_BRAKING`.
+
+Two laws, chosen by phase. The transit uses bearing-and-speed, which is right while the target is
+hundreds of blocks away and is what the fixed-wing cruise does; it drives the longitudinal stick only
+and leaves the lateral one centred, because at transit speed a bank is a turn rather than a sidestep
+and the pedal is this airframe's turn control. Everything from the run-in inwards uses
+`HelicopterAutopilot#station`, which drives both.
+
+#### Measured, eight sorties on a world built from nothing
+
+All on the headless rig, one machine at a time, **no force-loading during any flight**, world wiped
+and rebuilt for this table, pads cleared between runs. The world:
+
+| pad | what it is | how it was marked |
+|---|---|---|
+| `helipad-1`, `helipad-2` | flush 7x7 on the superflat | `/autopilot helipad survey` |
+| `helipad-3` | 15x15 stone plinth, 2 blocks proud | survey, from **two adjacent corners** |
+| `helipad-4` | 7x7 in a walled courtyard with one 9-block gap on the east side | survey |
+| `helipad-5` | 3x3 — the smallest the survey registers | survey |
+| `helipad-6` | flush 7x7 | **the Helipad Marker, two right-clicks** |
+| `helipad-7` | flush 7x7 | **the Helipad Marker, sneak + right-click the air** |
+
+| from → to | distance | commanded | cruise made good | off the pad centre | lift-off → touchdown |
+|---|---|---|---|---|---|
+| 1 → 2 | 600 | 1.20 | 1.101 | 0.12 | 1094 |
+| 2 → 3 | 400 | 1.20 | 1.072 | **0.09** | 898 |
+| 3 → 4 | 600 | 1.20 | 1.102 | 0.12 | 1047 |
+| 4 → 5 | 600 | 1.20 | 1.101 | 0.12 | 1094 |
+| 5 → 6 | 600 | **0.50** | **0.524** | **0.02** | 1604 |
+| 6 → 7 | 600 | 1.20 | 1.101 | 0.12 | 1094 |
+| 7 → 1 | 3400 | **1.75** | 1.107 | 0.08 | 3623 |
+| 1 → 3 | 1000 | **0.80** | **0.817** | 0.12 | 1741 |
+
+**Eight of eight landed on the pad. Worst lateral error 0.12 blocks, mean 0.10.** Two `heliinbound`
+arrivals flown separately — one from 300 blocks off the pad's axis, one into the courtyard from the
+opposite side to its only gap — landed 0.14 and 0.15 off. The other numbers are the same on every
+sortie to the tick, because none of those phases is speed-dependent:
+
+* **spawn to airborne: 2 ticks.** The machine is spawned one block above the pad and is climbing on
+  the third tick.
+* **the vertical departure: 138 ticks** to `DEPARTURE_HEIGHT`, every run.
+* **the run-in: `FINAL` entered 23.5–24.0 blocks from the pad**, 30 above it.
+* **run-in call to standing still: 376–491 ticks.**
+
+**The cruise is 1.10 whatever it is told above that, and it now says so.** Level flight at full
+forward cyclic wants collective 3.31, the collective is an integer, and the loop dithers 3/4 —
+`HELICOPTER-PHYSICS.md` §3 says exactly this. Commanded 0.50 is made good at 0.524 and commanded 0.80
+at 0.817, with the cyclic off its stop 96% of the time; commanded 1.20 and commanded 1.75 both fly
+1.10 with the stick pinned for the whole leg. That last case used to be silent, and it was a real
+piece of dishonesty — a 3400-block leg ordered at 1.75 and the same leg ordered at 1.20 took the same
+number of ticks with two different numbers echoed back at the player. One line, once, in the air:
+
+```
+Helicopter #253 cannot make good 1.75 blocks/tick in level flight - full forward cyclic is holding 1.11. The leg will take that much longer.
+```
+
+The test is "the stick is on its stop **and** the speed is short", not "the speed is short": a machine
+short because it is climbing, turning or still accelerating is not being lied to about anything, and
+200 ticks of settling keeps the departure out of it.
+
+**The plinth is the row that proves the geometry.** `helipad-3` was marked by clicking two *adjacent*
+corners of the plinth, so the midpoint of the clicks — the thing a naive survey would use — is on the
+plinth's southern edge, seven blocks off centre. It is the pad version of the runway survey bug that
+put thresholds on the blocks the player clicked and then landed aircraft on the edge of the strip.
+Survey and landing, printed by two different pieces of code:
+
+```
+marked centre 1000, -59, -7 -> pad centre 1000, -59, 0 (moved 7.0 blocks); touchdown at 1000.5, -58.0, 0.5
+Helicopter #118 landed at helipad-3, 1000.6, -58.0, 0.5 (0.09 blocks from the pad centre 1000.5, -58.0, 0.5, tolerance 7.0; …)
+```
+
+`touchdown at 1000.5, -58.0, 0.5` and `pad centre 1000.5, -58.0, 0.5` are the same coordinate. **The
+marked shape and the used shape are the same shape**, and the correction is never silent: both
+coordinates and the distance between them are on the survey line every time.
+
+#### Six things flying it found that compiling it did not
+
+Every one of these passed a build and read as ordinary telemetry.
+
+**The nose pirouetted over the pad.** The station-keeping law points the nose at its target, with a
+2.5-block deadband to stop it hunting once it is on top of it. That deadband cannot help, because the
+event that starts the spin is bigger than it: the machine overshoots the pad by about 3 blocks — the
+stopping distance from `APPROACH_SPEED` — the bearing to the pad reverses, and the pedal is asked for
+180° at 3 °/tick. Measured, with the machine wandering 603.7 → 598.0 → 601.3 on one axis while it did
+so: 298 ticks in `FINAL` against the 146 the commanded descent rates need. The let-down now holds the
+bearing the run-in was flown on and does not turn at all; the lateral cyclic corrects the drift.
+
+**The last ten blocks were under-braked, and it took two changes to see it.** The closure demand was
+proportional to distance and the proportional gain of the velocity loop was 250, i.e. full stick at
+0.40 b/t of error — so a machine 2.6 blocks out doing 0.29 b/t was asking for 45% of a stick it needed
+most of. Neither change alone did much; the pair is a factor of six.
+
+| | gain 250 | gain 500 |
+|---|---|---|
+| demand ∝ distance (0.04/block) | 0.20–0.86 | 0.69, 0.69, 0.71 |
+| demand = √(2·0.003·distance) | 0.72, 0.72, 0.75 | **0.12, 0.12, 0.13** |
+
+They interact because they are the two halves of one loop: the proportional demand collapses faster
+than the machine can follow it near the pad (0.04 b/t at one block out, against the 0.077 the braking
+profile asks for), so the stick centres and the machine coasts the last block on drag — and at the old
+gain the loop could not track either demand well enough for the difference to show. Gain 900 was also
+tried: it buys ten ticks, spends a block of overshoot on them and stops improving the touchdown, so
+500 is the interior point.
+
+**A machine that came to rest on a roof reported `landed`.** A pad was surveyed clear, a stone roof
+was built 16 blocks over it, and the arrival flew a faultless approach onto the roof:
+
+```
+Helicopter #1 landed at helipad-6, 2800.5, -44.0, 0.5 (0.03 blocks from the pad centre 2800.5, -60.0, 0.5, …)
+```
+
+Two coordinates in one sentence that contradict each other, and nothing was comparing them: the
+verdict was `miss <= tolerance && onGround && !onWater`, with **no vertical term at all**. This is the
+rotorcraft form of the plane that reported `landed` after ditching in the sea. `landingProblem` now
+applies the same elevation test, and the same `LANDING_ELEVATION_TOLERANCE`, that the fixed-wing side
+has had since that bug was fixed there:
+
+```
+Helicopter #100 did not land on helipad-6: came to rest 16 blocks above the pad surface - on something the survey did not measure, at 2800.5, -44.0, 0.5 (pad centre 2800.5, -60.0, 0.5, tolerance 3.0). …
+```
+
+**A refused survey printed `clear approach bearings: none`.** A pad refused for its size, or for
+standing on unloaded ground, never reaches the sector scan, and the empty array read out as a
+measurement. "Never looked" and "looked, and there is no way in" are different facts and the second is
+much worse news; the line now says `not measured - the pad was refused before the sector scan`.
+
+**Two machines bound for one pad deadlocked each other over empty ground.** `Helipad#free` asks the
+live autopilots whether any of them claims the pad, and `claims` returned the *destination* for every
+mode after take-off — so a machine claimed its destination from the moment it lifted off, 1600 blocks
+away. Three sent to one pad from 600, 1000 and 1600 blocks out therefore all reported the pad
+occupied while it was bare ground, two ran the full 3601-tick hold timeout out and gave up, and the
+third only landed because the other two had by then stopped being live autopilots:
+
+```
+Helicopter #78 holding over helipad-4: the pad is occupied.        <- the pad is empty
+Helicopter #78 helipad-4 never became free - held over it for 3601 ticks
+Helicopter #77 helipad-4 never became free - held over it for 3601 ticks
+```
+
+Going somewhere is not being there. `CRUISE` and `HOLD` now claim nothing and the claim starts at
+`DESCENT`, which is the point the machine is committed to the pad; the departure end is claimed in
+every mode, because a machine standing on a pad is on it. Re-flown, the nearest machine runs in and
+lands 0.12 from the centre and the other two hold — correctly, because the pad now genuinely has
+something on it.
+
+**Machines holding for the same pad flew into the same block of air.** The orbit point walks round
+the pad on `modeTicks`, so two holders converge on it: measured at `1618.3, 17.1` for both, 0.3 blocks
+apart vertically. Helicopters are hard-colliding entities and `PlaneCollisions` reads a blocked
+`move()` as an impact, so that is a way to destroy two aircraft rather than to separate them. The
+hold now takes its level *and* its starting angle from the entity id, the same rule the fixed-wing
+stack uses — four slots, 10 blocks apart, a quarter of the orbit apart. Re-flown with four machines
+converging: `agl=45.0`, `55.1`, `64.8`.
+
+#### The descent is gated on the lateral error
+
+`FINAL` holds height until the machine is over the pad *and* has stopped, then lets down — and stops
+letting down again if it drifts back off. Without the gate the arrival lands wherever the drift left
+it and reports it as a landing, which is the rotorcraft version of the plane that reported `landed`
+after ditching in the sea 200 blocks short.
+
+The altitude the descent is commanded to is one block *below* the pad rather than the pad itself. The
+altitude loop's demand fades to zero as the error does, so a demand that ends exactly on the surface
+leaves the machine hovering a fraction of a block above it for ever.
+
+#### The report is the outcome, not the mode
+
+Two landing outcomes, and the difference between them is one **measured distance** rather than the
+mode the machine happened to be in:
+
+```
+Helicopter #132 landed at helipad-2, 600.8, -60.0, 1.1 (0.69 blocks from the pad centre 600.5, -60.0, 0.5, tolerance 3.0; 1247 ticks from lift-off, 478 ticks from the run-in).
+Helicopter #7 did not land on helipad-2: came down at …, 9.4 blocks from the pad centre … (tolerance 3.0), in the water. …
+```
+
+Everything that ends in the air says why, with the position and the mode:
+
+* `could not get off <pad> - N blocks up after M ticks, against the 30 it needs`
+* `gave up en route to <pad> - N blocks still to run after M ticks, against the K a straight leg at S blocks/tick needs`
+* `could not reach the hover point over <pad> - still N blocks short after M ticks`
+* `could not settle onto <pad> - N blocks off the pad centre and M blocks up after K ticks`
+* `<pad> never became free - held over it for N ticks`
+* `lost at x, y, z in <mode>, N blocks short of <pad>` — from `PlaneEntity#remove`, so a machine that
+  is destroyed, killed or stopped by hand still produces a line
+
+The en-route timeout exists because of the cargo plane that orbited a field for 24000 ticks without
+landing, without going around and without a single line saying so. It is
+`TRANSIT_TIMEOUT_FACTOR` (3) times the time a straight leg at the commanded speed would need, plus
+`TRANSIT_TIMEOUT_MARGIN` (1200) ticks for the climb, the turn and the hover.
+
+#### One pad, one machine
+
+`Helipad#free` asks the same three questions `Airfield.standFree` asks about a parking stand, and
+derives the answer the same way rather than storing it, so a machine that crashes or is killed stops
+claiming its pad without anything having to notice: an entity search, a walk over the live autopilots
+asking `PlaneAutopilot#claimsStand` (a pad and a stand are both "one square, one aircraft", so it is
+the same call), and `StandOccupancy` for the machine that has landed and gone quiet in a chunk nobody
+is loading.
+
+An arrival that finds the pad taken enters `HOLD` and polls every `PAD_POLL_INTERVAL` (20) ticks —
+the same interval a fixed-wing departure polls its runway on, so neither can poll the other out by
+asking more often.
+
+**What a machine claims depends on where it is in the flight, and that is not a detail.** A
+destination is claimed from `DESCENT` onwards and not before: `CRUISE` and `HOLD` claim nothing,
+because going somewhere is not being there. Claimed from the launch — which is what it did first —
+any two machines bound for one pad deadlock over empty ground; see "Six things flying it found"
+below. The departure pad is claimed in every mode it applies to, because a machine standing on a pad
+is on it whatever its mode says.
+
+One consequence worth knowing on a test rig: `StandOccupancy` keeps a record until a look at a
+*loaded* chunk has read the square empty for a second, so killing a machine on a pad and immediately
+ordering another gets `helipad-2 already has an aircraft on it` for about one second. Ask
+`/autopilot helipads` twice with the chunks resident and the record clears.
+
+### Helicopters on the fixed-wing commands
+
+`AircraftType.HELICOPTER` exists now, so `/autopilot status` and the tower board can name what they
+are looking at, and `AircraftType.of` returns it — matched before the three fixed-wing airframes,
+matched on the `EntityType` and never on the class. `HelicopterEntity` used to extend
+`LargePlaneEntity` and now extends `LargeAirframeEntity` beside it, so an `instanceof` written
+against either would have been silently wrong on one side of that change; an `EntityType` comparison
+was right before it and is right after it.
+
+It is **not** in the list `random` draws from, and `/autopilot route|flight|inbound … type helicopter`
+is refused rather than substituted:
+
+```
+A helicopter cannot use a runway sortie: it has no take-off roll and nothing on the approach applies
+to it. Mark a helipad (/autopilot helipad survey) and use /autopilot heliflight instead.
+```
+
+A refusal and not a silent substitution, because all three of those commands are written in runways,
+thresholds and glide slopes, and a machine that cannot use any of the three would not fly them badly
+— it would sit on a threshold for ever.
+
+---
+
 ## 5. Terrain following and obstacle avoidance
 
 Deliberately cheap and predictable — no A*, no world search:
@@ -1771,7 +2364,9 @@ you want a reliable one.
 | In-progress route flight | Plane entity NBT, via `FlightPlan.CODEC` | **Yes** |
 | Departure delay *ordered* | Plane entity NBT, `departure_delay` on the plan | **Yes** |
 | Departure delay *remaining* | Flight director only | No — a reloaded `PARKED` becomes `TAKEOFF`, see §9 |
-| Half-drawn route / half-marked runway | Data component on the item | **Yes** |
+| Half-drawn route / half-marked runway / half-marked helipad | Data component on the item | **Yes** |
+| Surveyed helipads | `SavedData`, `helipads` key in the same `airfields.dat` | **Yes** |
+| In-progress helicopter sortie | Plane entity NBT, `kind: "heli"` on the plan | **Yes** — resumed in transit, see §4h |
 | Runway reservations | In memory | No — and correctly so, they are re-derived on load |
 | Which stands have an aircraft parked on them | In memory (`StandOccupancy`) | No — a restart falls back to the entity search; see §4d |
 | Strike flights | Not written | No — see below |
@@ -1802,8 +2397,12 @@ a restart is the right trade.
 
 No existing physics or collision method was rewritten or reformatted.
 
-Other files: three items registered in `setup/SimplePlanesItems.java` (plus creative tab entries),
+Other files: four items registered in `setup/SimplePlanesItems.java` (plus creative tab entries),
 and two init calls appended in `SimplePlanesMod.onInitialize()`.
+
+`entities/HelicopterEntity.java` — **not changed at all**. The rotorcraft flight director drives it
+through the same public surface a player's keyboard does: `setThrottle`, `setPitchUp`, `setYawRight`,
+the autopilot's `moveForward`/`moveStrafing`, and the existing public `setMoveUp`.
 
 ---
 
@@ -1839,10 +2438,24 @@ makes relative coordinates (`~ ~ ~`) work and decides which side an attack run c
 /autopilot airfields remove <airfield>           delete it
 /autopilot airfields park <airfield> <x y z>     mark a parking spot
 /autopilot airfields unpark <airfield> <x y z>   remove the marked spot nearest that point
+
+/autopilot helipad survey <x y z> <x y z>        survey a helipad between two opposite corners
+/autopilot heliflight <pad> <pad> [speed] [delay <seconds>]
+                                                 full helicopter sortie between two pads
+/autopilot heliinbound <x y z> <pad> [speed]     one-way arrival onto a named pad
+/autopilot helipads                              browse the pads, nearest first
+/autopilot helipads info <pad>                   the full survey of one pad
+/autopilot helipads show <pad>                   draw it, and its clear approaches, with particles
+/autopilot helipads resurvey <pad>               re-measure it from its own stored centre
+/autopilot helipads rename <pad> <name>          rename it
+/autopilot helipads remove <pad>                 delete it
 ```
 
 `speed` is the cruise speed in blocks per tick, clamped to 0.40-2.80. Omitted, it is
-`CRUISE_SPEED` — see [The default is fast](#the-default-is-fast).
+`CRUISE_SPEED` — see [The default is fast](#the-default-is-fast). The helicopter commands have their
+own range, **0.20-2.00**, defaulting to 1.20: a rotorcraft's useful band starts below a plane's stall
+speed and stops well below its cruise, so sharing the fixed-wing clamp would silently raise a slow
+helicopter flight to 0.40.
 
 `flight` and `inbound` take airfield **names** (tab-completed from the registered list, quoted
 because names contain a hyphen), so they need no block-position argument at all and cannot be
@@ -2270,9 +2883,48 @@ world cannot double-count either.
 
 ## 9. Limitations and what is not implemented
 
-* **Helicopters are not supported.** `HelicopterEntity` overrides `tickPitch`, `tickRoll` and
-  `getTickPush`, so the control laws here do not describe it. The autopilot always spawns a plain
-  `PlaneEntity`. Attaching one to a helicopter will fly badly rather than crash.
+* **Helicopters fly pad to pad only.** `/autopilot heliflight` and `/autopilot heliinbound` are the
+  whole of it (§4h). A rotorcraft cannot be dispatched onto a runway — `route`, `flight` and
+  `inbound` refuse `type helicopter` outright — and there is no rotorcraft equivalent of a waypoint
+  route, of a strike or of the route wand. A helicopter is also not in the set `random` draws from.
+* **A helipad has no traffic board, and the hold is a stack rather than a queue.**
+  `/autopilot tower` is about runways and `TowerWatch` filters rotorcraft out of it; the only view of
+  pad occupancy is `/autopilot helipads`, which says `OCCUPIED` and nothing about who is holding for
+  what. Holders are separated — four levels 10 blocks apart, phased a quarter-orbit each, chosen by
+  entity id — but they are not *sequenced*: whichever machine next polls a free pad takes it,
+  regardless of who has been waiting longest, and two machines whose ids are congruent modulo four
+  share a slot. Both are the same trades the fixed-wing hold makes.
+* **The rotorcraft controller has no terrain avoidance beyond climbing.** It raises its commanded
+  altitude for whatever `TerrainScanner` sees ahead, and that is all: there is no `RoutePlanner`
+  equivalent, so it will try to climb over a mountain rather than going round it, and it has no
+  corridor raycast on the way down. The descent is vertical onto ground the survey measured, which
+  is what makes that survivable.
+* **A helicopter arrival does not re-check the pad's approach sectors in the air.** The bearing it
+  runs in on comes from the stored survey, so a wall built across the only clear sector after the
+  survey is not noticed until the machine is in it. `/autopilot helipads info` says when a live
+  re-measurement disagrees with the stored one, and `resurvey` stores the new answer, but both need a
+  human to ask.
+* **The default cruise is the fastest level flight there is, so it is never quite made good.**
+  Holding altitude at full forward cyclic wants collective 3.31 and the collective is an integer, so
+  the loop dithers 3/4 and the machine settles around **1.10 blocks/tick against the 1.20 it is
+  commanded** (`HELICOPTER-PHYSICS.md` §3). Ask for less and it holds exactly what it was asked for —
+  0.50 flies 0.524, 0.80 flies 0.814. What it does *not* do is refuse a speed it cannot make good:
+  `/autopilot heliflight … 1.75` is inside the argument's range, is accepted, is echoed back in the
+  launch line and then flies 1.10. It now says so once from the air, which is the honest half of the
+  answer; the dishonest half — a launch line quoting a speed nothing will ever fly — is still there,
+  because the ceiling is a property of the loaded airframe (a machine without a booster has a lower
+  one) and the command does not have the entity when it prints.
+* **A helicopter sortie interrupted by a server restart resumes, but nothing wakes it up.** The plan,
+  the mode and the pads all come back off the entity NBT and the flight continues correctly the moment
+  the aircraft ticks — measured, a sortie stopped 880 blocks out finished on the pad 0.13 blocks from
+  the centre after the restart. But the chunk-ticket renewal walks `AutopilotRegistry`, which is
+  memory-only, so after a restart nothing holds the ticket of an aircraft nobody has loaded and it
+  hangs where it was until something else loads that chunk. This is not specific to rotorcraft: an
+  in-progress `route` flight has exactly the same hole.
+* **Nothing on the vertical axis can damage a helicopter, so the let-down proves less than a landing
+  does.** Autorotation is 0.432 b/t and the free-landing band is 0.60, so every descent this
+  controller can command arrives undamaged whatever it does. The number the arrival is judged on is
+  therefore the lateral error, not the survival.
 * **No wind.** Minecraft 26.2 has no wind API, so runway selection uses approach obstacles and slope
   only. Nothing was invented here.
 * **Circuit joins are simplified.** The aircraft flies direct to the intercept point and tracks the

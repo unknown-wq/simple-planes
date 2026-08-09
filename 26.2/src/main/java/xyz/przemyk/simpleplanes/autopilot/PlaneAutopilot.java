@@ -52,6 +52,21 @@ public class PlaneAutopilot {
     private AutopilotMode mode = AutopilotMode.IDLE;
     private @Nullable FlightPlan plan;
     private boolean active;
+
+    /**
+     * The rotorcraft flight director, when this aircraft is flying a helipad-to-helipad sortie.
+     *
+     * <p><b>The entire helicopter feature is behind this one reference.</b> {@code PlaneEntity} owns
+     * exactly one autopilot field and it is typed as this class, so a rotorcraft controller has to
+     * arrive through here; what it does not have to do is share the state machine. When this is
+     * non-null the fixed-wing machinery below never runs at all — {@link #tick} hands over at the
+     * top and the accessors delegate — and when it is null nothing about the fixed-wing path
+     * changes, which is the property that matters, because the arrival planner it would otherwise
+     * have to be threaded through is the part of this feature that was hardest to get right.
+     *
+     * <p>See {@link HelicopterAutopilot} for why a mode on the state machine below was rejected.
+     */
+    private @Nullable HelicopterAutopilot rotorcraft;
     /** Aircraft conjured by a tool run on autopilot fuel; player-built planes still need an engine. */
     private boolean autopilotPowered;
     /** Strike aircraft are deliberately not written to disk; see {@link #save}. */
@@ -167,9 +182,18 @@ public class PlaneAutopilot {
         this.holdFix = null;
         this.anglesInitialised = false;
         this.outcomeReported = false;
+        this.rotorcraft = null;
         active = true;
         AutopilotRegistry.register(plane);
 
+        if (flightPlan.kind() == FlightPlan.Kind.HELI) {
+            // Hand the whole flight to the rotorcraft controller. Everything below this point —
+            // the departure plan, the runway reservation, the arrival planner — is about a strip,
+            // and this aircraft is not going near one.
+            rotorcraft = new HelicopterAutopilot(this);
+            rotorcraft.start(plane, flightPlan);
+            return;
+        }
         if (flightPlan.kind() == FlightPlan.Kind.STRIKE) {
             setMode(plane, AutopilotMode.STRIKE);
             return;
@@ -220,6 +244,10 @@ public class PlaneAutopilot {
             return;
         }
         outcomeReported = true;
+        if (rotorcraft != null) {
+            rotorcraft.reportOutcome(plane);
+            return;
+        }
         String where = Math.round(plane.getX()) + ", " + Math.round(plane.getY()) + ", " + Math.round(plane.getZ());
         Vec3 target = plan.strikeTargetVec();
         if (target == null) {
@@ -254,7 +282,7 @@ public class PlaneAutopilot {
     }
 
     public AutopilotMode getMode() {
-        return mode;
+        return rotorcraft != null ? rotorcraft.mode() : mode;
     }
 
     public @Nullable FlightPlan getPlan() {
@@ -287,7 +315,10 @@ public class PlaneAutopilot {
      * and read here.
      */
     public boolean holdsRunway(String airfieldName) {
-        if (!active) {
+        // A helicopter never holds a runway. Not "never in practice" — it has no departure end and
+        // no landing airfield, so every branch below would answer false anyway; this says it once,
+        // where it is readable, instead of relying on three null checks agreeing.
+        if (!active || rotorcraft != null) {
             return false;
         }
         if (departureEnd != null && mode.holdsDepartureRunway()
@@ -310,12 +341,50 @@ public class PlaneAutopilot {
      * the aircraft — see {@link Airfield#standFree}.
      */
     public boolean claimsStand(BlockPos spot) {
+        if (rotorcraft != null) {
+            // A helipad is the same kind of thing — one square, one aircraft — so it is claimed
+            // through the same call rather than through a second registry that asks the same
+            // question a different way. See Helipad#free.
+            return active && rotorcraft.claims(spot);
+        }
         return active && standTarget != null && spot.equals(standTarget.marked());
     }
 
     /** The stand this arrival is taxiing to or standing on, for the status readout and the board. */
     public @Nullable BlockPos claimedStand() {
+        if (rotorcraft != null) {
+            return rotorcraft.claimedPad();
+        }
         return standTarget == null ? null : standTarget.marked();
+    }
+
+    /** True when this flight is being flown by the rotorcraft controller rather than by this one. */
+    public boolean isRotorcraft() {
+        return rotorcraft != null;
+    }
+
+    /**
+     * The player who ordered this flight, for {@link HelicopterAutopilot}'s reports.
+     *
+     * <p>Package-private: the owner is a message destination and nothing outside this package has
+     * any business with it, but the two flight directors have to report to the same place or a
+     * player who launches a helicopter gets nothing.
+     */
+    @Nullable Player owner() {
+        return owner;
+    }
+
+    /**
+     * The two analogue control inputs, written by {@link HelicopterAutopilot}.
+     *
+     * <p>They are read back out by {@code PlaneEntity#tick} through {@link #getMoveStrafing} and
+     * {@link #getMoveForward}, which is the existing bridge and the reason this delegation exists at
+     * all rather than the rotorcraft controller owning its own pair: the entity knows about one
+     * autopilot object, and that is this one.
+     */
+    void setRotorControls(float strafing, float forward) {
+        this.moveStrafing = strafing;
+        this.moveForward = forward;
     }
 
     /**
@@ -382,6 +451,14 @@ public class PlaneAutopilot {
         // vanilla does for a thrown ender pearl (ServerPlayer#placeEnderPearlTicket).
         if (ticks % 20 == 0 && level instanceof ServerLevel serverLevel) {
             keepChunksLoaded(serverLevel, plane);
+        }
+
+        // The rotorcraft hand-over, and it is deliberately here rather than at the very top: a
+        // helicopter needs the registry heartbeat and the chunk ticket above exactly as much as a
+        // plane does, and nothing below this line.
+        if (rotorcraft != null) {
+            rotorcraft.tick(plane);
+            return;
         }
 
         Vec3 position = plane.position();
@@ -2125,6 +2202,9 @@ public class PlaneAutopilot {
      * and the tower board. A path planner whose reasoning is invisible is one nobody can debug.
      */
     public Component planComponent() {
+        if (rotorcraft != null) {
+            return rotorcraft.planComponent();
+        }
         // Three planners, one field, in the order the flight uses them: how it is leaving, how it is
         // getting there, and how it is arriving. The departure plan is the answer while the aircraft
         // is still on the ground, which is exactly when "which way is it going to go" is the
@@ -2241,6 +2321,12 @@ public class PlaneAutopilot {
      * state and the commanded state side by side, so a controller that is not tracking is obvious.
      */
     public String statusLine(PlaneEntity plane) {
+        if (rotorcraft != null) {
+            // Its own line rather than this one with the runway fields blanked: half of what follows
+            // is about a strip (dthr, lat, stand, go-arounds, legs) and a readout full of dashes is
+            // harder to read than a shorter one that only says true things.
+            return rotorcraft.statusLine(plane);
+        }
         Vec3 position = plane.position();
         Vec3 velocity = plane.getDeltaMovement();
         StringBuilder builder = new StringBuilder();
@@ -2338,6 +2424,9 @@ public class PlaneAutopilot {
     }
 
     public String describe(PlaneEntity plane) {
+        if (rotorcraft != null) {
+            return rotorcraft.describe(plane);
+        }
         StringBuilder builder = new StringBuilder();
         builder.append("Plane #").append(plane.getId()).append(" mode=").append(mode.getName());
         if (plan != null) {
@@ -2366,7 +2455,12 @@ public class PlaneAutopilot {
             return;
         }
         ValueOutput child = output.child("autopilot");
-        child.putString("mode", mode.getName());
+        // getMode(), not the field: a rotorcraft flight keeps its mode in HelicopterAutopilot and
+        // leaves this one on IDLE, so writing the field would put "idle" on every helicopter save.
+        // Nothing reads it back for a helicopter — load() restores those into the transit phase
+        // whatever they were doing — but a save file that says what the aircraft was doing is worth
+        // the one call, and for a plane the two are the same object.
+        child.putString("mode", getMode().getName());
         child.store("plan", FlightPlan.CODEC, plan);
         child.putInt("go_arounds", goArounds);
         child.putBoolean("gates_disabled", gatesDisabled);
@@ -2423,5 +2517,12 @@ public class PlaneAutopilot {
         }
         plane.setAutopilot(autopilot);
         AutopilotRegistry.register(plane);
+        if (autopilot.plan.kind() == FlightPlan.Kind.HELI) {
+            // Restored into the transit phase, whatever it was doing: a saved plan records the pads
+            // and the speed but not how far up the departure had got, and a machine that reloads
+            // into the vertical climb would add another 30 blocks to whatever height it already had.
+            autopilot.rotorcraft = new HelicopterAutopilot(autopilot);
+            autopilot.rotorcraft.start(plane, autopilot.plan, true);
+        }
     }
 }

@@ -8,21 +8,21 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import xyz.przemyk.simpleplanes.container.StorageContainer;
-import xyz.przemyk.simpleplanes.entities.LargePlaneEntity;
+import xyz.przemyk.simpleplanes.entities.LargeAirframeEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 public abstract class LargeUpgrade extends Upgrade {
 
     public LargeUpgrade(UpgradeType type, PlaneEntity planeEntity) {
         super(type, planeEntity);
-        if (planeEntity instanceof LargePlaneEntity largePlaneEntity) {
+        if (planeEntity instanceof LargeAirframeEntity largePlaneEntity) {
             largePlaneEntity.hasLargeUpgrade = true;
         }
     }
 
     @Override
     public void remove() {
-        if (planeEntity instanceof LargePlaneEntity largePlaneEntity) {
+        if (planeEntity instanceof LargeAirframeEntity largePlaneEntity) {
             largePlaneEntity.hasLargeUpgrade = false;
         }
         super.remove();

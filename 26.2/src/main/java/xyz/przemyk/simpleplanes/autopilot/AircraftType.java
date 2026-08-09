@@ -14,10 +14,24 @@ import java.util.function.Supplier;
 /**
  * Which airframe an autopilot sortie flies.
  *
- * <p>Helicopters are deliberately absent, and not by oversight: {@code HelicopterEntity} overrides
- * {@code tickPitch}, {@code tickRoll}, {@code tickRotateMotion} and {@code getTickPush}, so none of
- * the control laws in {@link PlaneAutopilot} describe it. Dispatching one would not fly it badly —
- * it would fly something the flight director has no model of at all. See {@code AUTOPILOT.md} §9.
+ * <p><b>Helicopters are here now, and the reason they used to be excluded has changed.</b> The old
+ * reason was that {@code HelicopterEntity} had no server-reachable controls at all: its translation
+ * came from {@code TempMotionVars.moveForward} / {@code moveStrafing}, which are fed from
+ * {@code Player.zza} / {@code Player.xxa}, and those are written in exactly one place in 26.2 —
+ * {@code LocalPlayer}, on the client. An unmanned helicopter could not be moved, only watched. That
+ * is fixed in the airframe rather than here: {@code HelicopterEntity} now has a synched, persisted,
+ * server-settable control surface — collective, two cyclic axes and a pedal — documented in
+ * {@code HELICOPTER-PHYSICS.md}.
+ *
+ * <p>What has <em>not</em> changed is that none of the control laws in {@link PlaneAutopilot}
+ * describe it. It overrides all six flight hooks, so not one line of the fixed-wing flight model
+ * runs on it: no wing, no lift, no stall speed, no take-off speed. So it is not flown by
+ * {@link PlaneAutopilot} at all, but by {@link HelicopterAutopilot}, between {@link Helipad}s rather
+ * than between {@link Airfield}s. What that means for this enum is that {@link #HELICOPTER} is a
+ * value {@link #of} can return and {@link #tag} can print, so a status line and a tower board can
+ * name the thing they are looking at — and that it is <em>not</em> in {@link #FLYABLE}, so
+ * {@code random} never draws one and {@code /autopilot flight … type helicopter} is refused rather
+ * than producing a rotorcraft on a runway.
  *
  * <p>The three fixed-wing airframes are not interchangeable. {@code getRotationSpeedMultiplier}
  * scales both the pitch and the yaw ramp, so a large plane turns at half the rate of the starter
@@ -53,10 +67,21 @@ public enum AircraftType implements StringRepresentable {
     PLANE("plane"),
     LARGE("large"),
     CARGO("cargo"),
-    /** Chosen when the aircraft is created, from the three above, never a helicopter. */
+    /**
+     * A rotorcraft. Selectable on the helicopter commands and refused on the fixed-wing ones — see
+     * {@link #isRotorcraft()}.
+     */
+    HELICOPTER("helicopter"),
+    /** Chosen when the aircraft is created, from the three fixed-wing airframes only. */
     RANDOM("random");
 
-    /** The three real airframes, in the order {@link #RANDOM} draws from. */
+    /**
+     * The three fixed-wing airframes, in the order {@link #RANDOM} draws from.
+     *
+     * <p>{@link #HELICOPTER} is deliberately not in this list. It is what {@link #of} matches
+     * against, so putting a rotorcraft in it would make {@code random} occasionally dispatch one
+     * onto a runway; it is matched separately below instead.
+     */
     private static final AircraftType[] FLYABLE = {PLANE, LARGE, CARGO};
 
     public static final Codec<AircraftType> CODEC = StringRepresentable.fromEnum(AircraftType::values);
@@ -94,9 +119,15 @@ public enum AircraftType implements StringRepresentable {
         return switch (this) {
             case LARGE -> SimplePlanesEntities.LARGE_PLANE;
             case CARGO -> SimplePlanesEntities.CARGO_PLANE;
+            case HELICOPTER -> SimplePlanesEntities.HELICOPTER;
             // RANDOM only reaches here if resolve() was skipped; the starter plane is the safe answer.
             default -> SimplePlanesEntities.PLANE;
         };
+    }
+
+    /** True for the one airframe the fixed-wing commands refuse and the helicopter commands require. */
+    public boolean isRotorcraft() {
+        return this == HELICOPTER;
     }
 
     /**
@@ -110,6 +141,13 @@ public enum AircraftType implements StringRepresentable {
      */
     public static @Nullable AircraftType of(PlaneEntity plane) {
         EntityType<?> type = plane.getType();
+        // Matched on the EntityType and never on the class. HelicopterEntity used to extend
+        // LargePlaneEntity and now extends LargeAirframeEntity beside it, so any instanceof written
+        // against either would have been silently wrong on one side of that change. An EntityType
+        // comparison was right before it and is right after it.
+        if (type == HELICOPTER.entityType().get()) {
+            return HELICOPTER;
+        }
         for (AircraftType candidate : FLYABLE) {
             if (type == candidate.entityType().get()) {
                 return candidate;

@@ -63,6 +63,19 @@ public class AutopilotComponents {
             .networkSynchronized(ByteBufCodecs.BOOL)
             .build());
 
+    /**
+     * First helipad corner marked with the helipad marker, waiting for its pair.
+     *
+     * <p>Its own component rather than sharing {@link #RUNWAY_ANCHOR}: the two tools remember two
+     * different shapes — two ends of a line and two corners of a square — and a shared anchor would
+     * let half a runway finish as a helipad. See {@code HelipadToolItem}.
+     */
+    public static final DataComponentType<BlockPos> HELIPAD_ANCHOR = register("autopilot_helipad_anchor",
+        DataComponentType.<BlockPos>builder()
+            .persistent(BlockPos.CODEC)
+            .networkSynchronized(BlockPos.STREAM_CODEC)
+            .build());
+
     /** Spawn distance configured on the strike tool. */
     public static final DataComponentType<Integer> STRIKE_DISTANCE = register("autopilot_strike_distance",
         DataComponentType.<Integer>builder()
