@@ -8,6 +8,8 @@ import xyz.przemyk.simpleplanes.autopilot.AutopilotCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotRegistry;
 import xyz.przemyk.simpleplanes.autopilot.TowerWatch;
+import xyz.przemyk.simpleplanes.combat.GunshipCommand;
+import xyz.przemyk.simpleplanes.combat.GunshipRegistry;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesBlocks;
@@ -49,6 +51,11 @@ public class SimplePlanesMod implements ModInitializer {
         AutopilotRegistry.init();
         TowerWatch.init();
         AutopilotCommand.register();
+
+        // gunship feature: the /gunship command and the server-tick pump that flies armed
+        // helicopters. Self-contained in xyz.przemyk.simpleplanes.combat.
+        GunshipRegistry.init();
+        GunshipCommand.register();
 
         registerUpgradeItems();
     }
