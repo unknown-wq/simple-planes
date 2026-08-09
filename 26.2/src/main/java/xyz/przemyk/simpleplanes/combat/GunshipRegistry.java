@@ -1,5 +1,6 @@
 package xyz.przemyk.simpleplanes.combat;
 
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -71,6 +72,13 @@ public final class GunshipRegistry {
 
     public static void init() {
         ServerTickEvents.START_LEVEL_TICK.register(GunshipRegistry::onLevelTick);
+        // A sortie lives in this list and nowhere else, while the aircraft it flies is an ordinary
+        // entity that the world saves. Stop the server mid-sortie without this and the next start
+        // loads an armed helicopter with `throttle` 3 still in its NBT, hovering on station for ever
+        // with nobody flying it, nobody shooting from it and nothing that will ever take it out of
+        // the world. Recalling on shutdown lands that case; a hard crash still cannot be caught here,
+        // and is the reason SORTIE_TIMEOUT exists at all.
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> stopAll());
     }
 
     public static boolean canLaunchAnother() {
