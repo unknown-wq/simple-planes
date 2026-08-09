@@ -89,6 +89,22 @@ public final class HelicopterAutopilot {
     private boolean padWaitReported;
 
     /**
+     * The bearing the run-in was flown on, kept for the let-down to hold the nose on.
+     *
+     * <p>Decided once, when the machine leaves the cruise, rather than re-derived every tick from
+     * where it currently is: {@link Helipad#arrivalHeading} answers "which clear sector is nearest
+     * the side I am coming from", and asking that from a position that is nearly on top of the pad
+     * gets a different answer every few blocks.
+     */
+    private double runInHeading;
+
+    /** True while the cyclic is on its stop, i.e. the machine is flying as fast as it can. */
+    private boolean cyclicSaturated;
+
+    /** Whether the "cannot make that speed good" line has been printed for this flight. */
+    private boolean speedShortfallReported;
+
+    /**
      * Yaw last tick, for the rate term in the pedal law.
      *
      * <p>Kept here rather than read off {@code Entity#yRotO}: the flight director runs at the top of
@@ -272,6 +288,7 @@ public final class HelicopterAutopilot {
             : cruiseSpeed;
         fly(plane, AutopilotMath.headingTo(position, hover), altitude, speed,
             RotorcraftConfig.CLIMB_RATE, false);
+        checkSpeedShortfall(plane, speed);
 
         if (distance <= RotorcraftConfig.DECELERATION_DISTANCE) {
             if (!padAvailable(plane)) {
@@ -279,8 +296,9 @@ public final class HelicopterAutopilot {
                 return;
             }
             overheadTick = ticks;
+            runInHeading = destination.arrivalHeading(position);
             report(plane, "running in to " + name(destination) + " on "
-                + String.format("%03d", AutopilotMath.compassDisplay(destination.arrivalHeading(position)))
+                + String.format("%03d", AutopilotMath.compassDisplay(runInHeading))
                 + " deg, " + Math.round(distance) + " blocks out.", false);
             setMode(plane, AutopilotMode.DESCENT);
             return;
@@ -346,7 +364,10 @@ public final class HelicopterAutopilot {
         double targetAltitude = centred && slow
             ? destination.elevation() - 1.0
             : destination.elevation() + Math.max(height, RotorcraftConfig.TOUCHDOWN_HEIGHT + 1.0);
-        station(plane, pad, targetAltitude, RotorcraftConfig.APPROACH_SPEED, descentRate);
+        // The nose stays on the bearing the run-in was flown on for the whole let-down. See
+        // station(..., holdHeading).
+        station(plane, pad, targetAltitude, RotorcraftConfig.APPROACH_SPEED, descentRate,
+            runInHeading);
 
         if (plane.getOnGround() || plane.isOnWater()) {
             setMode(plane, AutopilotMode.ROLLOUT);
@@ -403,6 +424,7 @@ public final class HelicopterAutopilot {
         }
         if (modeTicks % RotorcraftConfig.PAD_POLL_INTERVAL == 0 && padAvailable(plane)) {
             overheadTick = ticks;
+            runInHeading = destination.arrivalHeading(plane.position());
             setMode(plane, AutopilotMode.DESCENT);
             return;
         }
@@ -411,6 +433,42 @@ public final class HelicopterAutopilot {
                 + modeTicks + " ticks");
         }
     }
+
+    /**
+     * Says so, once, when the machine is being asked for a cruise it physically cannot hold.
+     *
+     * <p>Level flight at full forward cyclic wants collective 3.31 and the collective is an integer,
+     * so the loop dithers 3/4 and the machine tops out around 1.10 blocks/tick
+     * ({@code HELICOPTER-PHYSICS.md} §3). {@code /autopilot heliflight … 1.75} is inside the
+     * argument's range, is accepted, is echoed back in the launch line, and then flies 1.10 — and
+     * before this method existed nothing anywhere said so. Measured: a 2200-block leg ordered at
+     * 1.75 and one ordered at 1.20 took 2553 and 2549 ticks, i.e. the same flight with two different
+     * numbers printed on it.
+     *
+     * <p>The test is deliberately "the stick is on its stop <em>and</em> the speed is short", not
+     * "the speed is short": a machine that is short because it is climbing over a ridge, turning, or
+     * still accelerating out of the departure is not being lied to about anything, and its stick is
+     * not saturated. {@link #SHORTFALL_SETTLE_TICKS} keeps the acceleration out of it as well.
+     */
+    private void checkSpeedShortfall(PlaneEntity plane, double demanded) {
+        if (speedShortfallReported || modeTicks < SHORTFALL_SETTLE_TICKS || demanded <= 0) {
+            return;
+        }
+        double made = plane.getDeltaMovement().horizontalDistance();
+        if (!cyclicSaturated || made >= demanded * SHORTFALL_FRACTION) {
+            return;
+        }
+        speedShortfallReported = true;
+        report(plane, String.format("cannot make good %.2f blocks/tick in level flight - full"
+            + " forward cyclic is holding %.2f. The leg will take that much longer.",
+            demanded, made), false);
+    }
+
+    /** Ticks of cruise before the speed shortfall is judged, so acceleration is not reported as one. */
+    private static final int SHORTFALL_SETTLE_TICKS = 200;
+
+    /** Fraction of the demand below which the shortfall is worth a line. */
+    private static final double SHORTFALL_FRACTION = 0.95;
 
     private boolean padAvailable(PlaneEntity plane) {
         return destination == null || destination.free(plane.level(), plane);
@@ -434,9 +492,9 @@ public final class HelicopterAutopilot {
     /**
      * The end of a flight that reached the ground, told truthfully.
      *
-     * <p>Two outcomes, and the difference between them is one measured distance rather than the
-     * mode the machine happened to be in. "It came down" and "it landed on the pad" are not the same
-     * event and this feature is not going to print the second when the first is what happened.
+     * <p>Two outcomes, and the difference between them is <em>measured</em> rather than the mode the
+     * machine happened to be in. "It came down" and "it landed on the pad" are not the same event and
+     * this feature is not going to print the second when the first is what happened.
      */
     private void finish(PlaneEntity plane) {
         Vec3 position = plane.position();
@@ -446,8 +504,9 @@ public final class HelicopterAutopilot {
         String where = String.format("%.1f, %.1f, %.1f", position.x, position.y, position.z);
         String timings = (liftOffTick >= 0 ? (ticks - liftOffTick) + " ticks from lift-off, " : "")
             + (overheadTick >= 0 ? (ticks - overheadTick) + " ticks from the run-in" : ticks + " ticks");
-        if (miss <= tolerance && plane.getOnGround() && !plane.isOnWater()) {
-            reported = true;
+        String problem = landingProblem(plane, miss, tolerance);
+        reported = true;
+        if (problem == null) {
             AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId() + " landed at "
                 + destination.name() + ", " + where + String.format(" (%.2f blocks from the pad centre "
                 + "%.1f, %.1f, %.1f, tolerance %.1f; ", miss, pad.x, pad.y, pad.z, tolerance)
@@ -456,14 +515,52 @@ public final class HelicopterAutopilot {
                 StandOccupancy.take(serverLevel, destination.name(), destination.centre(), plane);
             }
         } else {
-            reported = true;
             AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId()
-                + " did not land on " + destination.name() + ": came down at " + where
-                + String.format(", %.1f blocks from the pad centre %.1f, %.1f, %.1f (tolerance %.1f)",
-                    miss, pad.x, pad.y, pad.z, tolerance)
-                + (plane.isOnWater() ? ", in the water" : "") + ". " + timings + ".");
+                + " did not land on " + destination.name() + ": came to rest " + problem
+                + ", at " + where
+                + String.format(" (pad centre %.1f, %.1f, %.1f, tolerance %.1f). ",
+                    pad.x, pad.y, pad.z, tolerance)
+                + timings + ".");
         }
         host.stop(plane);
+    }
+
+    /**
+     * Why this is not a landing on the pad, or null when it is.
+     *
+     * <p><b>The height check is the whole reason this method exists</b>, and it is here because the
+     * version without it printed a false landing on the rig. A pad was surveyed clear, a stone roof
+     * was then built 16 blocks over it, and the arrival flew a perfect approach, settled on the roof
+     * and reported:
+     *
+     * <pre>Helicopter #1 landed at helipad-6, 2800.5, -44.0, 0.5 (0.03 blocks from the pad centre 2800.5, -60.0, 0.5, …)</pre>
+     *
+     * <p>0.03 blocks from the centre, standing on something sixteen blocks above it, and the word in
+     * the line is "landed". The two coordinates in that sentence contradict each other and nothing
+     * was looking at the pair. This is the rotorcraft form of the plane that reported {@code landed}
+     * after ditching in the sea: a horizontal test passed and there was no vertical one.
+     *
+     * <p>The fixed-wing side has had {@code PlaneAutopilot#landingProblem} — with exactly this
+     * elevation term — since that bug was fixed there, so this is the same rule and the same
+     * tolerance ({@link AutopilotConfig#LANDING_ELEVATION_TOLERANCE}) rather than a second opinion
+     * about what "on the surface" means.
+     */
+    private @Nullable String landingProblem(PlaneEntity plane, double miss, double tolerance) {
+        if (plane.isOnWater()) {
+            return "in the water";
+        }
+        if (!plane.getOnGround()) {
+            return "in the air";
+        }
+        double drop = plane.getY() - destination.elevation();
+        if (Math.abs(drop) > AutopilotConfig.LANDING_ELEVATION_TOLERANCE) {
+            return String.format("%.0f blocks %s the pad surface - on something the survey did not"
+                + " measure", Math.abs(drop), drop < 0 ? "below" : "above");
+        }
+        if (miss > tolerance) {
+            return String.format("%.1f blocks from the pad centre", miss);
+        }
+        return null;
     }
 
     /** A flight that failed in the air, with the reason and the position. */
@@ -568,6 +665,28 @@ public final class HelicopterAutopilot {
      */
     private void station(PlaneEntity plane, Vec3 target, double altitude, double maxSpeed,
                          double verticalLimit) {
+        station(plane, target, altitude, maxSpeed, verticalLimit, Double.NaN);
+    }
+
+    /**
+     * @param holdHeading the heading to keep the nose on, or {@link Double#NaN} to point it at the
+     *                    target. <b>Not a refinement — the let-down does not work without it.</b>
+     *                    Chasing the bearing to a point the machine is nearly standing over means
+     *                    that the moment it overshoots by a block, the bearing reverses and the
+     *                    controller asks for a 180-degree turn. Measured on the rig with the run-in
+     *                    bearing not held: an arrival overshot the pad by 3.2 blocks (the stopping
+     *                    distance from {@link RotorcraftConfig#APPROACH_SPEED}), the nose then swung
+     *                    through 180 degrees at the pedal's 3 deg/tick, and the machine wandered
+     *                    603.7 -> 598.0 -> 601.3 on the x axis before it settled — 298 ticks in
+     *                    {@code FINAL} against the 146 the commanded descent rates need.
+     *                    {@link RotorcraftConfig#STATION_POINT_RADIUS} was supposed to stop that and
+     *                    cannot: it silences the nose only inside 2.5 blocks, and the overshoot that
+     *                    starts the spin is bigger than that. Holding the run-in bearing instead
+     *                    removes the turn entirely, and costs nothing, because the lateral cyclic
+     *                    corrects the drift without the nose having to move at all.
+     */
+    private void station(PlaneEntity plane, Vec3 target, double altitude, double maxSpeed,
+                         double verticalLimit, double holdHeading) {
         Vec3 position = plane.position();
         cmdAltitude = altitude;
         cmdVerticalSpeed = verticalDemand(plane, altitude, verticalLimit);
@@ -575,9 +694,11 @@ public final class HelicopterAutopilot {
         double dx = target.x - position.x;
         double dz = target.z - position.z;
         double distance = Math.sqrt(dx * dx + dz * dz);
-        // Proportional closure, so the machine is already slow when it arrives instead of having to
-        // stop from cruise in the last few blocks.
-        double wanted = Math.min(maxSpeed, distance * RotorcraftConfig.CLOSURE_GAIN);
+        // Constant-deceleration closure: the fastest the machine may be going at this distance if it
+        // is to stop on the point. See RotorcraftConfig#CLOSURE_BRAKING for the 2x2 that chose this
+        // shape over the proportional one it replaced.
+        double wanted = Math.min(maxSpeed,
+            Math.sqrt(2.0 * RotorcraftConfig.CLOSURE_BRAKING * distance));
         cmdGroundSpeed = wanted;
         double wx = distance > 1.0E-4 ? dx / distance * wanted : 0;
         double wz = distance > 1.0E-4 ? dz / distance * wanted : 0;
@@ -588,9 +709,11 @@ public final class HelicopterAutopilot {
 
         // Point at the target while there is a direction to point in. A nose chasing a point it is
         // standing over hunts, which is the same reason the fixed-wing taxi stops chasing its lineup
-        // point once it is nearly on it.
-        double heading = distance > RotorcraftConfig.STATION_POINT_RADIUS
-            ? AutopilotMath.headingTo(position, target) : plane.getYRot();
+        // point once it is nearly on it — and inside the let-down the caller hands over a fixed
+        // bearing instead, because that deadband alone is not enough. See the parameter.
+        double heading = !Double.isNaN(holdHeading) ? holdHeading
+            : distance > RotorcraftConfig.STATION_POINT_RADIUS
+                ? AutopilotMath.headingTo(position, target) : plane.getYRot();
         cmdHeading = heading;
         double headingError = AutopilotMath.angleDelta(plane.getYRot(), heading);
 
@@ -781,6 +904,7 @@ public final class HelicopterAutopilot {
         // Clamp the vector, not each axis: the disc has one tilt and it is bounded by its magnitude,
         // so clamping x and z separately would let a diagonal command ask for 1.41 times full stick.
         double stick = Math.sqrt(cyclicWorldX * cyclicWorldX + cyclicWorldZ * cyclicWorldZ);
+        cyclicSaturated = stick >= HelicopterEntity.CYCLIC_FULL;
         if (stick > HelicopterEntity.CYCLIC_FULL) {
             double scale = HelicopterEntity.CYCLIC_FULL / stick;
             cyclicWorldX *= scale;
@@ -883,12 +1007,19 @@ public final class HelicopterAutopilot {
         Vec3 position = plane.position();
         double distance = destination == null ? -1
             : AutopilotMath.horizontalDistance(position, destination.touchdown());
+        // The two sticks are in the trace because every arrival defect this controller has had so
+        // far was a stick that was somewhere other than where the numbers above it suggested — the
+        // saturated cruise, the wound-up integrator and the limit cycle all read as ordinary
+        // telemetry without them.
+        int along = plane instanceof HelicopterEntity helicopter ? helicopter.getCyclicForward() : 0;
+        int across = plane instanceof HelicopterEntity helicopter ? helicopter.getCyclicRight() : 0;
         LOGGER.info(String.format(
             "trace #%d t=%d %s pos=%.2f,%.2f,%.2f spd=%.3f vs=%+.3f thr=%d hdg=%.1f cmdhdg=%.1f"
-                + " cmdalt=%.1f cmdvs=%+.3f cmdspd=%.2f dpad=%.2f og=%b",
+                + " cmdalt=%.1f cmdvs=%+.3f cmdspd=%.2f cyc=%+d,%+d sat=%b dpad=%.2f og=%b",
             plane.getId(), ticks, mode.getName(), position.x, position.y, position.z,
             plane.getDeltaMovement().horizontalDistance(), plane.getDeltaMovement().y,
             plane.getThrottle(), Mth.wrapDegrees(plane.getYRot()), Mth.wrapDegrees(cmdHeading),
-            cmdAltitude, cmdVerticalSpeed, cmdGroundSpeed, distance, plane.getOnGround()));
+            cmdAltitude, cmdVerticalSpeed, cmdGroundSpeed, along, across, cyclicSaturated,
+            distance, plane.getOnGround()));
     }
 }

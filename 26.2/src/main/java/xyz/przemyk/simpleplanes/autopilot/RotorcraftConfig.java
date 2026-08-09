@@ -21,7 +21,7 @@ package xyz.przemyk.simpleplanes.autopilot;
  * <p>The four that are fitted to the airframe, and would have to be looked at again if it changed:
  * {@link #VERTICAL_SPEED_DEADBAND} (sized on the gaps in the collective ladder),
  * {@link #CYCLIC_SPEED_GAIN} and {@link #CYCLIC_TRIM_GAIN} (sized on the cyclic's speed map and on
- * {@code MAX_CYCLIC_RATE}), and {@link #CLOSURE_GAIN} (sized on how fast the machine can stop).
+ * {@code MAX_CYCLIC_RATE}), and {@link #CLOSURE_BRAKING} (sized on how fast the machine can stop).
  * Everything else is a mission number.
  */
 public final class RotorcraftConfig {
@@ -284,23 +284,62 @@ public final class RotorcraftConfig {
      * Percent of cyclic stick per block per tick of velocity error — the proportional half.
      *
      * <p>This is the damping, and without it the loop oscillates: see {@code HelicopterAutopilot#trim}
-     * for the measurement. 250 asks for full stick at 0.40 blocks/tick of error, which is most of the
-     * airframe's cruise speed, so it saturates only on a genuine step demand and is a smooth damper
-     * inside that.
+     * for the measurement. 500 asks for full stick at 0.20 blocks/tick of error, so it saturates only
+     * on a genuine step demand and is a smooth damper inside that.
+     *
+     * <p><b>It was 250, and 250 under-brakes the last ten blocks.</b> The plant decelerates at about
+     * 0.0075 b/t² at half stick near the hover, so a machine 2.6 blocks from the pad doing 0.29 b/t
+     * needs most of the stick and a 250 gain asked for 45% of it. Measured over the same three
+     * sorties, changing only this number (constant-deceleration closure in all four):
+     *
+     * <table border="1">
+     *   <caption>Terminal accuracy against the proportional gain</caption>
+     *   <tr><th>gain</th><th>touchdown error</th><th>ticks in FINAL</th><th>worst excursion</th></tr>
+     *   <tr><td>250</td><td>0.72, 0.72, 0.75</td><td>284–294</td><td>2.94</td></tr>
+     *   <tr><td><b>500</b></td><td><b>0.12, 0.12, 0.13</b></td><td>274</td><td>3.26</td></tr>
+     *   <tr><td>900</td><td>0.15, 0.15, 0.14</td><td>264</td><td>4.32</td></tr>
+     * </table>
+     *
+     * <p>900 is past the knee: it buys ten ticks and spends a block of overshoot on them, and the
+     * touchdown error stops improving. 500 is the interior point, and the hover it produces is
+     * steady — no oscillation anywhere in the let-down trace.
      */
-    public static final double CYCLIC_SPEED_GAIN = 250.0;
+    public static final double CYCLIC_SPEED_GAIN = 500.0;
 
     /**
-     * How much closure speed the station-keeping law asks for per block of distance to the point.
+     * The deceleration the closure profile is sized on, in blocks per tick squared.
      *
-     * <p>The whole of the terminal geometry, and the number the arrival's accuracy hangs off. Too
-     * high and the machine arrives faster than it can stop; too low and the last few blocks take
-     * minutes, and worse, the demand falls under {@link #STATION_DEADBAND} before the machine is
-     * over the pad and the stick centres with the error still there. 0.04 asks for the full
-     * {@link #APPROACH_SPEED} at 9 blocks out, 0.12 blocks/tick at 3 and 0.04 at 1 — the last of
-     * those still above the deadband, which is what closes the final block.
+     * <p>The whole of the terminal geometry. The station-keeping law asks for
+     * {@code sqrt(2 * CLOSURE_BRAKING * distance)} — the fastest the machine may be going at this
+     * distance if it is to stop on the point — capped by {@link #APPROACH_SPEED}. So the cap governs
+     * beyond 20 blocks and the profile governs inside it: 0.24 blocks/tick at 10 blocks, 0.11 at 2,
+     * 0.077 at 1. The last of those is well above {@link #STATION_DEADBAND}, which is what closes
+     * the final block; a demand that falls under the deadband before the machine is over the pad
+     * centres the stick with the error still there.
+     *
+     * <p><b>It replaced a proportional law, {@code speed = 0.04 * distance}, and the pair of them is
+     * the one measurement in this file worth repeating.</b> Neither change alone did much; the two
+     * together are a factor of six. Same three sorties, same rig, only these two constants moved:
+     *
+     * <table border="1">
+     *   <caption>Touchdown error, blocks from the pad centre</caption>
+     *   <tr><th></th><th>gain 250</th><th>gain 500</th></tr>
+     *   <tr><td>proportional, 0.04/block</td><td>0.20–0.86</td><td>0.69, 0.69, 0.71</td></tr>
+     *   <tr><td>constant deceleration, 0.003</td><td>0.72, 0.72, 0.75</td><td><b>0.12, 0.12, 0.13</b></td></tr>
+     * </table>
+     *
+     * <p>They interact because they are the two halves of the same loop. The proportional law's
+     * demand collapses towards zero faster than the machine can follow it near the pad — 0.04
+     * blocks/tick at 1 block out, against the 0.077 this one asks for — so the stick centres and the
+     * machine coasts the last block on drag; and at the old gain the loop could not track either
+     * demand well enough for the difference between them to show. Raise the gain so the demand is
+     * actually flown, and the shape of the demand starts to matter.
+     *
+     * <p>0.003 is deliberately under half the 0.0075 b/t² the airframe delivers at half stick near
+     * the hover, so the profile is one the machine can beat rather than one it has to saturate to
+     * meet.
      */
-    public static final double CLOSURE_GAIN = 0.04;
+    public static final double CLOSURE_BRAKING = 0.003;
 
     /**
      * Velocity error, in blocks per tick, below which the cyclic is centred.

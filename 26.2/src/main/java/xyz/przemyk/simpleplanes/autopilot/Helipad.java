@@ -194,9 +194,16 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
     // ------------------------------------------------------------------ the survey
 
     /** What a survey found, whether or not it was good enough to register. */
+    /**
+     * @param scanned whether the approach sectors were actually measured. False when the survey was
+     *                refused before it got that far — an unloaded column, or a box that is not a
+     *                pad-shaped box — and it exists because the report used to print
+     *                {@code clear approach bearings: none} in that case, which reads as "measured,
+     *                and there is no way in" when the truth is "never looked".
+     */
     public record Survey(@Nullable Helipad pad, BlockPos markedCentre, BlockPos derivedCentre,
                          int radius, int roughness, int obstacleHeight, boolean[] sectors,
-                         List<String> refusals, List<String> warnings) {
+                         boolean scanned, List<String> refusals, List<String> warnings) {
 
         public boolean accepted() {
             return pad != null;
@@ -256,7 +263,7 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
             refusals.add("there is no ground at " + marked.toShortString()
                 + " (the chunk is not loaded, or the column is empty)");
             return new Survey(null, marked, marked, radius, 0, 0,
-                new boolean[RotorcraftConfig.APPROACH_SECTORS], refusals, warnings);
+                new boolean[RotorcraftConfig.APPROACH_SECTORS], false, refusals, warnings);
         }
 
         if (radius < RotorcraftConfig.MIN_PAD_RADIUS) {
@@ -273,7 +280,7 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
         }
         if (!refusals.isEmpty()) {
             return new Survey(null, marked, marked, radius, 0, 0,
-                new boolean[RotorcraftConfig.APPROACH_SECTORS], refusals, warnings);
+                new boolean[RotorcraftConfig.APPROACH_SECTORS], false, refusals, warnings);
         }
 
         BlockPos centre = levelOnPad(level, centreOnPad(level, marked, radius), radius);
@@ -295,13 +302,16 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
                 + RotorcraftConfig.APPROACH_LENGTH + " blocks. A machine could hover over this pad"
                 + " but not fly to it");
         } else if (clear == 1) {
-            warnings.add("only one clear approach bearing ("
-                + AutopilotMath.compassDisplay(sectorHeading(firstSet(sectors)))
-                + " deg); every arrival will run in from the same side");
+            // %03d, the same as every other bearing this feature prints. A survey line that says
+            // "90 deg" beside a list that says "090" reads as two different numbers.
+            warnings.add(String.format("only one clear approach bearing (%03d deg); every arrival"
+                    + " will run in from the same side",
+                AutopilotMath.compassDisplay(sectorHeading(firstSet(sectors)))));
         }
         if (roughness > 0) {
             warnings.add("the pad surface varies by " + roughness
-                + " block; a helicopter settles on a point, so flat is better");
+                + (roughness == 1 ? " block" : " blocks")
+                + "; a helicopter settles on a point, so flat is better");
         }
 
         int mask = 0;
@@ -311,7 +321,7 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
             }
         }
         Helipad pad = refusals.isEmpty() ? new Helipad(name, centre, radius, mask) : null;
-        return new Survey(pad, marked, centre, radius, roughness, obstacleHeight, sectors,
+        return new Survey(pad, marked, centre, radius, roughness, obstacleHeight, sectors, true,
             refusals, warnings);
     }
 

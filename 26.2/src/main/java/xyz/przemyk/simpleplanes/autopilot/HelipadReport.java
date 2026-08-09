@@ -80,10 +80,16 @@ public final class HelipadReport {
             + (survey.obstacleHeight() <= 0
                 ? "nothing standing over the pad"
                 : "something stands " + survey.obstacleHeight() + " block(s) above it"));
-        output.line("  clear approach bearings: " + describeSectors(survey)
-            + " (" + survey.clearSectorCount() + " of " + RotorcraftConfig.APPROACH_SECTORS
-            + ", checked to " + RotorcraftConfig.APPROACH_LENGTH + " blocks on a "
-            + (int) RotorcraftConfig.APPROACH_SLOPE_DEGREES + " degree path)");
+        // "not measured" and "measured, and there is no way in" are different facts and the line
+        // used to print the second when it meant the first: a survey refused for its size or for
+        // unloaded ground never reaches the sector scan, and an all-false array read out as
+        // "clear approach bearings: none (0 of 8)".
+        output.line(survey.scanned()
+            ? "  clear approach bearings: " + describeSectors(survey)
+                + " (" + survey.clearSectorCount() + " of " + RotorcraftConfig.APPROACH_SECTORS
+                + ", checked to " + RotorcraftConfig.APPROACH_LENGTH + " blocks on a "
+                + (int) RotorcraftConfig.APPROACH_SLOPE_DEGREES + " degree path)"
+            : "  clear approach bearings: not measured - the pad was refused before the sector scan");
         for (String warning : survey.warnings()) {
             output.warn("  warning: " + warning);
         }
