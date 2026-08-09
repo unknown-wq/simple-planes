@@ -1883,6 +1883,11 @@ can stop in the air needs none of it, and adding a helicopter branch to each wou
 arrival planner — the part of this feature that took three agents to get right and that is working,
 tested and shipped — in order to teach it about an aircraft it will never fly.
 
+It is also the split the airframe itself makes: `HelicopterEntity` overrides all six of
+`PlaneEntity`'s flight hooks, so **not one line of the fixed-wing flight model runs on it** — no
+wing, no lift, no stall speed, no take-off speed (`HELICOPTER-PHYSICS.md` §1.2). A controller shared
+with the plane would be a controller with two disjoint halves.
+
 The fixed-wing state machine is therefore **not modified at all**. `PlaneAutopilot` gains one field,
 one guard at the top of `tick`, and a handful of one-line delegations:
 
@@ -1929,71 +1934,148 @@ dozen — a rotorcraft arrival has no shape to get wrong. The bearing it runs in
 nearest the direction it is already coming from, so a pad with one way in is approached from that way
 and a pad with eight is approached from wherever the machine happens to be.
 
-#### Written against quantities, not against this flight model
+#### Written against quantities, and what that bought when the airframe changed
 
-The helicopter flight model is being replaced. Every loop here therefore closes on something
-**measurable** — vertical speed, ground speed, heading — and drives the same controls a player has
-until the measurement matches the demand:
+This controller was written while `HelicopterEntity` was being replaced underneath it. Every loop
+therefore closes on something **measurable** — vertical speed, velocity error, heading — and the
+mapping onto actual controls is confined to three short methods at the bottom of the class. When the
+new flight model landed, the profile, the timeouts, the survey, the reporting and both flight laws
+did not move at all; three actuators and four constants did. That is the whole argument for writing
+it this way, and it is worth recording as a result rather than as an intention.
 
-* **Collective / throttle** integrates the vertical-speed error. Whatever thrust a notch is worth,
-  the integrator finds the notch that holds the demanded rate, so a model that changes the thrust per
-  notch changes only how long it takes to settle. Measured: commanded +0.30 blocks/tick on the
-  departure, settled at +0.24 within 20 ticks of lift-off.
-* **Cyclic / `moveForward`** is the forward-acceleration demand, switched with hysteresis on the
-  ground-speed error.
-* **Pedals / `moveStrafing`** are the yaw demand, proportional to the heading error with a **rate
-  lead**. The lead is what makes one law work on a plant whose *rate* follows the input (as this
-  model's yaw does) and on one whose *acceleration* does (as a plane's does), so it survives the
-  rewrite either way. If yaw becomes an acceleration, `YAW_RATE_LEAD` is the number that grows and
-  nothing else.
+| control | how the loop uses it |
+|---|---|
+| **collective** (`setThrottle`) | a search for the notch whose *equilibrium* vertical speed is the one demanded — one notch every 2 ticks, with a one-step slam for the case that has no ticks to spare |
+| **cyclic** (`setCyclicForward` / `setCyclicRight`) | proportional-plus-integral on the **velocity error**, integrated in the **world** frame and resolved into the two sticks every tick |
+| **pedal** (`setPedal`) | `AutopilotMath.bangBang` on the heading error, unchanged from the fixed-wing rudder |
 
-**One method shows the current model through, and it is deliberately the only one.**
-`HelicopterAutopilot#actuate` maps those three demands onto the entity's controls, and it is the
-merge point. What it assumes today: `moveStrafing` yaws the machine and the sign is inverted
-(`tickRoll` does `setYRot(getYRot() - moveStrafing * 2)`); `moveForward > 0` pitches the nose down and
-raises the thrust, which is how it translates; `MOVE_UP` is a collective boost *and* it disables the
-yaw control while it is set, which is why it is used only for the vertical departure; and on the
-ground thrust is zero unless `MOVE_UP` is set, so a lift-off cannot start without it. Everything above
-`actuate` is written in blocks per tick and degrees.
+**The collective is a search, not a table and not a PID.** `HELICOPTER-PHYSICS.md` §2 measures the
+ladder exactly — notches 0 to 5 settle at −8.6, −6.2, −3.5, 0.0, +2.7, +4.8 blocks per second, with
+0.000 blocks of drift in 400 ticks at the hover notch — so "pick the notch nearest the demand" is
+the entire vertical controller. Copying that table into the autopilot would have been the wrong way
+to use it: those are the equilibria at a *level* disc, and level flight at 25° of tilt wants notch
+3.31, which is not a notch. Searching finds 3 in a hover, dithers 3/4 in the cruise (which is what
+§3 says to do, and what the fixed-wing throttle loop already does), and needs no revision if the
+ladder moves.
 
-All rotorcraft tuning is in `autopilot/RotorcraftConfig.java`, separate from `AutopilotConfig` for the
-same reason the controller is separate: the fixed-wing numbers are one interlocking geometry fitted
-to `PlaneEntity#tickMotion`, and mixing a second aircraft's numbers in would make both harder to
-retune.
+**The pedal is bang-bang because the pedal is a rate command on an integrator.** `setPedal` is a
+sign rather than a proportion, with a `YAW_RAMP` of 0.5 °/tick² — the same double-integrator shape
+`PlaneEntity#tickYaw` has — so `AutopilotMath.bangBang`, which subtracts the angular stopping
+distance `rate·|rate| / (2·accel)` from the error, is the correct controller for it with not a line
+of change. Yaw is 3.0 °/tick at every airspeed and attitude, so a heading is a heading whether the
+machine is hovering or at cruise.
 
-#### Thrust along the velocity error
+**`setPitchUp` is never called on a helicopter.** It does nothing on this airframe *and* its sign
+convention is the opposite of the cyclic's, so a controller reaching for it out of fixed-wing habit
+would be writing into a control that is both dead and backwards.
 
-The one control idea in here worth reading, and it came out of a failure.
+#### The cyclic loop, and two ways of getting it wrong
+
+The cyclic is a **position** command: hold the stick and the machine settles at a speed. That single
+property decides the shape of the controller, and this loop was written wrong twice before it was
+written right. Both failures are worth keeping, because both look like tuning problems and neither
+is.
+
+**First: proportional alone leaves a permanent shortfall.** `stick = G·(demand − v)` closes a loop
+whose plant already has a finite gain `v = k·stick`, so its equilibrium is
+`v = demand · kG/(1 + kG)` — not an offset that decays, a shortfall that stays. Measured with
+G = 160 and the airframe's k of about 0.0125: a cruise commanded at 1.20 blocks/tick flew **0.815**,
+and the predicted ratio for that loop gain is 0.67 against the observed 0.68. The cure is to
+integrate the error onto the stick instead, whose equilibrium is where the error is zero whatever
+the plant gain is.
+
+**Second: integral alone oscillates, and it oscillates because of what is already in the chain.**
+Tilt sets an acceleration, acceleration integrates to velocity, velocity integrates to position —
+two integrations before the loop is closed, plus a proportional outer law on position. Making the
+inner loop a third integration puts 270° of phase lag round it. Measured: an arrival held station to
+within 2 to 3.5 blocks of the pad and oscillated there at 0.1 to 0.2 blocks/tick for the whole
+2400-tick descent timeout, never slow enough to be allowed to let down, and reported honestly that
+it could not settle. The proportional term is a velocity damper and is what stops that; the integral
+stays, small and slow, purely to remove the shortfall on a constant demand.
+
+**And the integrator has to live in the world frame.** Held in the body frame it goes into a limit
+cycle for a reason that has nothing to do with gains: the body is turning at up to 3 °/tick under
+it, so a stick position that meant "forward" a second ago means "sideways" by the time the pedal has
+finished. Measured with the integrator in the body frame, an arrival limit-cycled at 4 to 7 blocks
+and spun through 200° of heading doing it. Integrating in world coordinates and resolving into the
+two sticks every tick makes the loop independent of what the nose is doing. The clamp is on the
+vector rather than per axis, because the disc has one tilt: clamping x and z separately would let a
+diagonal command ask for 1.41 times full stick.
+
+#### Two axes, and why the arrival needs both
+
+The one control idea in here worth reading, and it came out of a failure on the *previous* flight
+model that the new one made easy to fix.
 
 The first arrival law was the obvious one and the same one the fixed-wing controller uses: point the
 nose at the pad and ask for a speed. Measured on the rig, a machine arriving over a pad on that law
-**never got closer than 10.5 blocks**. It orbited the pad for the whole 2400-tick descent timeout and
+**never got closer than 10.5 blocks**. It orbited the pad for the whole descent timeout and
 reported, correctly, that it could not settle:
 
 ```
 Helicopter #25 could not settle onto helipad-2 - 12.8 blocks off the pad centre and 30.5 blocks up after 2401 ticks, at 599.7, -29.5, 13.3 in final.
 ```
 
-The cause is a property of the airframe rather than of the gains, and it is exactly the property that
-separates a rotorcraft from a plane here: `HelicopterEntity#tickRotateMotion` returns the attitude
-unchanged, so **the velocity vector does not follow the nose**. A plane's does — that is what a wing
-is for — which is why the fixed-wing controller can treat "point at the target" and "go towards the
-target" as the same instruction. A helicopter that turns is a helicopter still moving the way it was,
-and the only thing that changes its velocity is thrust. So pointing at the pad and opening the
-throttle accelerates *past* it, and pointing at it again from the far side accelerates past it again.
+What made that an orbit rather than a wobble was that the only translational control was "accelerate
+along the nose", so correcting a lateral error meant turning — and the machine kept its old velocity
+while it turned. Point at the pad, accelerate, go past it; point at it again from the far side,
+accelerate, go past it again.
 
-The law that works follows from that: **thrust along the velocity error.** Take the velocity the
-machine wants — towards the point, at a speed proportional to how far away it is — subtract the
-velocity it has, and point the nose at the difference. Far out and slow, the difference points at the
-target and this reduces to the naive law. Closing too fast, the difference points backwards and the
-machine turns round and brakes, which is what a pilot does and what nothing else here can do: idle is
-not a brake in this flight model, and neither is a negative cyclic. It is also the version that
-survives the model being rewritten, because it is written in velocities: if the new model does turn
-the velocity vector with the nose, the error simply shrinks faster and the same law converges sooner.
+The rewritten airframe has a second axis. `setCyclicRight` tips the disc sideways, and below
+`HelicopterEntity.TURN_COORDINATION_SPEED` (0.80 b/t of *forward* speed) that is a pure sidestep
+with no turn in it at all; an arrival flown at `APPROACH_SPEED` is comfortably inside that band. So
+the arrival law is: take the velocity the machine wants — towards the point, at a speed proportional
+to how far away it is — subtract the velocity it has, and put the difference on the two sticks. The
+nose is left pointing at the target and never has to be turned to correct a drift.
+
+Braking is the same command with the sign reversed, which on a position-command cyclic is simply a
+negative stick. Full aft is 24 blocks/s to a stop in 60 ticks and 43 blocks (`HELICOPTER-PHYSICS.md`
+§3), so there is **no deceleration schedule anywhere in this arrival** — no braking table, no
+`speedSchedule`, nothing of what the fixed-wing side needs 270 blocks of runway-in to do.
 
 Two laws, chosen by phase. The transit uses bearing-and-speed, which is right while the target is
-hundreds of blocks away and is what the fixed-wing cruise does. Everything from the run-in inwards
-uses `HelicopterAutopilot#station`.
+hundreds of blocks away and is what the fixed-wing cruise does; it drives the longitudinal stick only
+and leaves the lateral one centred, because at transit speed a bank is a turn rather than a sidestep
+and the pedal is this airframe's turn control. Everything from the run-in inwards uses
+`HelicopterAutopilot#station`, which drives both.
+
+#### Measured, nine sorties
+
+All on the headless rig with the current flight model, one machine at a time, no force-loading, pads
+cleared between runs. `helipad-3` is a 9x9 stone plinth 3 blocks proud of the superflat; the rest
+are flush 7x7 pads.
+
+| from → to | distance | commanded | cruise made good | off the pad centre | lift-off → touchdown |
+|---|---|---|---|---|---|
+| 1 → 2 | 600 | 1.20 | 1.101 | **0.81** | 1107 |
+| 2 → 1 | 600 | 1.20 | 1.10 | 0.81 | 1107 |
+| 1 → 3 | 1414 | 1.20 | 1.052 | **0.19** | 1818 |
+| 3 → 1 | 1414 | 1.20 | 1.051 | 0.48 | 1842 |
+| 1 → 4 | 400 | 1.20 | 0.899 | 0.31 | 903 |
+| 4 → 5 | 640 | 1.20 | 0.981 | 0.97 | 1162 |
+| 5 → 3 | 1118 | 1.20 | 1.038 | 0.98 | 1584 |
+| 3 → 4 | 1720 | 1.20 | 1.061 | 0.43 | 2110 |
+| 1 → 2 | 600 | **0.40** | **0.416** | 0.37 | 1846 |
+
+**Nine of nine landed on the pad. Worst lateral error 0.98 blocks, mean 0.59.** The other numbers are
+the same on every sortie to the tick, because none of the phases is speed-dependent:
+
+* **spawn to airborne: 7 ticks** — one block off the pad, every run.
+* **the vertical departure: 138 ticks** to `DEPARTURE_HEIGHT`, every run.
+* **the run-in: entered `FINAL` 23.5–24.0 blocks from the pad**, 28.5–34.6 above it.
+* **arrival to parked: 433–510 ticks** from the run-in call to the machine standing still.
+
+**The cruise is 1.10 against a commanded 1.20 and that is not a defect.** Level flight at full
+forward cyclic wants collective 3.31, the collective is an integer, and the loop dithers 3/4 —
+`HELICOPTER-PHYSICS.md` §3 says exactly this. Commanded 0.40 is made good at 0.416, i.e. the loop
+holds what it is told whenever what it is told is inside the envelope, and saturates gracefully when
+it is not. Commanding 2.00 flies the same 1.10 as commanding 1.20, for the same reason.
+
+**The plinth is the row that proves the geometry.** `helipad-3` was marked with two corners whose
+midpoint is `999, 999`, the survey derived `1000, 1000` from the plinth's own edges and reported
+`touchdown at 1000.5, -57.0, 1000.5`, and the two arrivals onto it touched down at
+`1000.3, -57.0, 1000.6` and `1001.2, -57.0, 1001.2`. The marked shape and the used shape are the
+same shape.
 
 #### The descent is gated on the lateral error
 
@@ -2698,11 +2780,15 @@ world cannot double-count either.
   survey is not noticed until the machine is in it. `/autopilot helipads info` says when a live
   re-measurement disagrees with the stored one, and `resurvey` stores the new answer, but both need a
   human to ask.
-* **Every rotorcraft number is provisional against the flight-model rewrite.** The control loops are
-  written on measured quantities and should survive it, but the speeds, rates and timeouts in
-  `RotorcraftConfig` were checked against the flight model as it is today. In particular the
-  helicopter cannot make good the 1.20 blocks/tick it is commanded by default — it tops out at about
-  0.85 while holding altitude — and the loop simply saturates rather than complaining.
+* **The default cruise is the fastest level flight there is, so it is never quite made good.**
+  Holding altitude at full forward cyclic wants collective 3.31 and the collective is an integer, so
+  the loop dithers 3/4 and the machine settles around **1.10 blocks/tick against the 1.20 it is
+  commanded** (`HELICOPTER-PHYSICS.md` §3). Nothing complains, because nothing is wrong: it is flying
+  as fast as level flight goes. Ask for less and it holds exactly what it was asked for.
+* **Nothing on the vertical axis can damage a helicopter, so the let-down proves less than a landing
+  does.** Autorotation is 0.432 b/t and the free-landing band is 0.60, so every descent this
+  controller can command arrives undamaged whatever it does. The number the arrival is judged on is
+  therefore the lateral error, not the survival.
 * **No wind.** Minecraft 26.2 has no wind API, so runway selection uses approach obstacles and slope
   only. Nothing was invented here.
 * **Circuit joins are simplified.** The aircraft flies direct to the intercept point and tracks the

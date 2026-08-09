@@ -2455,7 +2455,12 @@ public class PlaneAutopilot {
             return;
         }
         ValueOutput child = output.child("autopilot");
-        child.putString("mode", mode.getName());
+        // getMode(), not the field: a rotorcraft flight keeps its mode in HelicopterAutopilot and
+        // leaves this one on IDLE, so writing the field would put "idle" on every helicopter save.
+        // Nothing reads it back for a helicopter — load() restores those into the transit phase
+        // whatever they were doing — but a save file that says what the aircraft was doing is worth
+        // the one call, and for a plane the two are the same object.
+        child.putString("mode", getMode().getName());
         child.store("plan", FlightPlan.CODEC, plan);
         child.putInt("go_arounds", goArounds);
         child.putBoolean("gates_disabled", gatesDisabled);

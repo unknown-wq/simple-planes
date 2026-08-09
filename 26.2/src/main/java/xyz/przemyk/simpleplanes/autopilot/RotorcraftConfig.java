@@ -11,13 +11,18 @@ package xyz.przemyk.simpleplanes.autopilot;
  * turn radius worth the name — so mixing the two sets would make both harder to retune. They are
  * separate machines and they get separate files.
  *
- * <p><b>Almost nothing here is a gain.</b> The control loops in {@link HelicopterAutopilot} close on
- * measured quantities — vertical speed, ground speed, heading — and drive the same discrete controls
- * a player has, so what they need from this file is <em>demands</em> and <em>tolerances</em>, not
- * per-tick coefficients fitted to the current flight model. That is deliberate: the helicopter
- * flight model is being rewritten, and a controller tuned against today's numbers would have to be
- * re-tuned against tomorrow's. The two numbers here that <em>are</em> fitted to the airframe rather
- * than to the mission are marked as such.
+ * <p><b>Most of this is demands and tolerances rather than gains.</b> The control loops in
+ * {@link HelicopterAutopilot} close on measured quantities — vertical speed, velocity error, heading
+ * — and drive the same controls a player has, so what they mostly need from this file is what to ask
+ * for and how close is close enough. That was deliberate while the flight model was being rewritten
+ * underneath them, and it paid: when the rewrite landed the profile, the timeouts and the survey did
+ * not move at all, and only the four loop constants below had to be re-fitted.
+ *
+ * <p>The four that are fitted to the airframe, and would have to be looked at again if it changed:
+ * {@link #VERTICAL_SPEED_DEADBAND} (sized on the gaps in the collective ladder),
+ * {@link #CYCLIC_SPEED_GAIN} and {@link #CYCLIC_TRIM_GAIN} (sized on the cyclic's speed map and on
+ * {@code MAX_CYCLIC_RATE}), and {@link #CLOSURE_GAIN} (sized on how fast the machine can stop).
+ * Everything else is a mission number.
  */
 public final class RotorcraftConfig {
 
@@ -142,10 +147,24 @@ public final class RotorcraftConfig {
     /** Clearance held above the highest terrain on the leg, in blocks. */
     public static final double CRUISE_CLEARANCE = 30.0;
 
-    /** Default en-route speed, in blocks per tick. */
+    /**
+     * Default en-route speed, in blocks per tick.
+     *
+     * <p>1.20 b/t is 24 blocks/s, which HELICOPTER-PHYSICS.md §3 measures as full forward cyclic at
+     * collective 4 — the cruise a player actually flies. It is under half the fixed-wing default of
+     * 2.60, which is about right for a helicopter, and it leaves the boosted airframe's 1.75
+     * available to anyone who asks for it.
+     */
     public static final double CRUISE_SPEED = 1.20;
 
-    /** Bounds on the commanded en-route speed. A helicopter is not a fast aircraft. */
+    /**
+     * Bounds on the commanded en-route speed.
+     *
+     * <p>The ceiling is {@code HelicopterEntity.MAX_SPEED} — the model's own hard backstop — rather
+     * than the 1.75 a boosted airframe settles at, for the same reason the fixed-wing range is wider
+     * than the flyable one: a number outside the band should be clamped and reported, not rejected.
+     * The floor is well below a plane's stall speed because a helicopter has no such thing.
+     */
     public static final double MIN_CRUISE_SPEED = 0.20;
     public static final double MAX_CRUISE_SPEED = 2.00;
 
@@ -167,8 +186,10 @@ public final class RotorcraftConfig {
     /**
      * Distance at which the approach speed schedule starts, in blocks.
      *
-     * <p>Generous: the drag on this airframe is high and overshooting the pad costs a whole
-     * re-positioning, whereas arriving slow costs a few seconds of hover.
+     * <p>Twice what the airframe needs, and deliberately. HELICOPTER-PHYSICS.md §3 measures full aft
+     * cyclic as 24 blocks/s to a stop in <b>60 ticks and 43 blocks</b> — nothing like the 270 a
+     * boosted plane needs, which is why there is no deceleration table anywhere in this file. The
+     * margin buys the turn onto the run-in bearing rather than the braking.
      */
     public static final double DECELERATION_DISTANCE = 90.0;
 
@@ -178,8 +199,14 @@ public final class RotorcraftConfig {
     /** Horizontal speed at or below which the machine counts as stopped over the pad. */
     public static final double HOVER_SPEED = 0.08;
 
-    /** Commanded rate of descent onto the pad, in blocks per tick. */
-    public static final double DESCENT_RATE = 0.22;
+    /**
+     * Commanded rate of descent onto the pad, in blocks per tick.
+     *
+     * <p>Between the equilibria of collective 2 (−0.173) and collective 1 (−0.312), so the loop
+     * dithers between the two rather than sitting on a notch — which is the same thing the cruise
+     * does between 3 and 4 and is what the collective search is for.
+     */
+    public static final double DESCENT_RATE = 0.25;
 
     /**
      * Height above the pad at which the descent is slowed to {@link #TOUCHDOWN_RATE}, in blocks.
@@ -188,10 +215,25 @@ public final class RotorcraftConfig {
      */
     public static final double TOUCHDOWN_HEIGHT = 6.0;
 
-    /** Commanded rate of descent below {@link #TOUCHDOWN_HEIGHT}. */
-    public static final double TOUCHDOWN_RATE = 0.08;
+    /**
+     * Commanded rate of descent below {@link #TOUCHDOWN_HEIGHT}.
+     *
+     * <p>Not a structural limit — HELICOPTER-PHYSICS.md §2 shows the vertical axis cannot damage
+     * this airframe at all, because the worst case (autorotation at 0.432 b/t) is inside
+     * {@code PlaneCollisions}' free-landing band of 0.60. It is a <em>positional</em> limit: the
+     * lateral loop is still correcting while the machine comes down, and 0.12 b/t leaves it 50 ticks
+     * over the last 6 blocks to finish doing so.
+     */
+    public static final double TOUCHDOWN_RATE = 0.12;
 
-    /** Commanded rate of climb on a vertical departure, in blocks per tick. */
+    /**
+     * Commanded rate of climb on a vertical departure, in blocks per tick.
+     *
+     * <p>Above what an unboosted airframe can hold (collective 5 settles at +0.238), and reachable
+     * on the boosted one every autopilot machine is built with (+0.574 at notch 10). The collective
+     * search simply saturates on an unboosted machine and the departure takes longer, which is the
+     * right failure.
+     */
     public static final double CLIMB_RATE = 0.30;
 
     /**
@@ -206,9 +248,10 @@ public final class RotorcraftConfig {
     /**
      * Vertical-speed error, in blocks per tick, below which the collective is left alone.
      *
-     * <p>One of the two numbers here that is about the airframe rather than the mission: it is a
-     * deadband on a loop whose actuator is a throttle notch, so it has to be wider than the vertical
-     * speed one notch produces or the lever chatters. Provisional against the new flight model.
+     * <p>The one number here fitted to the airframe rather than to the mission. It is a deadband on
+     * a loop whose actuator is a whole notch, and the smallest gap in the collective ladder is
+     * 0.104 b/t (notch 4 to 5), so anything much larger than a tenth of that would stop the search
+     * short of the right notch and anything smaller makes it chatter between two.
      */
     public static final double VERTICAL_SPEED_DEADBAND = 0.02;
 
@@ -226,52 +269,58 @@ public final class RotorcraftConfig {
     public static final int COLLECTIVE_INTERVAL = 2;
 
     /**
-     * Ground-speed error, in blocks per tick, below which the cyclic is left alone. The other
-     * airframe-fitted number, and provisional for the same reason.
+     * Percent of cyclic stick added per block per tick of velocity error, per tick.
+     *
+     * <p>An integrator gain, not a proportional one — {@code HelicopterAutopilot#trim} explains why
+     * the proportional version leaves a permanent shortfall and what it measured. What sets the size
+     * is that this term exists only to remove the steady-state shortfall a proportional loop leaves
+     * on a constant demand, and it has to be slow enough not to fight the proportional term that is
+     * damping the loop: 3 builds full stick out of a 0.4 b/t error in about 80 ticks, which trims a
+     * cruise out inside four seconds and is far too slow to destabilise an arrival.
      */
-    public static final double GROUND_SPEED_DEADBAND = 0.05;
+    public static final double CYCLIC_TRIM_GAIN = 3.0;
 
     /**
-     * Heading error, in degrees, that produces full pedal.
+     * Percent of cyclic stick per block per tick of velocity error — the proportional half.
      *
-     * <p>Proportional rather than bang-bang, because the yaw plant here is a rate plant rather than
-     * the double integrator a plane's yaw is, and bang-bang on a rate plant limit-cycles about the
-     * deadband instead of settling.
+     * <p>This is the damping, and without it the loop oscillates: see {@code HelicopterAutopilot#trim}
+     * for the measurement. 250 asks for full stick at 0.40 blocks/tick of error, which is most of the
+     * airframe's cruise speed, so it saturates only on a genuine step demand and is a smooth damper
+     * inside that.
      */
-    public static final double YAW_ERROR_SPAN = 12.0;
-
-    /**
-     * Ticks of yaw rate subtracted from the heading error before the pedal law sees it.
-     *
-     * <p>This is the whole of what makes the same law work on both plants. With a rate plant it is
-     * a damping term that costs a little settling time; with an acceleration plant it is the lead
-     * that stops the controller overshooting, which is what {@code AutopilotMath.bangBang} provides
-     * for the fixed-wing controls. If the new flight model turns yaw into an acceleration, this is
-     * the number that has to grow, and nothing else.
-     */
-    public static final double YAW_RATE_LEAD = 2.0;
+    public static final double CYCLIC_SPEED_GAIN = 250.0;
 
     /**
      * How much closure speed the station-keeping law asks for per block of distance to the point.
      *
      * <p>The whole of the terminal geometry, and the number the arrival's accuracy hangs off. Too
-     * high and the machine arrives faster than it can stop and spirals; too low and it takes minutes
-     * to cover the last ten blocks. 0.02 asks for 0.24 blocks/tick at 12 blocks out and 0.10 at 5,
-     * which is inside what thrust-along-the-velocity-error can bleed off in the distance remaining.
+     * high and the machine arrives faster than it can stop; too low and the last few blocks take
+     * minutes, and worse, the demand falls under {@link #STATION_DEADBAND} before the machine is
+     * over the pad and the stick centres with the error still there. 0.04 asks for the full
+     * {@link #APPROACH_SPEED} at 9 blocks out, 0.12 blocks/tick at 3 and 0.04 at 1 — the last of
+     * those still above the deadband, which is what closes the final block.
      */
-    public static final double CLOSURE_GAIN = 0.02;
+    public static final double CLOSURE_GAIN = 0.04;
 
     /**
-     * Velocity error, in blocks per tick, below which the station-keeping law does nothing.
+     * Velocity error, in blocks per tick, below which the cyclic is centred.
      *
-     * <p>Both a deadband on the cyclic and a guard on the heading: below it there is no meaningful
-     * direction in the error vector, and pointing the nose at the direction of the rounding noise
-     * makes the machine spin on the spot over its own pad.
+     * <p>A deadband on a position command, so it decides how still a hover is rather than how much
+     * the stick moves: below it the disc goes level and the machine drifts on drag alone.
      */
     public static final double STATION_DEADBAND = 0.03;
 
-    /** Heading error, in degrees, below which no yaw input is given. */
-    public static final double HEADING_DEADBAND = 3.0;
+    /**
+     * How near the target the station-keeping law stops pointing the nose at it, in blocks.
+     *
+     * <p>A nose chasing a point it is standing over hunts — the same reason the fixed-wing taxi
+     * stops chasing its lineup point inside {@code TAXI_LINEUP_RADIUS}. It costs nothing here
+     * because the lateral cyclic corrects the drift without the nose having to move.
+     */
+    public static final double STATION_POINT_RADIUS = 2.5;
+
+    /** Heading error, in degrees, below which no pedal is given. */
+    public static final double HEADING_DEADBAND = 2.0;
 
     /** Heading error, in degrees, above which the machine stops translating and turns first. */
     public static final double TURN_FIRST_ERROR = 60.0;
@@ -286,7 +335,7 @@ public final class RotorcraftConfig {
     public static final int SETTLED_TICKS = 20;
 
     /** Ticks a departure may take to leave the pad before it is called a failure. */
-    public static final int DEPARTURE_TIMEOUT = 1200;
+    public static final int DEPARTURE_TIMEOUT = 600;
 
     /** Ticks the descent onto a pad may take before it is called a failure. */
     public static final int DESCENT_TIMEOUT = 2400;

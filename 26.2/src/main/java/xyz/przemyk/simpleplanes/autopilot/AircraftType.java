@@ -14,16 +14,24 @@ import java.util.function.Supplier;
 /**
  * Which airframe an autopilot sortie flies.
  *
- * <p><b>Helicopters are here now, and they are not interchangeable with the other three.</b> The
- * original exclusion was right about the diagnosis and is now solved differently: {@code
- * HelicopterEntity} overrides {@code tickPitch}, {@code tickRoll}, {@code tickRotateMotion} and
- * {@code getTickPush}, so none of the control laws in {@link PlaneAutopilot} describe it — and so it
- * is not flown by {@link PlaneAutopilot} at all, but by {@link HelicopterAutopilot}, between
- * {@link Helipad}s rather than between {@link Airfield}s. What that means for this enum is that
- * {@link #HELICOPTER} is a value {@link #of} can return and {@link #tag} can print, so a status line
- * and a tower board can name the thing they are looking at — and that it is <em>not</em> in
- * {@link #FLYABLE}, so {@code random} never draws one and {@code /autopilot flight … type
- * helicopter} is refused rather than producing a rotorcraft on a runway.
+ * <p><b>Helicopters are here now, and the reason they used to be excluded has changed.</b> The old
+ * reason was that {@code HelicopterEntity} had no server-reachable controls at all: its translation
+ * came from {@code TempMotionVars.moveForward} / {@code moveStrafing}, which are fed from
+ * {@code Player.zza} / {@code Player.xxa}, and those are written in exactly one place in 26.2 —
+ * {@code LocalPlayer}, on the client. An unmanned helicopter could not be moved, only watched. That
+ * is fixed in the airframe rather than here: {@code HelicopterEntity} now has a synched, persisted,
+ * server-settable control surface — collective, two cyclic axes and a pedal — documented in
+ * {@code HELICOPTER-PHYSICS.md}.
+ *
+ * <p>What has <em>not</em> changed is that none of the control laws in {@link PlaneAutopilot}
+ * describe it. It overrides all six flight hooks, so not one line of the fixed-wing flight model
+ * runs on it: no wing, no lift, no stall speed, no take-off speed. So it is not flown by
+ * {@link PlaneAutopilot} at all, but by {@link HelicopterAutopilot}, between {@link Helipad}s rather
+ * than between {@link Airfield}s. What that means for this enum is that {@link #HELICOPTER} is a
+ * value {@link #of} can return and {@link #tag} can print, so a status line and a tower board can
+ * name the thing they are looking at — and that it is <em>not</em> in {@link #FLYABLE}, so
+ * {@code random} never draws one and {@code /autopilot flight … type helicopter} is refused rather
+ * than producing a rotorcraft on a runway.
  *
  * <p>The three fixed-wing airframes are not interchangeable. {@code getRotationSpeedMultiplier}
  * scales both the pitch and the yaw ramp, so a large plane turns at half the rate of the starter
@@ -133,10 +141,10 @@ public enum AircraftType implements StringRepresentable {
      */
     public static @Nullable AircraftType of(PlaneEntity plane) {
         EntityType<?> type = plane.getType();
-        // The helicopter is matched first because HelicopterEntity extends LargePlaneEntity, so a
-        // check written on the class rather than on the entity type would call every rotorcraft a
-        // large plane. It is an EntityType comparison here, so the order is only documentation —
-        // but the trap is real enough to keep the line about it.
+        // Matched on the EntityType and never on the class. HelicopterEntity used to extend
+        // LargePlaneEntity and now extends LargeAirframeEntity beside it, so any instanceof written
+        // against either would have been silently wrong on one side of that change. An EntityType
+        // comparison was right before it and is right after it.
         if (type == HELICOPTER.entityType().get()) {
             return HELICOPTER;
         }

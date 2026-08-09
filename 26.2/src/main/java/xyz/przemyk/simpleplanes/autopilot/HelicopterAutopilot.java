@@ -88,9 +88,6 @@ public final class HelicopterAutopilot {
     private int settledTicks;
     private boolean padWaitReported;
 
-    /** Latched cyclic state, so the forward demand does not chatter across its deadband. */
-    private boolean translating;
-
     /**
      * Yaw last tick, for the rate term in the pedal law.
      *
@@ -101,6 +98,25 @@ public final class HelicopterAutopilot {
      */
     private double previousYaw;
     private boolean yawInitialised;
+
+    /**
+     * The commanded disc tilt, as a vector in <b>world</b> coordinates, scaled in percent of full
+     * cyclic deflection.
+     *
+     * <p>Held across ticks because the cyclic is a <em>position</em> command and the loop that drives
+     * it is an integrator — see {@link #trim}. In world coordinates rather than body coordinates
+     * because the body is turning underneath it: measured on the rig with the integrator held in the
+     * body frame, an arrival over a pad went into a limit cycle at 4 to 7 blocks and spun through
+     * 200 degrees of heading doing it, because a stick position that meant "forward" a second ago
+     * meant "sideways" by the time the pedal had finished with it. Integrating in the world frame and
+     * resolving into the two sticks every tick makes the loop independent of what the nose is doing.
+     */
+    private double cyclicWorldX;
+    private double cyclicWorldZ;
+
+    /** The integral part of it, kept separately so the proportional part can be recomputed. */
+    private double cyclicTrimX;
+    private double cyclicTrimZ;
 
     // What the loops are asking for this tick, kept for the status line and the trace.
     private double cmdHeading;
@@ -487,80 +503,74 @@ public final class HelicopterAutopilot {
     // ------------------------------------------------------------------ the control loops
 
     /**
-     * One tick of the three loops.
+     * The transit law: point the nose where you are going and ask for a speed.
      *
-     * @param heading    Minecraft yaw the machine should point along
-     * @param altitude   altitude it should hold
-     * @param groundSpeed horizontal speed it should be making good, blocks per tick
+     * <p>Right while the target is hundreds of blocks away, and only then — see {@link #station} for
+     * what replaces it once the target is close.
+     *
+     * @param heading       Minecraft yaw the machine should point along
+     * @param altitude      altitude it should hold
+     * @param groundSpeed   speed it should be making good along the nose, blocks per tick
      * @param verticalLimit largest vertical rate this phase may command, blocks per tick
-     * @param vertical   true while the collective boost is wanted (a departure), which on the
-     *                   current model costs the yaw control — see {@link #actuate}
+     * @param boost         true while the collective boost is wanted, i.e. on a vertical departure
      */
     private void fly(PlaneEntity plane, double heading, double altitude, double groundSpeed,
-                     double verticalLimit, boolean vertical) {
-        Vec3 velocity = plane.getDeltaMovement();
+                     double verticalLimit, boolean boost) {
         cmdHeading = heading;
         cmdAltitude = altitude;
+        cmdVerticalSpeed = verticalDemand(plane, altitude, verticalLimit);
 
-        // Altitude error to a vertical-speed demand, clamped by the phase. One cascade stage, where
-        // the fixed-wing controller needs four, because thrust here is already vertical.
-        double error = altitude - plane.getY();
-        cmdVerticalSpeed = Mth.clamp(error * RotorcraftConfig.ALTITUDE_TO_VERTICAL_SPEED,
-            -verticalLimit, verticalLimit);
-
-        // Do not try to translate while the nose is a long way off: a machine that accelerates
-        // through a 120-degree turn arrives at the turn's far side rather than at the point it was
-        // aiming at.
+        // Do not try to translate while the nose is a long way off. Not because the airframe cannot
+        // — this one accelerates in whatever direction it is pointing — but because a machine that
+        // accelerates through a 120-degree turn arrives at the turn's far side rather than at the
+        // point it was aiming at.
         double headingError = AutopilotMath.angleDelta(plane.getYRot(), heading);
         cmdGroundSpeed = Math.abs(headingError) > RotorcraftConfig.TURN_FIRST_ERROR ? 0.0 : groundSpeed;
 
-        // Hysteresis on the speed error, so the pitch attitude does not chatter across the deadband.
-        double actual = velocity.horizontalDistance();
-        translating = translating
-            ? actual < cmdGroundSpeed + RotorcraftConfig.GROUND_SPEED_DEADBAND
-            : actual < cmdGroundSpeed - RotorcraftConfig.GROUND_SPEED_DEADBAND;
-        actuate(plane, headingError, cmdVerticalSpeed, velocity.y,
-            translating && cmdGroundSpeed > 0, vertical);
+        collective(plane, cmdVerticalSpeed, boost);
+        pedal(plane, headingError);
+        // The velocity this leg wants, as a world vector along the commanded heading. Trimmed on the
+        // same integrator the arrival uses — one law, one frame — and applied with the lateral stick
+        // suppressed, because at transit speed a bank is a turn rather than a sidestep
+        // (HelicopterEntity gates the bank-to-turn term on the forward component of the velocity)
+        // and the pedal is this airframe's turn control.
+        Vec3 wanted = AutopilotMath.pointAlong(Vec3.ZERO, heading, cmdGroundSpeed);
+        Vec3 velocity = plane.getDeltaMovement();
+        trim(wanted.x - velocity.x, wanted.z - velocity.z);
+        cyclic(plane, false);
     }
 
     /**
-     * Station keeping: get to a point and stop there.
+     * Station keeping: get to a point and stop there, on both body axes at once.
      *
      * <h2>Why this is a different law from {@link #fly}, and not a slower version of it</h2>
      * {@code fly} points the nose at the target and asks for a speed, which is exactly right while
-     * the target is a long way off and completely wrong once it is not. Measured on the rig: a
-     * machine arriving over a pad on the "point at it and fly 0.35" law never got closer than 10.5
-     * blocks. It orbited the pad for the whole 2400-tick descent timeout and reported, correctly,
-     * that it could not settle.
+     * the target is a long way off and completely wrong once it is not. Measured on the rig against
+     * the <em>previous</em> flight model: a machine arriving over a pad on the "point at it and fly
+     * 0.35" law never got closer than 10.5 blocks. It orbited the pad for the whole 2400-tick
+     * descent timeout and reported, correctly, that it could not settle.
      *
-     * <p>The cause is a property of the airframe rather than of the gains, and it is the property
-     * that separates a rotorcraft from a plane here: {@code HelicopterEntity#tickRotateMotion}
-     * returns the attitude unchanged, so <b>the velocity vector does not follow the nose</b>. A
-     * plane's does — that is what a wing is for — which is why the fixed-wing controller can treat
-     * "point at the target" and "go towards the target" as the same instruction. A helicopter that
-     * turns is a helicopter still moving the way it was, and the only thing that changes its
-     * velocity is thrust. So pointing at the target and opening the throttle accelerates <em>past</em>
-     * it, and pointing at it again from the far side accelerates past it again: an orbit.
+     * <p>What made that an orbit rather than a wobble was that the only translational control was
+     * "accelerate along the nose", so correcting a lateral error meant turning — and the machine kept
+     * its old velocity while it turned. The rewritten airframe has a second axis:
+     * {@code setCyclicRight} tips the disc sideways, and below
+     * {@code HelicopterEntity.TURN_COORDINATION_SPEED} (0.80 b/t of <em>forward</em> speed) that is a
+     * pure sidestep with no turn in it at all. An arrival flown at
+     * {@link RotorcraftConfig#APPROACH_SPEED} is comfortably inside that band.
      *
-     * <p>The law that works is the one that follows from that: <b>thrust along the velocity
-     * error.</b> Take the velocity the machine wants — towards the point, at a speed proportional to
-     * how far away it is — subtract the velocity it has, and point the nose at the difference. Far
-     * out and slow, the difference points at the target and this reduces to the naive law. Closing
-     * too fast, the difference points backwards and the machine turns round and brakes, which is
-     * what a helicopter pilot does and what nothing else here can do: idle is not a brake in this
-     * flight model, and neither is a negative cyclic.
-     *
-     * <p>It also survives the flight model being rewritten, because it is written in velocities. If
-     * the new model does turn the velocity vector with the nose, the velocity error simply shrinks
-     * faster and the same law converges sooner.
+     * <p>So the law is: take the velocity the machine wants — towards the point, at a speed
+     * proportional to how far away it is — subtract the velocity it has, resolve the difference into
+     * the two body axes, and put each axis on its own cyclic. The nose is left pointing at the target
+     * and never has to be turned to correct a drift. Braking is the same command with the sign
+     * reversed, which on a position-command cyclic is simply a negative stick: full aft is 24
+     * blocks/s to a stop in 60 ticks and 43 blocks (HELICOPTER-PHYSICS.md §3), so there is no
+     * separate deceleration schedule anywhere in this arrival.
      */
     private void station(PlaneEntity plane, Vec3 target, double altitude, double maxSpeed,
                          double verticalLimit) {
         Vec3 position = plane.position();
         cmdAltitude = altitude;
-        double error = altitude - plane.getY();
-        cmdVerticalSpeed = Mth.clamp(error * RotorcraftConfig.ALTITUDE_TO_VERTICAL_SPEED,
-            -verticalLimit, verticalLimit);
+        cmdVerticalSpeed = verticalDemand(plane, altitude, verticalLimit);
 
         double dx = target.x - position.x;
         double dz = target.z - position.z;
@@ -575,22 +585,25 @@ public final class HelicopterAutopilot {
         Vec3 velocity = plane.getDeltaMovement();
         double ex = wx - velocity.x;
         double ez = wz - velocity.z;
-        double magnitude = Math.sqrt(ex * ex + ez * ez);
 
-        // Below the deadband there is nothing worth pointing at: hold the heading rather than
-        // chasing the direction of the numerical noise in a velocity that is already right.
-        double heading = magnitude > RotorcraftConfig.STATION_DEADBAND
-            ? AutopilotMath.headingTo(Vec3.ZERO, new Vec3(ex, 0, ez))
-            : plane.getYRot();
+        // Point at the target while there is a direction to point in. A nose chasing a point it is
+        // standing over hunts, which is the same reason the fixed-wing taxi stops chasing its lineup
+        // point once it is nearly on it.
+        double heading = distance > RotorcraftConfig.STATION_POINT_RADIUS
+            ? AutopilotMath.headingTo(position, target) : plane.getYRot();
         cmdHeading = heading;
         double headingError = AutopilotMath.angleDelta(plane.getYRot(), heading);
 
-        // The forward demand is on the velocity error, not on the speed, and it is gated on the nose
-        // being roughly the right way round: thrusting through a 120-degree pointing error puts
-        // energy into the wrong axis and is how the orbit above sustained itself.
-        translating = magnitude > RotorcraftConfig.STATION_DEADBAND
-            && Math.abs(headingError) < RotorcraftConfig.TURN_FIRST_ERROR;
-        actuate(plane, headingError, cmdVerticalSpeed, velocity.y, translating, false);
+        collective(plane, cmdVerticalSpeed, false);
+        pedal(plane, headingError);
+        trim(ex, ez);
+        cyclic(plane, true);
+    }
+
+    /** Altitude error to a vertical-speed demand, clamped by the phase. */
+    private double verticalDemand(PlaneEntity plane, double altitude, double limit) {
+        double error = altitude - plane.getY();
+        return Mth.clamp(error * RotorcraftConfig.ALTITUDE_TO_VERTICAL_SPEED, -limit, limit);
     }
 
     /** Everything shut: on the pad, or settling onto it. */
@@ -600,79 +613,184 @@ public final class HelicopterAutopilot {
         cmdVerticalSpeed = 0;
         cmdGroundSpeed = 0;
         plane.setThrottle(0);
-        plane.setPitchUp((byte) 0);
         plane.setYawRight((byte) 0);
         host.setRotorControls(0, 0);
-        setCollective(plane, false);
+        cyclicWorldX = 0;
+        cyclicWorldZ = 0;
+        cyclicTrimX = 0;
+        cyclicTrimZ = 0;
+        if (plane instanceof HelicopterEntity helicopter) {
+            helicopter.setCyclicForward(0);
+            helicopter.setCyclicRight(0);
+            helicopter.setCollectiveBoost(false);
+        }
     }
 
-    /**
-     * The three demands, onto the four controls this entity actually has.
+    // ------------------------------------------------------------------ the three actuators
+
+    /*
+     * Everything below here is what knows about the flight model, and nothing above it is. The laws
+     * are written in blocks per tick and degrees; these methods are the only place that knows what a
+     * notch, a percent of cyclic or a pedal sign is.
      *
-     * <p><b>This method is the merge point with the new flight model, and nothing above it is.</b>
-     * What it assumes about {@code HelicopterEntity} today:
-     *
-     * <ul>
-     *   <li>{@code moveStrafing} yaws the machine, and the sign is inverted — {@code tickRoll} does
-     *       {@code setYRot(getYRot() - moveStrafing * 2)}, so a positive strafe is a <em>left</em>
-     *       turn. {@code setYawRight} is driven with the same intent, so that a model which moves
-     *       yaw onto the plane's own yaw control keeps turning the right way.</li>
-     *   <li>{@code moveForward > 0} pitches the nose down and raises the thrust, which is how the
-     *       machine translates; {@code moveForward = 0} levels it and adds horizontal drag, which is
-     *       how it stops.</li>
-     *   <li>{@code MOVE_UP} is a collective boost <em>and</em> it disables the yaw control while it
-     *       is set. That coupling is why it is used only for the vertical departure, where the
-     *       heading is already the one the machine wants.</li>
-     *   <li>On the ground, thrust is zero unless {@code MOVE_UP} is set, so a lift-off cannot start
-     *       without it.</li>
-     * </ul>
-     *
-     * <p>If the sign of the yaw channel or the meaning of {@code moveForward} changes, this method
-     * changes and the flight profile does not.
+     * setPitchUp is never called on a helicopter. It does nothing on this airframe and its sign
+     * convention is the opposite of the cyclic's, so a controller that reached for it out of
+     * fixed-wing habit would be writing into a control that is both dead and backwards.
      */
-    private void actuate(PlaneEntity plane, double headingError, double verticalDemand,
-                         double verticalActual, boolean accelerate, boolean vertical) {
-        // --- collective: an integrator on the vertical-speed error.
+
+    /**
+     * Collective: find the notch whose equilibrium vertical speed is the one being asked for.
+     *
+     * <p><b>A search, not a PID — and not a table either.</b> HELICOPTER-PHYSICS.md §2 measures the
+     * ladder: notches 0 to 5 settle at −8.6, −6.2, −3.5, 0.0, +2.7, +4.8 blocks per second, exactly,
+     * with 0.000 blocks of drift in 400 ticks at the hover notch. So "pick the notch nearest the
+     * demand" is the whole vertical controller. Copying that table in here would be the wrong way to
+     * use it: those are the equilibria at a <em>level</em> disc, and level flight at 25 degrees of
+     * tilt wants notch 3.31, which is not a notch at all. Searching for the notch instead finds 3 in
+     * a hover, dithers 3/4 in the cruise — which is what §3 says to do and what the fixed-wing
+     * throttle loop already does — and needs no revision if the ladder moves.
+     *
+     * <p>The search is one notch every {@link RotorcraftConfig#COLLECTIVE_INTERVAL} ticks, which
+     * reaches any notch from any other inside 10 ticks, with a one-step slam at
+     * {@link RotorcraftConfig#VERTICAL_SPEED_SLAM} for the case that does not have 10 ticks.
+     */
+    private void collective(PlaneEntity plane, double demand, boolean boost) {
+        if (plane instanceof HelicopterEntity helicopter) {
+            helicopter.setCollectiveBoost(boost);
+        }
         int ceiling = maxThrottle(plane);
         int throttle = plane.getThrottle();
-        double verticalError = verticalDemand - verticalActual;
-        if (verticalError > RotorcraftConfig.VERTICAL_SPEED_SLAM) {
+        double error = demand - verticalSpeed(plane);
+        if (error > RotorcraftConfig.VERTICAL_SPEED_SLAM) {
             throttle = ceiling;
-        } else if (verticalError < -RotorcraftConfig.VERTICAL_SPEED_SLAM) {
+        } else if (error < -RotorcraftConfig.VERTICAL_SPEED_SLAM) {
             throttle = 0;
         } else if (ticks % RotorcraftConfig.COLLECTIVE_INTERVAL == 0) {
-            if (verticalError > RotorcraftConfig.VERTICAL_SPEED_DEADBAND) {
+            if (error > RotorcraftConfig.VERTICAL_SPEED_DEADBAND) {
                 throttle++;
-            } else if (verticalError < -RotorcraftConfig.VERTICAL_SPEED_DEADBAND) {
+            } else if (error < -RotorcraftConfig.VERTICAL_SPEED_DEADBAND) {
                 throttle--;
             }
         }
         plane.setThrottle(Mth.clamp(throttle, 0, ceiling));
-
-        // --- cyclic: a single bit, decided by whichever law is flying (see fly and station).
-        float forward = accelerate ? 1.0f : 0.0f;
-
-        // --- pedals: proportional on the heading error with a rate lead. The lead is what makes the
-        // same law work on a plant whose rate follows the input (this model) and on one whose
-        // acceleration does (a plane's yaw), so it survives the rewrite either way.
-        double yawRate = yawInitialised ? Mth.wrapDegrees(plane.getYRot() - previousYaw) : 0.0;
-        previousYaw = plane.getYRot();
-        yawInitialised = true;
-        double yawDemand = Math.abs(headingError) < RotorcraftConfig.HEADING_DEADBAND ? 0.0
-            : Mth.clamp((headingError - yawRate * RotorcraftConfig.YAW_RATE_LEAD)
-                / RotorcraftConfig.YAW_ERROR_SPAN, -1.0, 1.0);
-
-        // Sign: moveStrafing is inverted on this entity (see the javadoc), setYawRight is not.
-        host.setRotorControls((float) -yawDemand, forward);
-        plane.setYawRight((byte) Math.signum(yawDemand));
-        plane.setPitchUp((byte) 0);
-        setCollective(plane, vertical);
     }
 
-    private void setCollective(PlaneEntity plane, boolean up) {
+    /**
+     * Pedal: bang-bang with the angular stopping distance, unchanged from the fixed-wing rudder.
+     *
+     * <p>{@code setPedal} is a sign rather than a proportion, and deliberately: it drives an
+     * integrator with a {@code YAW_RAMP} of 0.5 deg/tick squared, which is the same double-integrator
+     * shape {@code PlaneEntity#tickYaw} has. So {@link AutopilotMath#bangBang} — which subtracts
+     * {@code rate * |rate| / (2 * accel)} from the error so the controller starts braking at exactly
+     * the right moment — is the correct controller for it with not a line of change. A proportional
+     * law here would be the wrong shape and would hunt.
+     *
+     * <p>The rate is measured here rather than read off the entity: the flight director runs at the
+     * top of {@code PlaneEntity#tick}, and whether {@code yRotO} has been refreshed by then is a
+     * detail of the entity's tick order.
+     */
+    private void pedal(PlaneEntity plane, double headingError) {
+        double rate = yawInitialised ? Mth.wrapDegrees(plane.getYRot() - previousYaw) : 0.0;
+        previousYaw = plane.getYRot();
+        yawInitialised = true;
+        byte command = AutopilotMath.bangBang(headingError, rate, HelicopterEntity.YAW_RAMP,
+            RotorcraftConfig.HEADING_DEADBAND);
         if (plane instanceof HelicopterEntity helicopter) {
-            helicopter.setMoveUp(up);
+            helicopter.setPedal(command);
+        } else {
+            plane.setYawRight(command);
         }
+    }
+
+    /**
+     * Cyclic: a position command on both axes, so the demand is a stick position and not a nudge.
+     *
+     * <p>This is the control that makes the arrival simple. Holding the stick buys a fixed disc
+     * tilt, therefore a fixed thrust component, therefore — through the drag curve — a fixed speed;
+     * so a speed error maps straight onto a stick position and the loop is proportional with no
+     * integrator anywhere. Both axes are driven in {@link #station}; only the longitudinal one in
+     * {@link #fly}.
+     */
+    private void cyclic(PlaneEntity plane, boolean lateral) {
+        // moveForward/moveStrafing were the old helicopter's translation inputs and this airframe
+        // does not read them at all. Zeroed rather than ignored, so nothing stale can leak through
+        // the bridge PlaneEntity#tick still reads them from.
+        host.setRotorControls(0, 0);
+        if (!(plane instanceof HelicopterEntity helicopter)) {
+            return;
+        }
+        // World into body. Minecraft yaw 0 is +Z, so the nose unit vector is (-sin yaw, cos yaw) and
+        // "right", which is yaw + 90, is (-cos yaw, -sin yaw).
+        double yaw = Math.toRadians(plane.getYRot());
+        double along = cyclicWorldZ * Math.cos(yaw) - cyclicWorldX * Math.sin(yaw);
+        double across = -cyclicWorldX * Math.cos(yaw) - cyclicWorldZ * Math.sin(yaw);
+        helicopter.setCyclicForward((int) Math.round(along));
+        helicopter.setCyclicRight(lateral ? (int) Math.round(across) : 0);
+    }
+
+    /**
+     * Moves one cyclic stick to reduce a velocity error. <b>An integrator, not a gain.</b>
+     *
+     * <p>The first version of this was proportional — stick position straight from the speed error —
+     * and it is worth recording why that is wrong, because the reasoning is the whole difference
+     * between a rate command and a position command. Cyclic is a position command: hold the stick
+     * and the machine settles at a speed. So a proportional law {@code stick = G * (demand - v)}
+     * closes a loop whose plant already has a finite gain {@code v = k * stick}, and its equilibrium
+     * is {@code v = demand * kG / (1 + kG)} — a permanent shortfall, not an offset that decays.
+     * Measured on the rig with G = 160 and the airframe's k of about 0.0125: a cruise commanded at
+     * 1.20 blocks/tick flew <b>0.815</b>, which is 0.68 of the demand, and the predicted ratio for
+     * that loop gain is 0.67.
+     *
+     * <p>Integrating the error onto the tilt instead has its equilibrium where the error is zero,
+     * whatever the plant gain is — so it holds the speed it was told, at whatever collective notch
+     * the vertical loop happens to be dithering on, and it needs no revision if the drag curve or the
+     * disc angle changes. It cannot wind up either, because the clamp is the actuator's own limit
+     * rather than an arbitrary one, and the entity rate-limits the disc to
+     * {@code MAX_CYCLIC_RATE} anyway, so an over-eager step is absorbed rather than flown.
+     *
+     * <p><b>And it cannot be only an integrator, which is the second thing this method got wrong.</b>
+     * The chain from tilt to position is already two integrations — tilt sets an acceleration,
+     * acceleration integrates to velocity, velocity integrates to position — and making the inner
+     * loop a third put 270 degrees of phase lag round a loop that also has a proportional outer
+     * position law. Measured: an arrival with the pure integrator held station to within 2 to 3.5
+     * blocks of the pad and oscillated there at 0.1 to 0.2 blocks/tick for the whole 2400-tick
+     * descent timeout, never slow enough to be allowed to let down. The proportional term is a
+     * velocity damper and is what stops that; the integral is left in, small, purely to remove the
+     * shortfall on a constant demand.
+     *
+     * <p>The deadband stops the integration and centres the proportional part, so a machine holding a
+     * cruise speed correctly keeps the trim it has found and adds nothing to it.
+     */
+    private void trim(double errorX, double errorZ) {
+        double magnitude = Math.sqrt(errorX * errorX + errorZ * errorZ);
+        double px = 0;
+        double pz = 0;
+        if (magnitude >= RotorcraftConfig.STATION_DEADBAND) {
+            px = errorX * RotorcraftConfig.CYCLIC_SPEED_GAIN;
+            pz = errorZ * RotorcraftConfig.CYCLIC_SPEED_GAIN;
+            cyclicTrimX += errorX * RotorcraftConfig.CYCLIC_TRIM_GAIN;
+            cyclicTrimZ += errorZ * RotorcraftConfig.CYCLIC_TRIM_GAIN;
+            double trim = Math.sqrt(cyclicTrimX * cyclicTrimX + cyclicTrimZ * cyclicTrimZ);
+            if (trim > HelicopterEntity.CYCLIC_FULL) {
+                cyclicTrimX *= HelicopterEntity.CYCLIC_FULL / trim;
+                cyclicTrimZ *= HelicopterEntity.CYCLIC_FULL / trim;
+            }
+        }
+        cyclicWorldX = cyclicTrimX + px;
+        cyclicWorldZ = cyclicTrimZ + pz;
+        // Clamp the vector, not each axis: the disc has one tilt and it is bounded by its magnitude,
+        // so clamping x and z separately would let a diagonal command ask for 1.41 times full stick.
+        double stick = Math.sqrt(cyclicWorldX * cyclicWorldX + cyclicWorldZ * cyclicWorldZ);
+        if (stick > HelicopterEntity.CYCLIC_FULL) {
+            double scale = HelicopterEntity.CYCLIC_FULL / stick;
+            cyclicWorldX *= scale;
+            cyclicWorldZ *= scale;
+        }
+    }
+
+    private static double verticalSpeed(PlaneEntity plane) {
+        return plane instanceof HelicopterEntity helicopter
+            ? helicopter.getVerticalSpeed() : plane.getDeltaMovement().y;
     }
 
     /**
