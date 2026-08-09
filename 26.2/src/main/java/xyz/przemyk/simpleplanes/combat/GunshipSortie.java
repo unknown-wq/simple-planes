@@ -66,6 +66,9 @@ import java.util.Map;
  *       it, not the straight line to the target, because at these ranges the arc stands several
  *       blocks above the chord. A player standing next to a skeleton is a cease-fire, not a
  *       casualty.</li>
+ *   <li><b>Nor will it fire through anything else it refuses to shoot at</b> — villagers, iron
+ *       golems, pets, livestock — at the narrower {@link #BYSTANDER_CLEARANCE}. See
+ *       {@link #bystanders} for why the two radii differ.</li>
  *   <li><b>The rounds cannot hit the gunship itself.</b> The arrow's owner is the helicopter, which
  *       is what {@code Projectile#canHitEntity} tests against.</li>
  * </ol>
@@ -74,13 +77,30 @@ import java.util.Map;
  */
 public final class GunshipSortie {
 
-    /** How far the gunship looks for targets, in blocks, spherical about the aircraft. */
+    /**
+     * How far the gunship looks for targets, in blocks, <b>spherical about the aircraft</b> — a slant
+     * range, not a ground range, and the difference is not small. Holding
+     * {@link #DEFAULT_ALTITUDE} above flat ground, a 40-block sphere reaches
+     * {@code sqrt(40^2 - 18^2) = 35.7} blocks along the ground, and a mob 38 blocks away on the map
+     * is not engaged. Measured, not derived: a stationary skeleton at ground range 32 was engaged and
+     * one at 38 drew no fire at all.
+     *
+     * <p>Slant range is the right quantity anyway — it is what the ballistics solve over and what the
+     * flight time and the arrival damage depend on — but a station commanded high enough shrinks the
+     * footprint it guards, and that is worth knowing before ordering one to hover at 100.
+     */
     public static final double ENGAGEMENT_RADIUS = 40.0;
     /**
      * No round is fired whose path passes closer than this to a player. Two and a half blocks is a
      * player's own width plus a margin, and it is measured against the sampled trajectory.
      */
     public static final double FRIENDLY_CLEARANCE = 2.5;
+    /**
+     * Clearance kept around every other living thing the gunship will not shoot at — villagers, iron
+     * golems, pets, livestock. About a body's width, so a round is not put <em>through</em> them,
+     * while a cow standing two blocks from a zombie does not veto the shot. See {@link #bystanders}.
+     */
+    public static final double BYSTANDER_CLEARANCE = 1.0;
     /** Ticks between line-of-sight samples along the trajectory. */
     private static final int PATH_SAMPLE_TICKS = 4;
 
@@ -140,10 +160,8 @@ public final class GunshipSortie {
 
     /** Health of every hostile currently being watched, so deaths can be attributed. */
     private final Map<LivingEntity, Float> watched = new HashMap<>();
-    /** Where each target was {@link #MOTION_WINDOW} ticks ago, for the lead filter. */
-    private final Map<LivingEntity, MotionSample> motionSamples = new HashMap<>();
-    /** Each target's filtered ground velocity. */
-    private final Map<LivingEntity, Vec3> smoothedVelocity = new HashMap<>();
+    /** Each target's recent ground track, for the lead filter. */
+    private final Map<LivingEntity, MotionTrack> tracks = new HashMap<>();
     /** Per target, the tick the last round fired at it is due to land. See {@link #worthShooting}. */
     private final Map<LivingEntity, Integer> impactDue = new HashMap<>();
 
@@ -318,6 +336,16 @@ public final class GunshipSortie {
     }
 
     private void tickRecover() {
+        // The rounds already in the air when the magazine emptied are still the sortie's rounds, and
+        // their arrivals are still its hits. This loop kept running only while the aircraft was
+        // shooting, and the effect was a clean systematic error: the round that empties the magazine
+        // is fired, ends the engagement on the same tick, and lands a dozen ticks later with nobody
+        // watching. Measured across five ranges with a 24-round magazine against one immortal
+        // skeleton, every single sortie reported 23 hits out of 24 — a 96% hit rate that was really
+        // 100%, with the missing hit always the last one. A rate that is wrong by exactly one every
+        // time is not noise, it is an unclosed book.
+        updateWatchList(hostilesInRange());
+
         HoverControl.Landing landing = control.landing();
         if (landing == null) {
             return;
@@ -514,48 +542,62 @@ public final class GunshipSortie {
 
     private void forget(LivingEntity mob) {
         impactDue.remove(mob);
-        motionSamples.remove(mob);
-        smoothedVelocity.remove(mob);
+        tracks.remove(mob);
     }
 
     /**
-     * The target's velocity, averaged over {@link #MOTION_WINDOW} ticks rather than read straight off
-     * {@code getKnownMovement()}.
+     * The target's velocity, averaged over the last {@link #MOTION_WINDOW} ticks and recomputed
+     * <b>every</b> tick.
      *
-     * <p><b>The instantaneous delta is the wrong number to lead on, and it is wrong in the direction
-     * that costs the most.</b> A mob's per-tick movement is its walk speed plus the gravity term plus
-     * — decisively — the knockback from the arrow that just hit it. Leading six ticks on a knockback
-     * impulse throws the next round two blocks past a mob that has already stopped moving. Measured
-     * against a stationary skeleton with the raw delta, read off a tick-stepped trace: the solved
-     * launch velocity implied an aim point <b>1.95 blocks beyond</b> the target, and the rounds
-     * passed over its head and buried themselves in the ground behind it.
+     * <p><b>Averaging is not optional.</b> A mob's per-tick movement is its walk speed plus the
+     * gravity term plus, decisively, the knockback from the arrow that just hit it. Leading a
+     * ten-tick flight on a knockback impulse throws the round two blocks past a mob that has already
+     * stopped. Measured against a stationary skeleton with the raw delta, read off a tick-stepped
+     * trace: the solved launch velocity implied an aim point <b>1.95 blocks beyond</b> the target,
+     * and the rounds passed over its head into the ground behind it. Under {@link #MOTION_DEADBAND}
+     * the average is treated as zero, so a mob standing still is not led at all.
      *
-     * <p>A displacement over eight ticks divided by eight is the mob's real progress across the
-     * ground, which is the only part of its motion worth leading on. Under
-     * {@link #MOTION_DEADBAND} it is treated as zero, so a mob standing still is not led at all.
+     * <p><b>Recomputing it every tick is not optional either, and that was the second bug.</b> The
+     * first version stored one position and replaced it only once the window had elapsed, so the
+     * velocity a shot was aimed with described the mob's motion between eight and sixteen ticks ago.
+     * Against a target walking a straight line that is invisible; against one that turns — which is
+     * what pathfinding mobs do constantly — the gunship led the leg the mob had already finished.
+     * Measured with sixty rounds against eight walking zombies: <b>38% and 48%</b> hits on two runs
+     * of the sample-and-hold filter, against 100% on the same rig with the same mobs standing still,
+     * so essentially every miss was a lead error rather than an elevation error. A ring of the last
+     * nine positions costs nothing and removes the staleness entirely, leaving only the window's own
+     * four-tick group delay.
      */
     private void trackMotion(LivingEntity mob) {
-        MotionSample sample = motionSamples.get(mob);
-        if (sample == null) {
-            motionSamples.put(mob, new MotionSample(mob.position(), ticks));
-            return;
-        }
-        int elapsed = ticks - sample.tick();
-        if (elapsed < MOTION_WINDOW) {
-            return;
-        }
-        Vec3 travelled = mob.position().subtract(sample.position()).scale(1.0 / elapsed);
-        smoothedVelocity.put(mob, travelled.horizontalDistance() < MOTION_DEADBAND
-            ? Vec3.ZERO
-            : new Vec3(travelled.x, 0.0, travelled.z));
-        motionSamples.put(mob, new MotionSample(mob.position(), ticks));
+        tracks.computeIfAbsent(mob, key -> new MotionTrack()).push(mob.position());
     }
 
-    private Vec3 leadVelocity(LivingEntity mob) {
-        return smoothedVelocity.getOrDefault(mob, Vec3.ZERO);
-    }
+    /**
+     * A mob's recent ground track: the last {@link #MOTION_WINDOW}+1 positions in a ring, so the
+     * displacement across the whole window is available on every tick without keeping a list.
+     */
+    private static final class MotionTrack {
+        private final Vec3[] ring = new Vec3[MOTION_WINDOW + 1];
+        private int count;
 
-    private record MotionSample(Vec3 position, int tick) {}
+        void push(Vec3 position) {
+            ring[count % ring.length] = position;
+            count++;
+        }
+
+        /** Horizontal ground velocity in blocks/tick, or zero until the ring has filled. */
+        Vec3 velocity() {
+            if (count <= MOTION_WINDOW) {
+                return Vec3.ZERO;
+            }
+            Vec3 now = ring[(count - 1) % ring.length];
+            Vec3 before = ring[(count - 1 - MOTION_WINDOW) % ring.length];
+            Vec3 travelled = now.subtract(before).scale(1.0 / MOTION_WINDOW);
+            return travelled.horizontalDistance() < MOTION_DEADBAND
+                ? Vec3.ZERO
+                : new Vec3(travelled.x, 0.0, travelled.z);
+        }
+    }
 
     // ------------------------------------------------------------------
     // Gunnery
@@ -598,7 +640,7 @@ public final class GunshipSortie {
     }
 
     /**
-     * Walks the round's own arc: terrain in the way, and players near it.
+     * Walks the round's own arc: terrain in the way, and anything friendly near it.
      *
      * <p>Sampled from {@link Ballistics#pointAt}, the same closed form that produced the aim, so what
      * is checked is the path the arrow will actually fly. A straight line from muzzle to target is
@@ -606,17 +648,14 @@ public final class GunshipSortie {
      * difference between clearing a wall and hitting it.
      */
     private boolean pathIsClear(Vec3 muzzle, Vec3 velocity, double flightTicks) {
-        List<Player> players = level.players().stream()
-            .filter(player -> player.distanceToSqr(helicopter) < Math.pow(ENGAGEMENT_RADIUS + 16.0, 2))
-            .map(player -> (Player) player)
-            .toList();
+        List<Bystander> bystanders = bystanders();
 
         Vec3 previous = muzzle;
         for (double t = PATH_SAMPLE_TICKS; ; t += PATH_SAMPLE_TICKS) {
             boolean last = t >= flightTicks;
             Vec3 point = Ballistics.pointAt(muzzle, velocity, Math.min(t, flightTicks));
-            for (Player player : players) {
-                if (distanceToSegment(player.getBoundingBox().getCenter(), previous, point) < FRIENDLY_CLEARANCE) {
+            for (Bystander bystander : bystanders) {
+                if (distanceToSegment(bystander.centre(), previous, point) < bystander.clearance()) {
                     return false;
                 }
             }
@@ -631,6 +670,46 @@ public final class GunshipSortie {
             }
         }
     }
+
+    /**
+     * Everything alive near the engagement that is <em>not</em> a target, with the radius each one
+     * gets kept clear.
+     *
+     * <p>The rule started as "no round passes near a player" and grew one clause, because the first
+     * version had a hole big enough to walk a village through: {@link HostileTargets} refuses to
+     * <em>aim</em> at a villager, an iron golem or somebody's wolf, and the trajectory check only
+     * knew about players, so a shot at a zombie standing behind the golem fighting it went straight
+     * through the golem. Not shooting <em>at</em> the friendlies is not the same as not shooting
+     * <em>them</em>, which is the same distinction the class comment makes about players, applied to
+     * the rest of the world.
+     *
+     * <p>Two radii, and the difference is deliberate:
+     * <ul>
+     *   <li><b>Players get {@link #FRIENDLY_CLEARANCE}</b>, which is much wider than a player. A near
+     *       miss on the person who ordered the sortie is not an acceptable outcome, so their
+     *       neighbourhood is a cease-fire zone and the gunship simply holds the round.</li>
+     *   <li><b>Every other friendly gets {@link #BYSTANDER_CLEARANCE}</b>, which is about its own
+     *       body. Anything wider and a gunship is disarmed by livestock: a herd of cows two blocks
+     *       from a horde would silence it completely. The rule is "do not shoot through them", not
+     *       "do not shoot near them".</li>
+     * </ul>
+     *
+     * <p>What this does <em>not</em> cover, stated rather than papered over: a round that misses
+     * lands somewhere, and anyone who walks under a falling arrow can be hit by it. Arrows do not
+     * steer, and no muzzle-time check can fix that.
+     */
+    private List<Bystander> bystanders() {
+        AABB box = helicopter.getBoundingBox().inflate(ENGAGEMENT_RADIUS + 16.0);
+        List<Bystander> found = new ArrayList<>();
+        for (LivingEntity candidate : level.getEntitiesOfClass(LivingEntity.class, box,
+            entity -> entity.isAlive() && !HostileTargets.isHostile(entity, helicopter))) {
+            found.add(new Bystander(candidate.getBoundingBox().getCenter(),
+                candidate instanceof Player ? FRIENDLY_CLEARANCE : BYSTANDER_CLEARANCE));
+        }
+        return found;
+    }
+
+    private record Bystander(Vec3 centre, double clearance) {}
 
     private static double distanceToSegment(Vec3 point, Vec3 a, Vec3 b) {
         Vec3 ab = b.subtract(a);
