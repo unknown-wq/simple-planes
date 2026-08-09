@@ -3,7 +3,6 @@ package xyz.przemyk.simpleplanes.combat;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
-import xyz.przemyk.simpleplanes.autopilot.TerrainScanner;
 import xyz.przemyk.simpleplanes.entities.HelicopterEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
@@ -175,8 +174,8 @@ public final class CollectiveHover implements HoverControl {
         commandedY = helicopter.getY();
         // The floor the descent walks down to: the ground under the aircraft, taken once so a mob
         // wandering underneath or a block placed mid-descent cannot move the target.
-        int surface = TerrainScanner.surfaceHeight(helicopter.level(), helicopter.getX(), helicopter.getZ());
-        landingFloor = surface == TerrainScanner.UNKNOWN_HEIGHT ? helicopter.getY() : surface;
+        int surface = Ground.surfaceHeight(helicopter.level(), helicopter.getX(), helicopter.getZ());
+        landingFloor = surface == Ground.UNKNOWN ? helicopter.getY() : surface;
     }
 
     @Override
@@ -208,13 +207,21 @@ public final class CollectiveHover implements HoverControl {
             approachSink = -verticalSpeed();
         }
 
+        // A ditching, reported the moment it is one rather than after the landing clock expires. A
+        // helicopter that comes down on deep water floats: it never touches a block, so getOnGround()
+        // stays false for ever and the contact test below is never reached. Without this branch the
+        // sortie sits on the surface for LANDING_TIMEOUT ticks before saying anything at all.
+        if (helicopter.isOnWater() && Math.abs(verticalSpeed()) < 0.05) {
+            landing = new Landing(false, helicopter.position(),
+                "ditched in water at " + position(helicopter.position()) + " - floating, not landed");
+            helicopter.setThrottle(0);
+            return;
+        }
+
         // Down, and staying down. getOnGround() carries a coyote timer, so a single frame of contact
         // during a bounce is not a landing; the aircraft has to be low, slow and resting.
         if (helicopter.getOnGround() && agl < 1.0 && Math.abs(verticalSpeed()) < 0.05) {
-            boolean gentle = approachSink <= TOUCHDOWN_SPEED;
-            landing = new Landing(gentle, helicopter.position(), gentle
-                ? "touched down at " + describeSpeed(approachSink) + " blocks/tick"
-                : "arrived hard, " + describeSpeed(approachSink) + " blocks/tick on contact");
+            landing = touchdown();
             helicopter.setThrottle(0);
             return;
         }
@@ -222,6 +229,34 @@ public final class CollectiveHover implements HoverControl {
         if (landingTicks > LANDING_TIMEOUT) {
             landing = new Landing(false, helicopter.position(), landingFailureReason(agl));
         }
+    }
+
+    /**
+     * What to call an arrival that has come to rest. Two things have to be true, and the second one
+     * exists because it once was not.
+     *
+     * <p><b>It has to have arrived gently</b> — {@link #approachSink} at or under
+     * {@link #TOUCHDOWN_SPEED}, sampled on the last airborne tick.
+     *
+     * <p><b>And it has to be on ground.</b> {@code getOnGround()} is satisfied by the bed of a metre
+     * of water as readily as by a field, and {@code heightAboveGround()} measures to the waterline, so
+     * an aircraft standing in the shallows is "down, level and stopped" by every test above. This is
+     * the exact shape of the bug this project has already shipped once, where an aircraft reported
+     * {@code landed} after ditching in the sea. {@link Ground#isLandable} is the difference between
+     * the two heightmaps, i.e. precisely "is there fluid standing on the terrain here", and a sortie
+     * that ends in water says so.
+     */
+    private Landing touchdown() {
+        Vec3 where = helicopter.position();
+        if (!Ground.isLandable(helicopter.level(), where.x, where.z)) {
+            return new Landing(false, where, "came to rest in fluid at " + position(where)
+                + " - the surface under it is not ground");
+        }
+        if (approachSink > TOUCHDOWN_SPEED) {
+            return new Landing(false, where, "arrived hard, " + describeSpeed(approachSink)
+                + " blocks/tick on contact at " + position(where));
+        }
+        return new Landing(true, where, "touched down at " + describeSpeed(approachSink) + " blocks/tick");
     }
 
     private String landingFailureReason(double agl) {
@@ -289,8 +324,8 @@ public final class CollectiveHover implements HoverControl {
     /** Height above the ground under the aircraft, or its height above the landing floor if unknown. */
     @Override
     public double heightAboveGround() {
-        int surface = TerrainScanner.surfaceHeight(helicopter.level(), helicopter.getX(), helicopter.getZ());
-        return helicopter.getY() - (surface == TerrainScanner.UNKNOWN_HEIGHT ? landingFloor : surface);
+        int surface = Ground.surfaceHeight(helicopter.level(), helicopter.getX(), helicopter.getZ());
+        return helicopter.getY() - (surface == Ground.UNKNOWN ? landingFloor : surface);
     }
 
     static String describeSpeed(double value) {

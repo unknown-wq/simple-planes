@@ -9,7 +9,6 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
-import xyz.przemyk.simpleplanes.autopilot.TerrainScanner;
 import xyz.przemyk.simpleplanes.entities.HelicopterEntity;
 
 import java.util.ArrayList;
@@ -161,8 +160,8 @@ public final class GunshipSortie {
         this.altitudeAgl = altitudeAgl;
         this.control = new CollectiveHover(helicopter);
 
-        int surface = TerrainScanner.surfaceHeight(level, helicopter.getX(), helicopter.getZ());
-        double ground = surface == TerrainScanner.UNKNOWN_HEIGHT ? helicopter.getY() : surface;
+        int surface = Ground.surfaceHeight(level, helicopter.getX(), helicopter.getZ());
+        double ground = surface == Ground.UNKNOWN ? helicopter.getY() : surface;
         this.stationY = ground + altitudeAgl;
     }
 

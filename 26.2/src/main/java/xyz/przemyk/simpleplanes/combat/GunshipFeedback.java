@@ -24,12 +24,19 @@ public final class GunshipFeedback {
 
     private GunshipFeedback() {}
 
-    /** Must survive having no owner: goes to the console when there is no player. */
+    /**
+     * Every report goes to the log, and additionally to the player who ordered the sortie if there
+     * was one.
+     *
+     * <p>The log is unconditional rather than a fallback for the ownerless case. A sortie flown by a
+     * player used to report only in chat, which meant the one run whose behaviour anybody actually
+     * cared about was the one run that left no record — and a bug reported as "it said it landed but
+     * it was in the sea" had nothing to read afterwards.
+     */
     public static void report(@Nullable Player player, String message) {
+        LOGGER.info(message);
         if (player != null) {
             player.sendSystemMessage(Component.literal(message));
-        } else {
-            LOGGER.info(message);
         }
     }
 
