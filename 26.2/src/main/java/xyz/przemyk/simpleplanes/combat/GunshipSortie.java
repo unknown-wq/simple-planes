@@ -1,7 +1,6 @@
 package xyz.przemyk.simpleplanes.combat;
 
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.util.Mth;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ClipContext;
@@ -91,30 +90,44 @@ public final class GunshipSortie {
      */
     public static final double ENGAGEMENT_RADIUS = 40.0;
     /**
-     * No round is fired whose path passes closer than this to a player. Two and a half blocks is a
-     * player's own width plus a margin, and it is measured against the sampled trajectory.
+     * No round is fired whose path passes within this of a player's own hitbox. Two and a half
+     * blocks outside the body is a cease-fire zone rather than a near miss, and it is measured
+     * against the sampled ballistic trajectory.
      */
     public static final double FRIENDLY_CLEARANCE = 2.5;
     /**
-     * Clearance kept around every other living thing the gunship will not shoot at — villagers, iron
-     * golems, pets, livestock. About a body's width, so a round is not put <em>through</em> them,
-     * while a cow standing two blocks from a zombie does not veto the shot. See {@link #bystanders}.
+     * Margin kept outside the hitbox of every other living thing the gunship will not shoot at —
+     * villagers, iron golems, pets, livestock. Half a block, so a round is not put <em>through</em>
+     * them, while a cow standing two blocks from a zombie does not veto the shot.
+     * See {@link #bystanders}.
      */
-    public static final double BYSTANDER_CLEARANCE = 1.0;
-    /** Ticks between line-of-sight samples along the trajectory. */
-    private static final int PATH_SAMPLE_TICKS = 4;
-
+    public static final double BYSTANDER_CLEARANCE = 0.5;
     /**
-     * {@code LivingEntity#hurtServer} sets {@code invulnerableTime = 20} on a hit and refuses any
-     * hit of equal strength while it is above 10 — so the real window in which a mob cannot be hurt
-     * again by an identical arrow is 10 ticks, and {@link #IMMUNITY_THRESHOLD} is where the test sits.
+     * Ticks between samples along the trajectory when it is swept for terrain and friendlies.
+     *
+     * <p>Each sample pair is treated as a straight segment, and a chord of a ballistic arc sags below
+     * it — about {@code 0.5 * 0.05 * dt^2} blocks at the middle, so 0.4 blocks at a four-tick spacing
+     * and 0.1 at two. The error is one-sided and in the safe direction (the chord hangs below the real
+     * arrow, so a box the arrow clears may still veto the shot), but 0.4 blocks of it is a large
+     * fraction of {@link #BYSTANDER_CLEARANCE}. Two ticks costs a handful more block raycasts per
+     * round and makes the swept path essentially the flown path.
      */
-    /** Ticks of target displacement averaged to get a lead velocity. */
+    private static final int PATH_SAMPLE_TICKS = 2;
+
+    /** Ticks of target displacement averaged to get a lead velocity. See {@link #trackMotion}. */
     private static final int MOTION_WINDOW = 8;
     /** Ground speed under which a target is treated as stationary and not led at all, blocks/tick. */
     private static final double MOTION_DEADBAND = 0.02;
 
+    /**
+     * {@code LivingEntity#hurtServer} sets {@code invulnerableTime = 20} on a hit and refuses any
+     * subsequent hit that is not stronger while it is still above 10. Every arrow does the same
+     * damage, so the window in which a mob cannot be hurt again by an identical round is the 10 ticks
+     * it takes that counter to fall from 20 to 10, plus the tick the next hit lands on.
+     * See {@link #worthShooting}.
+     */
     private static final int IMMUNITY_WINDOW = 11;
+    /** The value {@code invulnerableTime} must be at or below when a round arrives, for it to count. */
     private static final int IMMUNITY_THRESHOLD = 10;
 
     /** Rounds a full magazine holds when none is asked for: two stacks. */
@@ -599,6 +612,12 @@ public final class GunshipSortie {
         }
     }
 
+    /** The filtered ground velocity to lead a target on, or zero for one that is not moving. */
+    private Vec3 leadVelocity(LivingEntity mob) {
+        MotionTrack track = tracks.get(mob);
+        return track == null ? Vec3.ZERO : track.velocity();
+    }
+
     // ------------------------------------------------------------------
     // Gunnery
     // ------------------------------------------------------------------
@@ -648,14 +667,14 @@ public final class GunshipSortie {
      * difference between clearing a wall and hitting it.
      */
     private boolean pathIsClear(Vec3 muzzle, Vec3 velocity, double flightTicks) {
-        List<Bystander> bystanders = bystanders();
+        List<AABB> bystanders = bystanders();
 
         Vec3 previous = muzzle;
         for (double t = PATH_SAMPLE_TICKS; ; t += PATH_SAMPLE_TICKS) {
             boolean last = t >= flightTicks;
             Vec3 point = Ballistics.pointAt(muzzle, velocity, Math.min(t, flightTicks));
-            for (Bystander bystander : bystanders) {
-                if (distanceToSegment(bystander.centre(), previous, point) < bystander.clearance()) {
+            for (AABB keepOut : bystanders) {
+                if (keepOut.clip(previous, point).isPresent()) {
                     return false;
                 }
             }
@@ -672,53 +691,51 @@ public final class GunshipSortie {
     }
 
     /**
-     * Everything alive near the engagement that is <em>not</em> a target, with the radius each one
-     * gets kept clear.
+     * The keep-out volume around everything alive near the engagement that is <em>not</em> a target:
+     * each one's own hitbox, grown by the margin it is entitled to.
      *
-     * <p>The rule started as "no round passes near a player" and grew one clause, because the first
-     * version had a hole big enough to walk a village through: {@link HostileTargets} refuses to
-     * <em>aim</em> at a villager, an iron golem or somebody's wolf, and the trajectory check only
-     * knew about players, so a shot at a zombie standing behind the golem fighting it went straight
-     * through the golem. Not shooting <em>at</em> the friendlies is not the same as not shooting
-     * <em>them</em>, which is the same distinction the class comment makes about players, applied to
-     * the rest of the world.
+     * <p>The rule started as "no round passes near a player" and has been wrong twice.
      *
-     * <p>Two radii, and the difference is deliberate:
+     * <p><b>First it only knew about players</b>, which is a hole big enough to walk a village
+     * through: {@link HostileTargets} refuses to <em>aim</em> at a villager, an iron golem or
+     * somebody's wolf, and the trajectory check did not look at them, so a shot at a zombie standing
+     * behind the golem fighting it went straight through the golem. Not shooting <em>at</em> the
+     * friendlies is not the same as not shooting <em>them</em> — the same distinction the class
+     * comment makes about players, applied to the rest of the world.
+     *
+     * <p><b>Then it measured the clearance to the entity's centre point</b>, which is only harmless
+     * for entities about a block tall. Measured on the rig: an iron golem two blocks short of the
+     * target, squarely under the descending arc, with a one-block clearance around its centre — the
+     * gunship fired all twenty rounds and the golem ate fifteen of them, taking the hit rate from
+     * 100% to 25%. The arithmetic is not subtle: a golem is 2.7 blocks tall, so its head is 1.35
+     * above the point being measured, and the arc passed 1.65 above the centre and 0.3 <em>below</em>
+     * the top of its head. Testing the ray against the real box removes a whole class of that
+     * mistake, for tall mobs, wide mobs and anything a mod invents.
+     *
+     * <p>Two margins on top of the box, and the difference is deliberate:
      * <ul>
-     *   <li><b>Players get {@link #FRIENDLY_CLEARANCE}</b>, which is much wider than a player. A near
-     *       miss on the person who ordered the sortie is not an acceptable outcome, so their
+     *   <li><b>Players get {@link #FRIENDLY_CLEARANCE}</b>, far more than a body's width. A near miss
+     *       on the person who ordered the sortie is not an acceptable outcome, so their
      *       neighbourhood is a cease-fire zone and the gunship simply holds the round.</li>
-     *   <li><b>Every other friendly gets {@link #BYSTANDER_CLEARANCE}</b>, which is about its own
-     *       body. Anything wider and a gunship is disarmed by livestock: a herd of cows two blocks
-     *       from a horde would silence it completely. The rule is "do not shoot through them", not
-     *       "do not shoot near them".</li>
+     *   <li><b>Every other friendly gets {@link #BYSTANDER_CLEARANCE}</b>, a half block outside its
+     *       own skin. Anything wider and a gunship is disarmed by livestock: a herd of cows two
+     *       blocks from a horde would silence it. The rule is "do not shoot through them", not "do
+     *       not shoot near them".</li>
      * </ul>
      *
-     * <p>What this does <em>not</em> cover, stated rather than papered over: a round that misses
-     * lands somewhere, and anyone who walks under a falling arrow can be hit by it. Arrows do not
-     * steer, and no muzzle-time check can fix that.
+     * <p>What this does <em>not</em> cover, stated rather than papered over: a round that misses lands
+     * somewhere, and anyone who walks under a falling arrow can be hit by it. Arrows do not steer, and
+     * no muzzle-time check can fix that.
      */
-    private List<Bystander> bystanders() {
+    private List<AABB> bystanders() {
         AABB box = helicopter.getBoundingBox().inflate(ENGAGEMENT_RADIUS + 16.0);
-        List<Bystander> found = new ArrayList<>();
+        List<AABB> found = new ArrayList<>();
         for (LivingEntity candidate : level.getEntitiesOfClass(LivingEntity.class, box,
             entity -> entity.isAlive() && !HostileTargets.isHostile(entity, helicopter))) {
-            found.add(new Bystander(candidate.getBoundingBox().getCenter(),
-                candidate instanceof Player ? FRIENDLY_CLEARANCE : BYSTANDER_CLEARANCE));
+            found.add(candidate.getBoundingBox()
+                .inflate(candidate instanceof Player ? FRIENDLY_CLEARANCE : BYSTANDER_CLEARANCE));
         }
         return found;
-    }
-
-    private record Bystander(Vec3 centre, double clearance) {}
-
-    private static double distanceToSegment(Vec3 point, Vec3 a, Vec3 b) {
-        Vec3 ab = b.subtract(a);
-        double lengthSqr = ab.lengthSqr();
-        if (lengthSqr < 1.0E-9) {
-            return point.distanceTo(a);
-        }
-        double t = Mth.clamp(point.subtract(a).dot(ab) / lengthSqr, 0.0, 1.0);
-        return point.distanceTo(a.add(ab.scale(t)));
     }
 
     private static double headingTo(Vec3 from, Vec3 to) {
