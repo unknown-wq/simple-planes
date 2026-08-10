@@ -543,6 +543,15 @@ public class PlaneEntity extends Entity {
                 int throttle = getThrottle();
                 propellerRotationNew += (float) (throttle * 0.1);
             }
+            // The engine loop belongs with the propeller animation: both are cosmetics every client
+            // that can see the aircraft should get, and both read only synched state. It used to sit
+            // further down the tick, past the authority check below, so an aircraft the local client
+            // does not own was silent — which since the flight director took the controlling
+            // passenger away meant a plane flown by the autopilot made no sound at all, not even for
+            // the player riding in it. Nothing about hearing an engine needs local authority.
+            if (isPowered() && getThrottle() > 0) {
+                playEngineSound();
+            }
         }
 
         if (level().isClientSide() && getHealth() <= 0) {
@@ -616,10 +625,6 @@ public class PlaneEntity extends Entity {
         EulerAngles anglesOld = toEulerAngles(q, tickAngles);
 
         Vec3 oldMotion = getDeltaMovement();
-
-        if (level().isClientSide() && isPowered() && getThrottle() > 0) {
-            playEngineSound();
-        }
 
         tempMotionVars.push = 0.00625f * getThrottle();
 

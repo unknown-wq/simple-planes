@@ -254,6 +254,14 @@ public final class AutopilotConfig {
      * so distance is not free: every block of it is ground that has to be level and clear. Far
      * enough to put an apron off the side of a wide strip and a little way back, short enough that
      * the taxi stays the short roll the ground handling is written for.
+     *
+     * <p><b>A limit when a spot is marked, a preference when one is chosen.</b>
+     * {@code Airfield#parkingSpotProblem} refuses a spot further than this from the nearest
+     * threshold, which is the whole of its meaning as a limit. A departure leaves from whichever end
+     * the destination argues for, so the stand it starts from may well be the length of the strip
+     * from that end; there the constant only decides which marked stand is picked first. Reading it
+     * as a limit there discards the apron entirely on half the departures of any field longer than
+     * this — see {@code Airfield#markedParkingPosition}.
      */
     public static final double PARKING_MAX_TAXI_DISTANCE = 64.0;
     /**
