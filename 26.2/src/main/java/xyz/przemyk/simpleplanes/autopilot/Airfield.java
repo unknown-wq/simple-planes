@@ -418,38 +418,59 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * <em>inside</em> it. Measured: with two arrivals parked and the third stand out of taxi range for
      * that threshold, a sortie was placed on top of a parked aircraft. Falling through to the derived
      * apron is what the fallback is for.
+     *
+     * <p><b>Being a long roll from this particular threshold ranks a stand last; it does not
+     * disqualify it.</b> {@link AutopilotConfig#PARKING_MAX_TAXI_DISTANCE} used to be applied here as
+     * a veto, measured against the departure threshold — and that quietly threw the whole apron away
+     * on every field longer than 64 blocks whose stands are grouped at one end, which is every field
+     * a human builds. Which end a sortie departs from is chosen per flight from where it is going, so
+     * the same airfield lost its stands on roughly half its departures and kept them on the other
+     * half: from the ground it looks like the command ignoring the parking spots at random.
+     * Reproduced on the rig on a 210-block strip with one stand 51 blocks behind threshold 09 — the
+     * sortie out of 09 spawned on the stand, the sortie out of 27 spawned on the runway itself, 2
+     * blocks from the far threshold, because the derived apron off that end had no level ground
+     * either. Unsurveyed ground is exactly what marking a stand is supposed to stop an aircraft
+     * being put on, so a marked stand that is level, rollable and free is now always preferred to it;
+     * the distance only decides which marked stand wins.
      */
     private static @Nullable ParkingSpot markedParkingPosition(Level level, RunwayEnd departure) {
         Airfield airfield = departure.airfield();
         Vec3 threshold = departure.threshold();
+        ParkingSpot distant = null;
+        double distantRoll = Double.MAX_VALUE;
         for (BlockPos spot : airfield.parkingSpots()) {
             Vec3 position = usableParkingSpot(level, spot, threshold);
-            if (position != null && standFree(level, airfield, position, spot, null)) {
-                return new ParkingSpot(position,
-                    AutopilotMath.headingTo(position, threshold), false, spot);
+            if (position == null || !standFree(level, airfield, position, spot, null)) {
+                continue;
+            }
+            ParkingSpot parking = new ParkingSpot(position,
+                AutopilotMath.headingTo(position, threshold), false, spot);
+            double roll = AutopilotMath.horizontalDistance(position, threshold);
+            if (roll <= AutopilotConfig.PARKING_MAX_TAXI_DISTANCE) {
+                return parking;
+            }
+            // Nearest of the far ones rather than the first of them: the marked order is the queue
+            // order for the stands beside this threshold, and it says nothing useful about which of
+            // the stands at the other end of the strip is the shorter roll.
+            if (roll < distantRoll) {
+                distant = parking;
+                distantRoll = roll;
             }
         }
-        return null;
+        return distant;
     }
 
     /**
      * The marked spot {@code spot} as a usable parking position for a departure from
      * {@code threshold}, or null if the ground there or on the way no longer works.
+     *
+     * <p>Ground only. How far the stand is from this threshold is a ranking question and is answered
+     * by the caller — see {@link #markedParkingPosition}. Every block of the roll is still checked
+     * here, however long it is, so a stand separated from the departure threshold by a ditch is
+     * rejected exactly as it always was.
      */
     private static @Nullable Vec3 usableParkingSpot(Level level, BlockPos spot, Vec3 threshold) {
         Vec3 probe = new Vec3(spot.getX() + 0.5, 0, spot.getZ() + 0.5);
-        // The distance is re-checked here as well as at marking time, and against *this* threshold
-        // rather than the nearest one. A stand is validated when it is marked against whichever
-        // threshold it is closer to; which end a sortie departs from is chosen per flight by
-        // bestEnd, so a stand 14 blocks behind one threshold of a 183-block strip is 169 blocks from
-        // the other. Seen on the rig once arrivals started filling stands up: with the two nearer
-        // ones occupied, a departure took the far one and spent the whole TAXI_TIMEOUT crawling to
-        // the threshold, then departed on "could not line up cleanly". Dropping through to the next
-        // stand, and finally to the derived apron beside the departure threshold, is a much shorter
-        // roll to the same runway.
-        if (AutopilotMath.horizontalDistance(probe, threshold) > AutopilotConfig.PARKING_MAX_TAXI_DISTANCE) {
-            return null;
-        }
         Vec3 position = groundedIfLevelWith(level, probe, threshold.y);
         if (position == null || !taxiPathIsRollable(level, position, threshold)) {
             return null;

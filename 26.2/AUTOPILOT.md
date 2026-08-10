@@ -1427,12 +1427,27 @@ a marked spot can never strand an aircraft that would otherwise have flown.
 Two of those rules had to change once arrivals started taxiing in and *staying* on stands, because
 both were written when every aircraft that ever stood on one was a departure about to leave it:
 
-* **The taxi distance is re-checked against the departure threshold**, not just against the nearest
-  one. A spot is validated when it is marked against whichever threshold it is closer to; which end
-  a sortie departs from is chosen per flight by `bestEnd`, so a stand 14 blocks behind one threshold
-  of a 183-block strip is 169 blocks from the other. Once the two nearer stands were occupied, a
-  departure took that one and spent the whole `TAXI_TIMEOUT` crawling to the threshold before
-  departing on `could not line up cleanly`. It now drops through.
+* **The taxi distance from the departure threshold orders the stands**, rather than the order they
+  were marked in. A spot is validated when it is marked against whichever threshold it is closer to;
+  which end a sortie departs from is chosen per flight by `bestEnd`, so a stand 14 blocks behind one
+  threshold of a 183-block strip is 169 blocks from the other, and sending a departure to that one
+  while a nearer stand stands empty is a needless crawl down the runway.
+
+  **It is a ranking and not a veto, and it was briefly written as a veto.** With
+  `PARKING_MAX_TAXI_DISTANCE` applied in `usableParkingSpot` against the departure threshold, every
+  stand on a strip longer than 64 blocks whose apron is grouped at one end — which is every apron a
+  human builds — was thrown away on the departures that leave from the other end, and the aircraft
+  was put on the derived apron or, when the ground off that end is not level, on the runway itself.
+  Which end a sortie leaves from depends on where it is going, so the same field kept its stands for
+  some destinations and lost them for others: from the ground it looks like `/autopilot flight`
+  ignoring the marked parking at random. Measured on the rig on a 210-block strip with one stand 51
+  blocks behind threshold 09: the sortie out of 09 spawned on the stand at `456, 102, 49`, and the
+  sortie out of 27 spawned at `613, 102, 33` — on the runway, 2 blocks from the far threshold. Now
+  the near stands are still tried first, in the order they were marked, and only if none of them
+  qualifies does the nearest of the far ones get it; the derived apron is reached only when no marked
+  stand is level, rollable and free. Unsurveyed ground is what marking a stand exists to avoid, so it
+  never wins against a stand that works. The 160-block roll that follows lines up and departs
+  normally — verified end to end, stand to stand, on the rig.
 * **There is no "least bad" stand any more.** `markedParkingPosition` used to remember the first
   *occupied* spot and return it when nothing was free, on the reasoning that known-good ground beats
   a derived apron. With arrivals parked for good on those squares that reasoning spawns an aircraft

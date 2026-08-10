@@ -108,6 +108,26 @@ unbuilt:
   because the timeout lives on the object that died. Closing it needs the sortie state persisted on
   the entity rather than in the registry.
 
+* **The survey finds a runway's edges by elevation, so a strip laid flush with the ground around it
+  has none.** `Airfield.crossSection` walks sideways until a column is more than a block off the
+  threshold elevation, which is the whole of how `centreOnStrip` knows where the middle is. A runway
+  that is a different *block* — concrete, gravel, smooth stone — laid level with the field it sits in
+  is invisible to it, so the thresholds stay on whatever corner block the player clicked and every
+  number the flight is flown to hangs off that corner: the lineup, the aim point, the glide slope,
+  the lateral offset, the landing gates. Measured on the rig with a 25-wide smooth-stone strip on a
+  flat stone plateau, both ends clicked on the z=20 edge of a strip running z=20..44: the survey
+  reported `centreline moved 4 blocks` and stored the thresholds at z=24, 8 blocks off the true
+  middle — and the 4 blocks came from the *plateau's* far edge, not the runway's, since one probe ran
+  to `SURVEY_MAX_WIDTH` and the other found the edge of the plateau. `width` comes out at the probe
+  ceiling (25) rather than measured, for the same reason. Worse, it is silent: `centrelineOffset`,
+  which is what makes `airfields info` say `run /autopilot airfields resurvey`, uses the same
+  elevation-only cross-section and therefore reads the same 0, so nothing anywhere tells the player
+  their centreline is on the corner. Closing it means recognising the strip by its block rather than
+  by its height — the survey would have to sample the surface material at the threshold and walk out
+  to the first column that is something else, with the elevation rule kept as the fallback for a
+  strip that is genuinely raised. Not scheduled: it rewrites what a survey measures, and every
+  airfield already on disk would need `resurvey` to benefit.
+
 * **A full dispatcher** — an `AirfieldTower` class, per-end reservations, parallel runways,
   taxiways, hangars, navaids, approach lighting, fuelling stations, persisted queues, in-trail time
   spacing, wind. Judged out of scale for a Minecraft mod: the useful version is the smallest one
