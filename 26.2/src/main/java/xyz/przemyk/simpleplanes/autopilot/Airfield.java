@@ -4,6 +4,7 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
@@ -927,13 +928,21 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         return new BlockPos(pos.getX(), surface - 1, pos.getZ());
     }
 
+    /** Narrowest cross-section that is still worth believing, in blocks. */
+    private static final int MIN_MEASURED_WIDTH = 3;
+
     /**
      * How far the strip reaches to either side of one point, in whole blocks.
      *
-     * @param left  blocks of strip found to the left of the probed point
-     * @param right blocks of strip found to its right
+     * @param left          blocks of strip found to the left of the probed point
+     * @param right         blocks of strip found to its right
+     * @param leftBounded   whether the walk to the left stopped at an edge rather than running out of
+     *                      probe range. Kept because {@code left == limit} is ambiguous on its own —
+     *                      an edge exactly {@code limit} blocks out and ground that carries on past
+     *                      the probe produce the same count, and only one of them is a measurement.
+     * @param rightBounded  the same, to the right
      */
-    private record CrossSection(int left, int right) {
+    private record CrossSection(int left, int right, boolean leftBounded, boolean rightBounded) {
         /** How far the probed point is to the right of the middle of what was found. */
         double offsetFromMiddle() {
             return (right - left) / 2.0;
@@ -942,11 +951,51 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         int width() {
             return left + right + 1;
         }
+
+        /** True when neither side found an edge, so this says nothing about where the strip ends. */
+        boolean unbounded() {
+            return !leftBounded && !rightBounded;
+        }
     }
 
     /**
-     * Walks sideways from {@code point}, perpendicular to {@code heading}, stopping at the first
-     * column more than a block off {@code reference}.
+     * How far the strip reaches to either side of {@code point}, by elevation first and by surface
+     * material only where elevation found nothing.
+     *
+     * <h2>Why there are two rules and why this is the order</h2>
+     * The elevation walk — the strip continues sideways for as long as the surface stays within a
+     * block of {@code reference} — is the whole rule and stays the whole rule wherever it works. It
+     * is what a raised strip, an embankment, a plinth or a runway cut into a slope reads as, and it
+     * is what every airfield that surveys correctly today is measured by.
+     *
+     * <p>It reads nothing at all on the case this exists for: a runway <em>painted</em> onto a field,
+     * a strip of concrete or gravel or smooth stone laid flush with the ground it sits in. There the
+     * probe walks off the runway and out across the field without ever seeing a change, so the survey
+     * cannot tell where the strip ends. That was silent and it was wrong in three places at once —
+     * the thresholds stayed on whatever corner block was clicked, the width came back as the probe
+     * ceiling rather than a measurement, and {@link #centrelineOffset} read zero, so {@code airfields
+     * info} did not even say the field needed re-surveying. Measured before this change on a 25-wide
+     * smooth-stone strip flush on a stone plateau, both ends clicked on the {@code z=20} edge of a
+     * strip running {@code z=20..44}: thresholds stored at {@code z=20}, no correction printed, the
+     * whole take-off roll at {@code z=18.7..19.1} — <em>off the strip</em> — and the touchdown at
+     * {@code z=21}, one block inside the near edge. Where the surrounding field does happen to have
+     * an edge within probe range the answer was worse than useless rather than merely absent: the
+     * same strip on a narrower plateau stored {@code z=24}, having centred the runway on the
+     * <em>plateau</em>.
+     *
+     * <p><b>Material is consulted only when elevation is unbounded on both sides</b>, i.e. only when
+     * the terrain has said nothing whatsoever about where the strip ends. That ordering is the whole
+     * of the safety argument: a genuinely raised strip never reaches the material walk, so no survey
+     * that works today can change its answer. The two are never blended and never minimised together
+     * — a naturally patchy surface, grass beside dirt beside coarse dirt, would collapse the strip to
+     * a block or two if material were allowed to override an edge the terrain really has.
+     *
+     * <p><b>A material answer that is not credible is thrown away</b> and the elevation answer is kept
+     * exactly as it is today. Two ways it can fail: uniform ground — a superflat world, a plateau of
+     * one block — walks to the limit on both sides and has found no edges either, and a patch narrower
+     * than {@value #MIN_MEASURED_WIDTH} blocks is not a runway. Both give back the unbounded
+     * elevation reading, which centres nothing and leaves the clicked line alone. Nothing here invents
+     * a centreline out of ground that has none.
      *
      * @param limit how far to probe on each side. {@link #measureWidth} uses half
      *              {@link AutopilotConfig#SURVEY_MAX_WIDTH}, because it probes from the middle;
@@ -955,21 +1004,73 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      */
     private static CrossSection crossSection(Level level, Vec3 point, double heading,
                                              double reference, int limit) {
-        int left = 0;
+        CrossSection byHeight = walkOut(point, heading, limit,
+            probe -> levelWith(level, probe, reference));
+        if (!byHeight.unbounded()) {
+            return byHeight;
+        }
+        Block surface = surfaceBlock(level, point);
+        if (surface == null) {
+            return byHeight;
+        }
+        CrossSection byMaterial = walkOut(point, heading, limit,
+            probe -> surfaceBlock(level, probe) == surface);
+        if (byMaterial.unbounded() || byMaterial.width() < MIN_MEASURED_WIDTH) {
+            return byHeight;
+        }
+        return byMaterial;
+    }
+
+    /** Whether the column at {@code probe} is still the same strip as the point walked out from. */
+    @FunctionalInterface
+    private interface StripTest {
+        boolean sameStrip(Vec3 probe);
+    }
+
+    /**
+     * Walks out to both sides of {@code point}, perpendicular to {@code heading}, stopping on each
+     * side at the first column {@code test} rejects.
+     *
+     * <p>Probes one column past {@code limit} purely to find out <em>why</em> the walk stopped, and
+     * still reports at most {@code limit} blocks either way. Without that extra probe a strip whose
+     * edge sits exactly on the limit is indistinguishable from ground that carries on for ever, and
+     * telling those two apart is the entire precondition for consulting the surface material.
+     */
+    private static CrossSection walkOut(Vec3 point, double heading, int limit, StripTest test) {
         int right = 0;
-        for (int offset = 1; offset <= limit; offset++) {
-            if (!levelWith(level, AutopilotMath.pointAlong(point, heading + 90.0, offset), reference)) {
+        boolean rightBounded = false;
+        for (int offset = 1; offset <= limit + 1; offset++) {
+            if (!test.sameStrip(AutopilotMath.pointAlong(point, heading + 90.0, offset))) {
+                rightBounded = true;
                 break;
             }
-            right = offset;
+            right = Math.min(offset, limit);
         }
-        for (int offset = 1; offset <= limit; offset++) {
-            if (!levelWith(level, AutopilotMath.pointAlong(point, heading - 90.0, offset), reference)) {
+        int left = 0;
+        boolean leftBounded = false;
+        for (int offset = 1; offset <= limit + 1; offset++) {
+            if (!test.sameStrip(AutopilotMath.pointAlong(point, heading - 90.0, offset))) {
+                leftBounded = true;
                 break;
             }
-            left = offset;
+            left = Math.min(offset, limit);
         }
-        return new CrossSection(left, right);
+        return new CrossSection(left, right, leftBounded, rightBounded);
+    }
+
+    /**
+     * The block an aircraft would stand on in this column, or null where there is nothing to read.
+     *
+     * <p>One block below {@link TerrainScanner#surfaceHeight}, which reports the first <em>free</em>
+     * block — the same convention {@link #snapToSurface} uses to turn a click into a threshold, so the
+     * material compared here is the material of the surface the runway is made of.
+     */
+    private static @Nullable Block surfaceBlock(Level level, Vec3 probe) {
+        int surface = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
+        if (surface == TerrainScanner.UNKNOWN_HEIGHT) {
+            return null;
+        }
+        return level.getBlockState(BlockPos.containing(probe.x, surface - 1, probe.z)).getBlock();
     }
 
     /**
@@ -991,11 +1092,12 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * the one clicked, and therefore different designators. That is a correction, not a surprise —
      * the strip's own edges are better evidence of which way it runs than two clicks are.
      *
-     * <p><b>Ground the survey cannot tell from the strip is left alone.</b> The cross-section stops
-     * at the first column more than a block off the threshold elevation, so on a runway that is
-     * flush with the field around it — a mown strip on flat grass, or anything on the superflat test
-     * world — both probes run to the limit, the offset comes out zero and the clicked line is kept
-     * unchanged. Nothing here invents a centreline out of ground that has no edges.
+     * <p><b>Ground the survey cannot tell from the strip is left alone.</b> The cross-section looks
+     * for an edge in elevation and, only where the terrain has none to offer, in the surface material
+     * — so a runway painted flush onto a field is centred on its own paint, and ground that is
+     * uniform in both, a superflat world or a plateau of one block, produces no edges either way, an
+     * offset of zero and the clicked line kept unchanged. See {@link #crossSection}. Nothing here
+     * invents a centreline out of ground that has none.
      */
     private static BlockPos[] centreOnStrip(Level level, BlockPos clickedA, BlockPos clickedB) {
         BlockPos a = clickedA;
@@ -1037,6 +1139,12 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * it, in blocks — 0 on a runway surveyed since the survey started centring, and up to half the
      * runway width on one surveyed before it. Measures live terrain, so it is only meaningful with
      * the runway's chunks loaded and it is deliberately not stored.
+     *
+     * <p>Deliberately the same {@link #crossSection} the survey itself centres on, so this reports
+     * exactly the correction {@code /autopilot airfields resurvey} would apply and never advertises
+     * one the survey would then decline to make. That includes the material rule: a field painted
+     * flush on a plain used to read 0 here — no edges, nothing to say — while sitting on the corner
+     * of its own strip, which is the worst answer available, since it is both wrong and silent.
      */
     public double centrelineOffset(Level level) {
         double heading = AutopilotMath.headingTo(pointA(), pointB());
@@ -1056,7 +1164,7 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         // centreOnStrip has already put there. Before that it probed from wherever the player
         // clicked, which is why an edge click on a 25-wide strip used to report a width of 13: one
         // side found nothing and the other hit the limit halfway across.
-        return Math.max(3, crossSection(level, middle, heading, middle.y,
+        return Math.max(MIN_MEASURED_WIDTH, crossSection(level, middle, heading, middle.y,
             AutopilotConfig.SURVEY_MAX_WIDTH / 2).width());
     }
 

@@ -442,8 +442,15 @@ public final class AirfieldBrowser {
                     + " force-load it, and try again.", name).withStyle(ChatFormatting.RED));
             return false;
         }
+        // The grandfathering comes across with the stands, for the reason
+        // AirfieldReport#surveyAndRegister carries it: Airfield#survey marks everything it measures
+        // requiresStands, so without this line correcting the centreline of a field that predates
+        // the rule would quietly convert it into one whose sorties are refused for want of a stand.
+        // Re-surveying is how a player fixes a runway, not how they opt into a new requirement, and
+        // a painted field is exactly the old field that now has a reason to be re-surveyed.
         Airfield fresh = Airfield.survey(level, name, a, b)
-            .withParkingSpots(airfield.parkingSpots());
+            .withParkingSpots(airfield.parkingSpots())
+            .withRequiredStands(airfield.requiresStands());
         data.put(fresh);
         double moved = Math.max(distance(a, fresh.thresholdA()), distance(b, fresh.thresholdB()));
         output.component(moved < 0.5

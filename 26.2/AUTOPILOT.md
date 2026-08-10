@@ -593,17 +593,83 @@ and far-right corners of the same 160×13 strip clicked, independent centring re
 the survey may report a slightly different heading from the one clicked, which is a correction — the
 strip's own edges are better evidence of which way it runs than two clicks are.
 
-**Ground the survey cannot tell from the strip is left alone.** The cross-section stops at the first
-column more than a block off the threshold elevation, so a runway flush with the field around it —
-or anything on the superflat test world — has no edges to find, both probes run to the limit, the
-offset comes out zero and the clicked line is kept untouched. Verified: an off-centre survey on the
-open superflat produces exactly the thresholds that were clicked and prints no correction.
-
 **It also fixes the measured width.** The width probe ran ±`SURVEY_MAX_WIDTH/2` from the clicked
 line, which is only half the strip when the click is on an edge. A 25-wide strip clicked on its left
 edge measured **13**; clicked in the middle it measured 25. It now reports 25 either way, because the
 probe runs from a centreline that is actually central. Width feeds the landing lateral gate, the
 parking apron offset and now the approach funnel, so halving it was not cosmetic.
+
+#### A painted runway has edges too: the two-rule cross-section
+
+Centring on elevation closed the report for a strip that stands *above* the ground around it. It did
+nothing at all for the other way people build a runway: a strip of concrete, gravel or smooth stone
+**laid flush** with the field it sits in. There the sideways probe walks off the paint and out across
+the field without the height ever changing, so the survey never finds an edge — and the same
+complaint came back, in the same words, for a runway that has no step anywhere on it.
+
+That case was wrong in three places at once, and the third is the one that made it hard to see:
+
+Measured on the rig on the same field, with the same two clicks, before and after — a 25-wide
+smooth-stone strip running `z=20..44` (so the strip spans `20.0` to `45.0` and its middle is `32.5`)
+laid flush on a stone plateau, both ends clicked on the `z=20` edge:
+
+| | before | after |
+|---|---|---|
+| survey says | *no correction printed* | `centreline moved 12 blocks` |
+| stored thresholds | `715 101 20` / `885 101 20` | `715 101 32` / `885 101 32` |
+| stored width | 25 — the probe ceiling, not a measurement | 25, measured |
+| the same strip repainted 13 wide | 25 | **13**, thresholds `715 101 26` |
+| whole take-off roll | z = **19.11, 18.83, 18.74** — *off the strip* | z = **29.29, 29.25, 29.36**, converging on 30.2 as it climbs |
+| straight-in touchdown | `landed at airfield-3/09, 752, 101, **21**` — 1 block inside the near edge | `landed at airfield-3/09, 752, 101, **33**` |
+| `airfields info` on the field stored crooked | *silent* | `centreline is 12 blocks off the middle of the strip - run /autopilot airfields resurvey "airfield-3"` |
+| `resurvey` on it | — | `the centreline moved 12 blocks onto the middle of the strip` |
+
+The take-off row is the report in one line: the aircraft was not rolling down the edge of the runway,
+it was rolling down the field *beside* it and lifting off from there, while tracking its own
+centreline perfectly. Where the surrounding field does happen to have an edge inside probe range the
+old answer was worse than merely absent — the same strip on a narrower plateau stored `z=24`, having
+found the far edge of the **plateau** and centred the runway on that.
+
+**Elevation first, material only where elevation found nothing.** `Airfield.crossSection` walks out
+on height exactly as it always did. Only when that walk is *unbounded on both sides* — when it ran
+to the probe limit each way without meeting an edge, so the terrain has said nothing whatsoever about
+where the strip ends — does it walk out a second time on the **surface block**, stopping at the first
+column whose top block differs from the one under the probed point.
+
+The ordering is the whole safety argument, and it is why this is not a rewrite of what a survey
+measures:
+
+* A raised strip, a plinth, an embankment, a runway cut into a slope — anything the elevation rule
+  already reads — **never reaches the material walk**, so no survey that works today can change its
+  answer. Verified like-for-like: the same 25-wide raised strip over open air, both ends clicked on
+  the `z=20` edge, gives `centreline moved 12 blocks`, thresholds `1005 101 32` / `1215 101 32`,
+  width 25, designators 09/27, obstacles 0/0, roughness 0.00 — identical to the build before this
+  change on identical geometry.
+* The two are never blended, never averaged and never minimised together. Taking the smaller of the
+  two widths would collapse a strip to a block or two on any naturally patchy surface — grass beside
+  dirt beside coarse dirt is not a runway edge, and a real height edge must always win.
+
+**A material answer that is not credible is thrown away**, and then everything behaves exactly as it
+does today. Two ways it fails, both verified on the rig:
+
+* **Uniform ground.** A superflat world, or a stone plateau of one block: the material walk runs to
+  the limit on both sides as well, so it has found no edges either. A survey clicked at `z=40` on a
+  bare plateau stores thresholds `1420 101 40` / `1580 101 40`, prints no correction and reports the
+  ceiling width, exactly as before.
+* **A patch narrower than 3 blocks**, the same floor `measureWidth` already applies. With dirt laid
+  one block to the left of the clicked line and coarse dirt one block to the right, the material walk
+  returns a width of 1, is rejected, and the survey again stores `1420 101 40` / `1580 101 40` and
+  prints no correction.
+
+So the promise the centring made from the start still holds: **nothing invents a centreline out of
+ground that has none.** What changed is only that paint now counts as ground that has one.
+
+Cost is a bounded handful of block lookups at survey time — the material walk is `2 x (limit + 1)`
+reads, it runs only where the heightmap already came back with nothing, and nothing on this path runs
+per tick. `crossSection` has exactly three callers and they are all corrected together, which is why
+they were all wrong together: `centreEnd` (the centring), `measureWidth` (the stored width) and
+`centrelineOffset` (the `airfields info` warning, and therefore whether a player is ever told to
+re-survey at all).
 
 > **Airfields already on disk are not touched.** `Airfield` persists its two thresholds, and
 > re-centring them on load would silently move every runway in every existing world — this codebase
@@ -624,6 +690,13 @@ parking apron offset and now the approach funnel, so halving it was not cosmetic
 > refuses an unloaded field for the same reason `/autopilot survey` does, refuses while an aircraft
 > holds the runway, and is idempotent: run twice it reports `its centreline was already down the
 > middle of the strip`.
+>
+> **This is the migration path for a painted field as well**, and it is the one a player with runways
+> already on disk actually needs, since the material rule only runs when a survey does. Verified on a
+> field stored crooked by the previous build: `airfields info` on `airfield-3` reported `centreline is
+> 8 blocks off the middle of the strip`, `resurvey "airfield-3"` answered `the centreline moved 8
+> blocks onto the middle of the strip`, the stored thresholds moved from `715 101 24` to `715 101 32`,
+> and `airfields info` went quiet. Parking spots and the field's name come through it untouched.
 
 ### Where on the runway it touches down
 
