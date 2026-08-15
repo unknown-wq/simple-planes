@@ -4,6 +4,7 @@ import net.fabricmc.api.ModInitializer;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.Items;
+import xyz.przemyk.simpleplanes.api.BlastGuardCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotRegistry;
@@ -56,6 +57,12 @@ public class SimplePlanesMod implements ModInitializer {
         // helicopters. Self-contained in xyz.przemyk.simpleplanes.combat.
         GunshipRegistry.init();
         GunshipCommand.register();
+
+        // blast guard: only the /blastguard switch needs registering. The guard list itself
+        // (xyz.przemyk.simpleplanes.api.BlastGuards) is a plain static field with no lifecycle, so a
+        // foreign mod can register into it from its own initialiser whether that runs before or
+        // after this one.
+        BlastGuardCommand.register();
 
         registerUpgradeItems();
     }

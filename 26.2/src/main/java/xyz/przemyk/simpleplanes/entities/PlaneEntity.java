@@ -47,6 +47,7 @@ import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
 import org.joml.Vector3f;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.api.BlastGuards;
 import xyz.przemyk.simpleplanes.autopilot.Blast; // autopilot:
 import xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot; // autopilot:
 import xyz.przemyk.simpleplanes.container.ModifyUpgradesContainer;
@@ -508,6 +509,20 @@ public class PlaneEntity extends Entity {
         PlaneAutopilot engaged = getAutopilot();
         if (engaged != null && engaged.getPlan() != null) {
             blast = engaged.getPlan().blast();
+        }
+        // Extension point. Every blast this mod produces passes through this one line, so this is
+        // the only place a land-claim mod, a protection plugin or a server's own glue has to be
+        // consulted to cover all of them. Guards may weaken the warhead or refuse it outright; with
+        // none registered -- the default, and every installation that has not gone looking for it --
+        // this is one isEmpty() test and the blast is the one that was ordered. Nothing about the
+        // mods that register here is known to this one: see BlastGuard.
+        if (level() instanceof ServerLevel guardLevel) {
+            blast = BlastGuards.filter(guardLevel, this, position(), blast);
+            if (blast == null) {
+                // Suppressed. The aircraft is still destroyed and has already left its smoke; only
+                // the detonation is skipped.
+                return;
+            }
         }
         // The fuller overload, because "does it break blocks" and "does it start fires" are separate
         // arguments there: the interaction selects the block behaviour (TNT craters and drops, NONE
