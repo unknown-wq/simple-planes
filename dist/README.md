@@ -5,18 +5,67 @@ Compiled build of the Fabric / Minecraft 26.2 port (source in `../26.2/`).
 The jar below is a **finished, ready-to-install build** — you do not need to compile anything to
 play, just drop it into `mods/` (see below). The sources it was built from live in `../26.2/`.
 
-| File | `simpleplanes-26.2-5.3.7.jar` |
+| File | `simpleplanes-26.2-5.3.8.jar` |
 |---|---|
 | Minecraft | 26.2 |
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `a8631da06a69eda556d5184ba0375d97212b9c063cc3c61e32387b1e8ea830b6` |
+| sha256 | `8039ebe7f59d3223c1224e0035b1cd035e468314a58589328be439df534b7573` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
 
 ## Changes in this build
+
+### Aircraft are visible from as far as they are shot at
+
+Every airframe was registered with `clientTrackingRange(5)` — **80 blocks**. That is the range at which
+a server tells a client an entity exists at all, so an unmanned aircraft simply did not exist to anyone
+further away than that.
+
+It only ever bit **unmanned** flight. `ChunkMap.TrackedEntity#getEffectiveRange` maximises over the
+entity's passengers, so anything with a player aboard was already tracked at the player type's 32
+chunks — which is why nothing was wrong with this mod until autopilots and unmanned routes were added.
+A scripted aircraft crossing the sky was invisible until it was almost overhead.
+
+Aircraft now track at **10 chunks (160 blocks)**, vanilla's own boat range; parachutes at **8**. The
+parachute is argued separately rather than given the aircraft number for sharing a file: an *occupied*
+canopy was never limited to 80 blocks either, so only empty ones vanished — and at a different distance
+from an identical parachute with a rider still on it.
+
+`updateInterval` stays at **3**. None of these types is on `EntityType#trackDeltas`'s exclusion list, so
+velocity is broadcast alongside position and the client extrapolates between updates; raising the
+interval is exactly what would make a wider radius stutter at distance.
+
+Cost, honestly: the per-player packet rate does not change, only how many players pay it. Doubling the
+radius quadruples the area, so at worst four times the payers — about 400 B/s per player per aircraft
+at full throttle, and roughly 38 kB/s server-wide with all 24 permitted autopilots flying at once in a
+crowd, which is less than sending a single chunk and unreachable in practice. Note also that vanilla
+clamps tracking to the player's view distance, so on a stock server any value of 10 or more behaves
+identically.
+
+### Another mod can veto or weaken a blast, and an owner can switch that off
+
+`api/BlastGuard` is a functional interface: return the blast you were given to abstain, a weaker one to
+downgrade it, or null to suppress it. `api/BlastGuards` is the registry — a chained
+`CopyOnWriteArrayList` with no lifecycle, so a foreign mod may register from its own initialiser in
+either load order, and a guard that throws is logged and skipped rather than taking the explosion with
+it. One call site in `PlaneEntity#explode`, one line in `SimplePlanesMod`.
+
+Nothing here depends on the mod that asked for it. The interface takes and returns vanilla types plus
+this mod's own `Blast`, so a consumer can bind to it reflectively and this mod neither knows nor cares
+who is on the other end. With no guard registered the filter returns immediately, so a player who
+installs nothing else pays nothing.
+
+**`/blastguard [status|on|off]`** is the off switch, game-master gated, no player needed, in the same
+shape as `/autopilot` and `/gunship`. A config was not an option — this mod's config is a frozen set of
+compile-time defaults, which its README lists as a known cut. **Off is the pre-patch behaviour exactly**:
+the filter returns the blast it was handed without running a single guard, so the explosion is the one
+the aircraft ordered, bit for bit. Registrations survive being switched off, so `on` restores the
+previous behaviour with no restart. The setting is stored per server in
+`<world>/data/simpleplanes/blast_guard.dat`, and defaults to on — which costs a planes-only player
+nothing, since with nothing registered the two positions are the same server byte for byte.
 
 ### Helicopters have a flight model
 
