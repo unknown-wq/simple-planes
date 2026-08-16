@@ -5,18 +5,40 @@ Compiled build of the Fabric / Minecraft 26.2 port (source in `../26.2/`).
 The jar below is a **finished, ready-to-install build** — you do not need to compile anything to
 play, just drop it into `mods/` (see below). The sources it was built from live in `../26.2/`.
 
-| File | `simpleplanes-26.2-5.3.8.jar` |
+| File | `simpleplanes-26.2-5.3.9.jar` |
 |---|---|
 | Minecraft | 26.2 |
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `8039ebe7f59d3223c1224e0035b1cd035e468314a58589328be439df534b7573` |
+| sha256 | `4b8f3e00eabbd29132833668a1c36e56b5d9c0b035a83fd440265b2424f8fe5a` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
 
 ## Changes in this build
+
+### The autopilot can be told whose sky to keep out of
+
+Another mod can now register an `AirspaceGuard` — one method, answering *is this point one this pilot
+should be routed around?* — and the autopilot folds the answer into the same cost comparison that
+already decides between climbing a ridge and going round it. A claim can therefore lose to the
+terrain: this is advice, not a no-fly zone.
+
+Three properties keep it that way. It is asked **only inside the autopilot's own tick**, so a player
+at the controls is never routed by it and never stopped by it. It **cannot say no** — there is no
+reject outcome anywhere in the planner, so nothing can strand an aircraft. And an aircraft that
+starts *inside* claimed airspace picks the heading that leaves soonest rather than refusing to move.
+
+`/airspaceguard status | on | off` reports and toggles it. With nothing registered the status line
+says so, and the whole feature costs one `isEmpty()` on a static field per autopilot tick.
+
+**This mod names no other mod.** With only this jar and Fabric API installed, a fresh server reaches
+`Done (3.899s)` with zero errors, flies a full two-leg autopilot route, and contains no reference to
+any other mod anywhere in the jar.
+
+Measured cost with a guard registered: 18 ns over unclaimed ground, 176 ns for the full chain inside
+a claim, once a second per aircraft — 0.067 % of a tick at the 24-aircraft cap.
 
 ### Aircraft are visible from as far as they are shot at
 
