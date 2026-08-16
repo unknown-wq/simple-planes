@@ -14,6 +14,7 @@ import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import xyz.przemyk.simpleplanes.api.AirspaceGuards;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
@@ -601,10 +602,16 @@ public class PlaneAutopilot {
      * climb; over open ground it returns zero and this is exactly the old behaviour.
      *
      * <p>The planner only runs when there is something to run for — terrain above the altitude this
-     * leg would otherwise be flown at, or a deviation already in progress — so flat terrain costs
-     * nothing at all. {@code TerrainScanner#avoidanceBias} remains as the fallback for the case the
-     * planner declines to answer, which is ground it cannot see; it never over-rides a planned
+     * leg would otherwise be flown at, a deviation already in progress, or another mod having
+     * claimed some sky (see {@link xyz.przemyk.simpleplanes.api.AirspaceGuards}) — so flat terrain
+     * costs nothing at all. {@code TerrainScanner#avoidanceBias} remains as the fallback for the case
+     * the planner declines to answer, which is ground it cannot see; it never over-rides a planned
      * deviation.
+     *
+     * <p><b>This is the only route decision in the mod, and it is autopilot-only.</b> Nothing on the
+     * hand-flown path reaches it: {@code PlaneEntity} runs this class's tick only while an autopilot
+     * flight is active, so a player at the controls is never steered and never blocked by an airspace
+     * claim. The seam cannot be turned into a no-fly zone from here.
      */
     private void applyTerrainFollowing(PlaneEntity plane) {
         if (!cmdTerrainFollow) {
@@ -623,8 +630,15 @@ public class PlaneAutopilot {
         // ahead looks clear, and "only plan when the ground ahead is high" would leave the offset
         // latched on for the rest of the leg.
         boolean terrainAhead = safeAltitude != TerrainScanner.UNKNOWN_HEIGHT && safeAltitude > legAltitude;
-        if (terrainAhead || router.deviating()) {
-            router.update(plane.level(), plane.position(), legAltitude, cmdHeading, ticks);
+        // The third gate is one isEmpty() on a static list when no mod has claimed any airspace,
+        // which is what makes this feature free for an installation that has none: with nothing
+        // registered the planner is entered on exactly the ticks it was entered on before, and the
+        // search it then runs is the one it ran before. Only with a guard present does the planner
+        // start being asked on ordinary ground, and its first act there is an 8-sample probe of the
+        // direct track that returns DIRECT and stops.
+        if (terrainAhead || router.deviating() || AirspaceGuards.isActive(plane.level())) {
+            router.update(plane.level(), plane.position(), legAltitude, cmdHeading, ticks,
+                plane, responsiblePilot(plane));
         }
         if (router.deviating()) {
             cmdHeading += router.headingOffset();
@@ -635,6 +649,29 @@ public class PlaneAutopilot {
         if (bias != 0) {
             cmdHeading += bias * AutopilotConfig.AVOID_HEADING_BIAS;
         }
+    }
+
+    /**
+     * The player this flight is being flown on behalf of, for the benefit of
+     * {@link xyz.przemyk.simpleplanes.api.AirspaceGuard}.
+     *
+     * <p>Two candidates, in this order, and the order is the point:
+     * <ol>
+     *   <li><b>Whoever is aboard.</b> A player sitting in the aircraft while the autopilot flies it
+     *       is unambiguously the person the flight is happening to, whoever typed the command. This
+     *       is also the only answer that survives a restart, because the passenger is saved with the
+     *       entity and {@link #owner} is not.</li>
+     *   <li><b>Whoever ordered it.</b> An unmanned sortie is still flown for somebody, and a mod
+     *       that claims airspace has a legitimate interest in who sent an aircraft over it.</li>
+     * </ol>
+     *
+     * <p>Null is a normal answer, not a failure: a flight reloaded off disk has forgotten its owner
+     * and a strike aircraft never had one. A guard is documented to answer "not avoided" for an
+     * anonymous flight, so a reloaded flight routes on terrain alone — which is the conservative
+     * outcome, since the alternative would be to invent a pilot and divert on a guess.
+     */
+    private @Nullable Player responsiblePilot(PlaneEntity plane) {
+        return plane.getControllingPassenger() instanceof Player aboard ? aboard : owner;
     }
 
     // ------------------------------------------------------------------ modes
