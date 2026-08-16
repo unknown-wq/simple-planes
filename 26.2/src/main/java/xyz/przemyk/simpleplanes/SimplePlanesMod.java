@@ -4,6 +4,7 @@ import net.fabricmc.api.ModInitializer;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.Items;
+import xyz.przemyk.simpleplanes.api.AirspaceGuardCommand;
 import xyz.przemyk.simpleplanes.api.BlastGuardCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
@@ -63,6 +64,13 @@ public class SimplePlanesMod implements ModInitializer {
         // foreign mod can register into it from its own initialiser whether that runs before or
         // after this one.
         BlastGuardCommand.register();
+
+        // airspace guard: the same shape as the blast guard above and for the same reason -- only
+        // the /airspaceguard switch needs registering, because
+        // xyz.przemyk.simpleplanes.api.AirspaceGuards is a plain static field with no lifecycle.
+        // Nothing here loads a foreign class, so a server without a land-claim mod runs this line
+        // and is thereafter indistinguishable from one built before the feature existed.
+        AirspaceGuardCommand.register();
 
         registerUpgradeItems();
     }
