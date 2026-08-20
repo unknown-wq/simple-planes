@@ -5,18 +5,32 @@ Compiled build of the Fabric / Minecraft 26.2 port (source in `../26.2/`).
 The jar below is a **finished, ready-to-install build** — you do not need to compile anything to
 play, just drop it into `mods/` (see below). The sources it was built from live in `../26.2/`.
 
-| File | `simpleplanes-26.2-5.3.9.jar` |
+| File | `simpleplanes-26.2-5.3.10.jar` |
 |---|---|
 | Minecraft | 26.2 |
 | Loader | Fabric, loader ≥ 0.19.3 |
 | Java | 25 |
 | Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `4b8f3e00eabbd29132833668a1c36e56b5d9c0b035a83fd440265b2424f8fe5a` |
+| sha256 | `1c47da2b26e1a7ffab095b35a022e86415bbd784ca5f701d74e5784798cf47c9` |
 
 Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
 or server.
 
 ## Changes in this build
+
+### Autopilots keep out of enemy airspace — sensibly
+
+When a player is aboard an autopilot flight and MineColonies (Fabric port 0.0.55+) is installed,
+the route bends around the territory of every colony where that player is marked hostile, and
+around ownerless hostile territories. Deliberate exceptions keep flying possible: an **empty**
+aircraft flies straight; the territory the flight **takes off from** is ignored; and the territory
+holding the **destination** is ignored, so landing at an airfield behind enemy lines just works. A
+territory too wide to route around is crossed rather than stalling the autopilot, and the take-off
+point survives a server restart. The airspace API now tells guards who is aboard and where the
+flight departs and lands (`FlightAwareAirspaceGuard`); older guards keep working unchanged. Also
+fixed along the way: the "whoever is aboard" pilot lookup never fired during autopilot flight,
+because the controlling-passenger slot is deliberately empty then — it now reads the seats.
+Simple Planes still loads and runs entirely without MineColonies.
 
 ### The autopilot can be told whose sky to keep out of
 
