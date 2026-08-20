@@ -1,12 +1,11 @@
 package xyz.przemyk.simpleplanes.autopilot;
 
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.api.AirspaceGuards;
+import xyz.przemyk.simpleplanes.api.Flight;
 
 /**
  * Decides whether to climb over the terrain ahead or to go round it, on cost rather than on reflex.
@@ -79,6 +78,13 @@ import xyz.przemyk.simpleplanes.api.AirspaceGuards;
  * degrees left and 60 degrees right from one second to the next; it still arrives, but it flies like
  * it is drunk, and that was measured rather than imagined.
  *
+ * <p>What is asked, and of whom, is the guard's business and not this class's. The search hands over
+ * a {@link Flight} — the aircraft, the pilot, whether that pilot is actually <em>aboard</em>, and the
+ * two ends of the leg — built once per search and shared by all 105 probes of it, and then scores
+ * whatever comes back. A guard that only wants to claim sky against manned flights, or that exempts
+ * the claim its own airfield sits in so an aircraft can land there, expresses that by answering
+ * {@code false}; nothing in the geometry below knows which rule produced a zero.
+ *
  * <h2>Why the pilot is never trapped</h2>
  * There is deliberately no "reject" outcome anywhere in this class. Every search ends in a heading,
  * and the worst it can say is "this one, then". Three cases carry that:
@@ -93,7 +99,10 @@ import xyz.przemyk.simpleplanes.api.AirspaceGuards;
  *   <li><b>The destination itself inside a claim.</b> Nothing here refuses the leg. The aircraft
  *       stands off while a way round still looks cheaper, and as the waypoint closes, every heading
  *       is equally claimed, the first key ties, and the ordinary arrival logic takes it in. That was
- *       flown: it arrives, having taken a wider path than a permitted pilot would.</li>
+ *       flown: it arrives, having taken a wider path than a permitted pilot would. A guard that is
+ *       given the destination — see {@link xyz.przemyk.simpleplanes.api.FlightAwareAirspaceGuard} —
+ *       can do better than "eventually" and simply stop claiming the one that contains it. The
+ *       fallback here is what happens when it does not, and it is still an arrival.</li>
  * </ul>
  *
  * <h2>Cost</h2>
@@ -223,13 +232,16 @@ public final class RoutePlanner {
      * @param heading  the commanded heading <em>without</em> any deviation, so the search always
      *                 scores the real track as one of its candidates
      * @param altitude the altitude the aircraft would otherwise fly this leg at
-     * @param craft    the aircraft, passed straight through to any {@link AirspaceGuards} and
-     *                 otherwise unused; may be null
-     * @param pilot    the player this flight is being flown for, likewise passed through; may be
-     *                 null for a flight reloaded off disk or an unmanned strike
+     * @param guarded  what is being flown, by and for whom, and between where and where — passed
+     *                 straight through to any {@link AirspaceGuards} and used for nothing else, or
+     *                 <b>null when there is no guard to ask</b>. The caller builds one only when
+     *                 {@link AirspaceGuards#isActive}, so null here means "nobody is listening", not
+     *                 "anonymous flight", and it is the whole of what this feature costs a server
+     *                 that has no land-claim mod: every {@link Probe} then carries {@code avoided}
+     *                 zero and the search is the terrain-only one it always was.
      */
     public void update(Level level, Vec3 position, double altitude, double heading, int tick,
-                       Entity craft, Player pilot) {
+                       @Nullable Flight guarded) {
         if (committedTicks > 0) {
             committedTicks--;
         }
@@ -237,11 +249,6 @@ public final class RoutePlanner {
             return;
         }
         nextPlanTick = tick + AutopilotConfig.ROUTE_PLAN_INTERVAL;
-
-        // Resolved once per search rather than once per probe. On a server with no guard this is a
-        // single isEmpty() on a static field and everything below behaves as it did before the
-        // feature existed, because every Probe then carries avoided == 0.
-        ServerLevel guarded = AirspaceGuards.isActive(level) ? (ServerLevel) level : null;
 
         double horizon = knownHorizon(level, position, heading);
         if (horizon < AutopilotConfig.ROUTE_PLAN_MIN_HORIZON) {
@@ -260,9 +267,9 @@ public final class RoutePlanner {
         // apart -- an aircraft 200 blocks short of a border was being reported as inside one. One
         // extra guard call per search buys that, against the 104 the candidate loop can make.
         boolean insideNow = guarded != null
-            && AirspaceGuards.isAvoided(guarded, craft, pilot, new Vec3(position.x, altitude, position.z));
+            && AirspaceGuards.isAvoided(guarded, new Vec3(position.x, altitude, position.z));
 
-        Probe straight = probe(level, position, altitude, heading, horizon, guarded, craft, pilot);
+        Probe straight = probe(level, position, altitude, heading, horizon, guarded);
         straightClimb = straight.climb();
         straightAvoided = straight.avoided();
         if (straightClimb <= 0 && straightAvoided == 0) {
@@ -289,8 +296,7 @@ public final class RoutePlanner {
              magnitude += AutopilotConfig.ROUTE_PLAN_DEVIATION_STEP) {
             for (double side : new double[] {-1.0, 1.0}) {
                 double candidate = magnitude * side;
-                Probe scored = probe(level, position, altitude, heading + candidate, horizon,
-                    guarded, craft, pilot);
+                Probe scored = probe(level, position, altitude, heading + candidate, horizon, guarded);
                 if (scored.climb() == UNSEEN) {
                     continue;
                 }
@@ -415,12 +421,12 @@ public final class RoutePlanner {
      * airspace half is then irrelevant: the caller discards an {@link #UNSEEN} candidate outright.
      * Unknown ground never reads as clear, in either sense of clear.
      *
-     * @param guarded the level to ask guards on, or null when nothing is registered or the switch is
-     *                off. Null is the whole of the "this feature costs nothing" path: the probe loop
-     *                then never touches {@link AirspaceGuards}.
+     * @param guarded the flight to ask guards about, or null when nothing is registered or the
+     *                switch is off. Null is the whole of the "this feature costs nothing" path: the
+     *                probe loop then never touches {@link AirspaceGuards}.
      */
     private static Probe probe(Level level, Vec3 position, double altitude, double heading, double horizon,
-                               ServerLevel guarded, Entity craft, Player pilot) {
+                               @Nullable Flight guarded) {
         double step = horizon / AutopilotConfig.ROUTE_PLAN_SAMPLES;
         double highest = Double.NEGATIVE_INFINITY;
         int avoided = 0;
@@ -432,7 +438,7 @@ public final class RoutePlanner {
             }
             highest = Math.max(highest, surface);
             if (guarded != null
-                && AirspaceGuards.isAvoided(guarded, craft, pilot, new Vec3(point.x, altitude, point.z))) {
+                && AirspaceGuards.isAvoided(guarded, new Vec3(point.x, altitude, point.z))) {
                 avoided++;
             }
         }

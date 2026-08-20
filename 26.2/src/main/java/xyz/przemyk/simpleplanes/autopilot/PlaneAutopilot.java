@@ -5,6 +5,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -15,6 +16,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xyz.przemyk.simpleplanes.api.AirspaceGuards;
+import xyz.przemyk.simpleplanes.api.Flight;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
@@ -130,6 +132,22 @@ public class PlaneAutopilot {
     /** Only used for messages; never persisted, so a reloaded flight simply flies silently. */
     private @Nullable Player owner;
 
+    /**
+     * Where this flight began — the parking spot, the runway or the point in the air the autopilot
+     * took the aircraft from.
+     *
+     * <p>Kept for {@link xyz.przemyk.simpleplanes.api.Flight} and read by nothing else in this mod.
+     * It is the aircraft's own position at {@link #start}, not the departure airfield's centre,
+     * because a flight need not have a field at all and because the interesting question a guard
+     * asks of it — "whose ground did this take off from" — is about the ground under the wheels.
+     *
+     * <p><b>Persisted</b>, unlike {@link #owner}, and for a reason the owner does not share: a
+     * restart must not turn an aircraft that took off from inside somebody's claim into one that has
+     * always been there, because a guard that exempts the ground a flight left would then start
+     * routing it away from the field it is trying to get back to.
+     */
+    private @Nullable Vec3 departurePoint;
+
     // ---- control outputs read back by PlaneEntity ----
     private float moveStrafing;
     private float moveForward;
@@ -165,6 +183,7 @@ public class PlaneAutopilot {
         this.autopilotPowered = autopilotPowered;
         this.persistent = persistent;
         this.owner = owner;
+        this.departurePoint = plane.position();
         this.goArounds = 0;
         this.gatesDisabled = false;
         this.landingAirfield = null;
@@ -636,9 +655,11 @@ public class PlaneAutopilot {
         // search it then runs is the one it ran before. Only with a guard present does the planner
         // start being asked on ordinary ground, and its first act there is an 8-sample probe of the
         // direct track that returns DIRECT and stops.
-        if (terrainAhead || router.deviating() || AirspaceGuards.isActive(plane.level())) {
-            router.update(plane.level(), plane.position(), legAltitude, cmdHeading, ticks,
-                plane, responsiblePilot(plane));
+        // Built only behind that same gate, so a guard-free server allocates nothing here either;
+        // null is what tells the planner there is nobody to ask.
+        Flight flight = AirspaceGuards.isActive(plane.level()) ? describeFlight(plane) : null;
+        if (terrainAhead || router.deviating() || flight != null) {
+            router.update(plane.level(), plane.position(), legAltitude, cmdHeading, ticks, flight);
         }
         if (router.deviating()) {
             cmdHeading += router.headingOffset();
@@ -652,26 +673,66 @@ public class PlaneAutopilot {
     }
 
     /**
-     * The player this flight is being flown on behalf of, for the benefit of
-     * {@link xyz.przemyk.simpleplanes.api.AirspaceGuard}.
+     * This flight, as an {@link xyz.przemyk.simpleplanes.api.AirspaceGuard} needs to see it: who it
+     * is being flown for, whether they are actually in it, and the two ends of the leg.
      *
-     * <p>Two candidates, in this order, and the order is the point:
-     * <ol>
-     *   <li><b>Whoever is aboard.</b> A player sitting in the aircraft while the autopilot flies it
-     *       is unambiguously the person the flight is happening to, whoever typed the command. This
-     *       is also the only answer that survives a restart, because the passenger is saved with the
-     *       entity and {@link #owner} is not.</li>
-     *   <li><b>Whoever ordered it.</b> An unmanned sortie is still flown for somebody, and a mod
-     *       that claims airspace has a legitimate interest in who sent an aircraft over it.</li>
-     * </ol>
+     * <p>Built once per tick, and only on a server that has a guard registered — see the call site.
      *
-     * <p>Null is a normal answer, not a failure: a flight reloaded off disk has forgotten its owner
-     * and a strike aircraft never had one. A guard is documented to answer "not avoided" for an
-     * anonymous flight, so a reloaded flight routes on terrain alone — which is the conservative
-     * outcome, since the alternative would be to invent a pilot and divert on a guess.
+     * @see #pilotAboard
+     * @see #currentDestination
      */
-    private @Nullable Player responsiblePilot(PlaneEntity plane) {
-        return plane.getControllingPassenger() instanceof Player aboard ? aboard : owner;
+    private Flight describeFlight(PlaneEntity plane) {
+        Player aboard = pilotAboard(plane);
+        return new Flight((ServerLevel) plane.level(), plane, aboard != null ? aboard : owner,
+            aboard != null, departurePoint, currentDestination());
+    }
+
+    /**
+     * The player sitting in the aircraft, or null for an unmanned flight.
+     *
+     * <p><b>Not {@code getControllingPassenger()}.</b> That method answers null for the whole of an
+     * autopilot flight by design — it is the seam that stops a rider fighting the flight director,
+     * see {@code PlaneEntity#getControllingPassenger} — so asking it here could only ever produce
+     * "nobody aboard", on every flight, including the ones with somebody plainly aboard. The
+     * passenger list is the fact; who holds the stick is a different question and is not this one.
+     *
+     * <p>Which player, when there are several: <b>the front seat if a player is in it, otherwise the
+     * first player found</b>. Seat order is passenger order — {@code PlaneEntity#positionRider}
+     * puts index 0 at the nose — so the front seat is the pilot's seat whether or not the autopilot
+     * is currently flying from it, and it is the seat a single rider always occupies. Falling back to
+     * any player aboard rather than to nobody matters for the large airframes, which carry mobs as
+     * well and can therefore have a non-player in seat 0.
+     */
+    private static @Nullable Player pilotAboard(PlaneEntity plane) {
+        for (Entity passenger : plane.getPassengers()) {
+            if (passenger instanceof Player player) {
+                return player;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Where this flight is heading right now, for a guard that has to know — null when it has no
+     * target it can name.
+     *
+     * <p>Deliberately the <em>current</em> target rather than a fixed final fix, because that is
+     * what "the destination" means to anything routing around it: an aircraft on the outbound leg of
+     * an out-and-back is going to the turn point, and the same aircraft twenty seconds after the
+     * arrival is committed is going to the field. The three cases are the three kinds of thing this
+     * mod flies at.
+     */
+    private @Nullable Vec3 currentDestination() {
+        if (landingAirfield != null) {
+            // Committed to a field: that is the destination now, whatever the plan's waypoint list
+            // still says, and it is the one a guard has to let the aircraft into to be able to land.
+            return landingAirfield.centre();
+        }
+        if (plan == null) {
+            return null;
+        }
+        Vec3 target = plan.strikeTargetVec();
+        return target != null ? target : plan.currentWaypointGround();
     }
 
     // ------------------------------------------------------------------ modes
@@ -2502,6 +2563,12 @@ public class PlaneAutopilot {
         child.putInt("go_arounds", goArounds);
         child.putBoolean("gates_disabled", gatesDisabled);
         child.putBoolean("powered", autopilotPowered);
+        if (departurePoint != null) {
+            // As a BlockPos: a guard asks which claim contains it, and a claim border falls on block
+            // edges, so the fraction is noise. Optional on the way back in, so a flight saved by a
+            // build older than this field loads with no departure rather than failing the read.
+            child.store("departure_point", BlockPos.CODEC, BlockPos.containing(departurePoint));
+        }
     }
 
     /** Restores a saved flight onto a freshly loaded plane. */
@@ -2541,6 +2608,9 @@ public class PlaneAutopilot {
         autopilot.goArounds = child.getIntOr("go_arounds", 0);
         autopilot.gatesDisabled = child.getBooleanOr("gates_disabled", false);
         autopilot.autopilotPowered = child.getBooleanOr("powered", true);
+        autopilot.departurePoint = child.read("departure_point", BlockPos.CODEC)
+            .map(pos -> new Vec3(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5))
+            .orElse(null);
         autopilot.persistent = true;
         autopilot.active = true;
         // A reloaded flight resumes in the air; a half-finished taxi is not worth restoring, and

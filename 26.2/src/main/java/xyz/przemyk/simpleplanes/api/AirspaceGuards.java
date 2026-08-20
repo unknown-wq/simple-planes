@@ -115,9 +115,29 @@ public final class AirspaceGuards {
      * @return true if the autopilot should prefer a route that avoids this point.
      */
     public static boolean isAvoided(ServerLevel level, Entity craft, Player pilot, Vec3 at) {
+        return isAvoided(new Flight(level, craft, pilot, false, null, null), at);
+    }
+
+    /**
+     * The same question, asked with the flight it is about — which is the form the route planner
+     * uses, and the only form that can answer "is anybody aboard" or "is this where we are going".
+     *
+     * <p>A {@link FlightAwareAirspaceGuard} is asked the flight-aware question; every other guard is
+     * asked the point-only one, with the flight's own level, aircraft and pilot, and so cannot tell
+     * that this overload exists. The choice is one {@code instanceof} per guard per probe, which is
+     * why the two kinds of guard are one list rather than two.
+     *
+     * @param flight what is being flown, by and for whom, and between where and where.
+     * @param at     the point being asked about.
+     * @return true if the autopilot should prefer a route that avoids this point.
+     */
+    public static boolean isAvoided(Flight flight, Vec3 at) {
         for (AirspaceGuard guard : GUARDS) {
             try {
-                if (guard.isAirspaceAvoided(level, craft, pilot, at)) {
+                boolean avoided = guard instanceof FlightAwareAirspaceGuard aware
+                    ? aware.isAirspaceAvoided(flight, at)
+                    : guard.isAirspaceAvoided(flight.level(), flight.craft(), flight.pilot(), at);
+                if (avoided) {
                     return true;
                 }
             } catch (Throwable t) {

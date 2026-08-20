@@ -45,7 +45,15 @@ import net.minecraft.world.phys.Vec3;
  * from disk after a restart has forgotten who ordered it, and a strike aircraft never had an owner
  * — and a guard that has nothing to say about an anonymous flight should answer {@code false}.
  *
+ * <p><b>"Which pilot" is not the same question as "is anybody aboard".</b> This parameter is filled
+ * in for the player who ordered an empty flight as readily as for one sitting in the seat, and this
+ * interface cannot tell the two apart, nor say where the flight started or where it is going. A
+ * guard that needs any of that implements {@link FlightAwareAirspaceGuard} instead and is handed a
+ * {@link Flight}. It registers through the same {@link AirspaceGuards#register}, and every sentence
+ * above still holds for it.
+ *
  * @see AirspaceGuards
+ * @see FlightAwareAirspaceGuard
  */
 @FunctionalInterface
 public interface AirspaceGuard {
