@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "i i",
+    "bib",
+    "ibi"
+  ],
+  "key": {
+    "i": "#c:ingots/iron",
+    "b": "#c:storage_blocks/iron"
+  },
+  "result": {
+    "id": "simpleplanes:armor",
+    "count": 1
+  }
+}

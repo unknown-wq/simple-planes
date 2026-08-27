@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "###",
+    "/G/",
+    "R#R"
+  ],
+  "key": {
+    "#": "#c:ingots/copper",
+    "/": "#c:rods/blaze",
+    "G": "simpleplanes:propeller",
+    "R": "#c:storage_blocks/redstone"
+  },
+  "result": {
+    "id": "simpleplanes:electric_engine"
+  }
+}

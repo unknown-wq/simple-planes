@@ -1,0 +1,187 @@
+package xyz.przemyk.simpleplanes.autopilot;
+
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Surveying a runway and printing what was measured. Lives here rather than on the survey item so
+ * the item and {@code /autopilot survey} produce identical output and neither needs a player.
+ */
+public final class AirfieldReport {
+
+    private AirfieldReport() {}
+
+    /**
+     * Surveys the strip between two thresholds, registers it and reports it.
+     *
+     * <p>Re-surveying a strip <em>replaces</em> the airfield that is already there rather than
+     * registering a second one beside it. Marking the same runway twice is the normal way to correct
+     * a threshold that was a few blocks out, and it used to leave {@code airfield-1} and
+     * {@code airfield-2} sitting on top of each other with no way to tell them apart and — before
+     * the browser gained {@code remove} — no way to delete either. The name and any marked parking
+     * spots are carried over, because they are the parts a human chose.
+     *
+     * <p><b>Re-surveying also carries over whether the field is held to the stand rule.</b> A fresh
+     * survey sets it; a re-survey keeps whatever the registered airfield had. Otherwise correcting a
+     * threshold that was a few blocks out on a world that predates the rule would silently convert a
+     * working field into one whose sorties are refused — a re-survey is how a player fixes a runway,
+     * not how they opt into a new requirement.
+     */
+    public static Airfield surveyAndRegister(AutopilotOutput output, ServerLevel level, BlockPos first, BlockPos second) {
+        AutopilotSavedData data = AutopilotSavedData.get(level);
+        Airfield surveyed = Airfield.survey(level, "", first, second);
+        Airfield existing = overlapping(data, surveyed);
+
+        Airfield airfield = existing == null
+            ? surveyed.withName(uniqueName(data))
+            : surveyed.withName(existing.name()).withParkingSpots(existing.parkingSpots())
+                .withRequiredStands(existing.requiresStands());
+        data.put(airfield);
+        if (existing != null) {
+            output.line("Re-surveyed " + airfield.name() + ", replacing the previous measurement.");
+        }
+        reportCentring(output, first, second, airfield);
+        report(output, level, airfield);
+        highlight(level, airfield);
+        return airfield;
+    }
+
+    /**
+     * Says so when the survey moved a threshold off the block that was clicked.
+     *
+     * <p>Silently relocating the thing the player just pointed at would be worse than the bug it
+     * fixes, and the number is the one that matters: half a runway width of correction is the
+     * difference between rolling down the middle and rolling along the edge. Nothing is printed when
+     * the clicks were already on the centreline, which is the case on any strip whose edges the
+     * survey cannot see (see {@code Airfield#centreOnStrip}).
+     */
+    private static void reportCentring(AutopilotOutput output, BlockPos first, BlockPos second,
+                                       Airfield airfield) {
+        // survey() keeps the order of the two clicks, and it only ever moves a threshold sideways,
+        // so this distance is the lateral correction and nothing else.
+        double moved = Math.max(horizontal(first, airfield.thresholdA()),
+            horizontal(second, airfield.thresholdB()));
+        if (moved >= 0.5) {
+            output.line(String.format("  centreline moved %.0f blocks: the thresholds are on the"
+                + " middle of the strip, not on the blocks that were clicked", moved));
+        }
+    }
+
+    private static double horizontal(BlockPos a, BlockPos b) {
+        double dx = a.getX() - b.getX();
+        double dz = a.getZ() - b.getZ();
+        return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    /**
+     * An already-registered airfield describing the same piece of ground as {@code surveyed}, or
+     * null. "The same" is both thresholds landing within {@link #RESURVEY_TOLERANCE} of a registered
+     * pair, in either order — the runway has two ends and which one is clicked first is arbitrary.
+     */
+    private static @Nullable Airfield overlapping(AutopilotSavedData data, Airfield surveyed) {
+        for (Airfield existing : data.airfieldList()) {
+            boolean sameWayRound = near(existing.thresholdA(), surveyed.thresholdA())
+                && near(existing.thresholdB(), surveyed.thresholdB());
+            boolean reversed = near(existing.thresholdA(), surveyed.thresholdB())
+                && near(existing.thresholdB(), surveyed.thresholdA());
+            if (sameWayRound || reversed) {
+                return existing;
+            }
+        }
+        return null;
+    }
+
+    /** How far a re-marked threshold may move and still count as the same runway, in blocks. */
+    private static final double RESURVEY_TOLERANCE = 12.0;
+
+    private static boolean near(BlockPos a, BlockPos b) {
+        return a.distSqr(b) <= RESURVEY_TOLERANCE * RESURVEY_TOLERANCE;
+    }
+
+    public static String uniqueName(AutopilotSavedData data) {
+        int index = 1;
+        while (data.get("airfield-" + index) != null) {
+            index++;
+        }
+        return "airfield-" + index;
+    }
+
+    /** Everything the survey measured, which is the point of the tool. */
+    public static void report(AutopilotOutput output, Level level, Airfield airfield) {
+        RunwayEnd endA = airfield.endA();
+        RunwayEnd endB = airfield.endB();
+        // The counts the survey stored, which are the ones bestEnd will use for the rest of this
+        // airfield's life. Printing a freshly measured number here would let the report and the
+        // decision disagree.
+        int obstaclesA = airfield.hasSurveyedApproaches()
+            ? airfield.approachObstaclesA() : Airfield.countApproachObstacles(level, endA);
+        int obstaclesB = airfield.hasSurveyedApproaches()
+            ? airfield.approachObstaclesB() : Airfield.countApproachObstacles(level, endB);
+        RunwayEnd best = airfield.bestEnd(level);
+
+        output.success("Airfield " + airfield.name() + " registered (" + airfield.designators() + ")");
+        output.line(String.format("  length %.0f, width %d, slope %.1f deg",
+            airfield.length(), airfield.width(), airfield.slopeDegrees()));
+        output.line(String.format("  threshold %s elevation %.0f, heading %03.0f deg",
+            endA.designator(), endA.elevation(), AutopilotMath.compassHeading(endA.landingHeading())));
+        output.line(String.format("  threshold %s elevation %.0f, heading %03.0f deg",
+            endB.designator(), endB.elevation(), AutopilotMath.compassHeading(endB.landingHeading())));
+        output.line(String.format("  surface roughness %.2f blocks (0 is perfectly flat)", airfield.roughness(level)));
+        output.line("  approach obstacles: " + endA.designator() + " -> " + obstaclesA
+            + ", " + endB.designator() + " -> " + obstaclesB
+            + " (of " + (AutopilotConfig.SURVEY_APPROACH_LENGTH / AutopilotConfig.SURVEY_APPROACH_STEP) + " samples)");
+        output.line("  preferred landing direction: " + best.designator());
+        if (!airfield.parkingSpots().isEmpty()) {
+            output.line("  marked parking spots: " + airfield.parkingSpots().size());
+        } else if (airfield.standsMissing()) {
+            // The survey is not the end of the job any more, so it does not print as though it were.
+            // Two lines: what is missing, and the exact next gesture — the tool is already in the
+            // player's hand, and the command form is here because this same report is what the
+            // headless rig reads.
+            output.warn("  NOT FINISHED: no parking marked. A runway with nowhere to park is one an"
+                + " aircraft departs from a square nobody surveyed and lands on with nowhere to go,"
+                + " so sorties to and from " + airfield.name() + " are refused until a stand exists.");
+            output.line("  Next: sneak + right-click the air to put the Runway Survey Tool into"
+                + " parking mode, then right-click beside the runway. Or:"
+                + " /autopilot airfields park \"" + airfield.name() + "\" <x y z>");
+        } else {
+            output.line("  no marked parking; departures use the apron derived from the survey");
+        }
+        if (!AirfieldBrowser.isUsable(airfield)) {
+            output.warn(String.format("  warning: only %.0f blocks long, and an aircraft needs %.0f"
+                    + " to land. Sorties into it will be refused.",
+                airfield.length(), AutopilotConfig.MIN_USABLE_RUNWAY_LENGTH));
+        }
+        if (Math.abs(airfield.slopeDegrees()) > 5) {
+            output.warn("  warning: steep slope.");
+        }
+    }
+
+    /** Marks one parking spot so a player can see where they just put it. */
+    public static void highlightParking(ServerLevel level, BlockPos spot) {
+        level.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+            spot.getX() + 0.5, spot.getY() + 1.5, spot.getZ() + 0.5, 30, 1.2, 0.6, 1.2, 0.0);
+    }
+
+    /** Marks the centreline, both thresholds and every parking spot, in world. */
+    public static void highlight(ServerLevel level, Airfield airfield) {
+        for (BlockPos spot : airfield.parkingSpots()) {
+            highlightParking(level, spot);
+        }
+        Vec3 a = airfield.pointA();
+        Vec3 b = airfield.pointB();
+        level.sendParticles(ParticleTypes.HAPPY_VILLAGER, a.x, a.y + 1, a.z, 20, 0.4, 1.0, 0.4, 0.0);
+        level.sendParticles(ParticleTypes.HAPPY_VILLAGER, b.x, b.y + 1, b.z, 20, 0.4, 1.0, 0.4, 0.0);
+        int steps = (int) Math.min(96, Math.max(1, airfield.length() / 2));
+        for (int step = 0; step <= steps; step++) {
+            double t = (double) step / steps;
+            level.sendParticles(ParticleTypes.END_ROD,
+                a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t + 0.5, a.z + (b.z - a.z) * t,
+                1, 0.0, 0.0, 0.0, 0.0);
+        }
+    }
+}

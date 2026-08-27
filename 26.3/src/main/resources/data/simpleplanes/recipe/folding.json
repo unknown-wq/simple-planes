@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    " s ",
+    "pdp",
+    " s "
+  ],
+  "key": {
+    "s": "minecraft:shulker_shell",
+    "d": "#c:gems/diamond",
+    "p": "minecraft:piston"
+  },
+  "result": {
+    "id": "simpleplanes:folding",
+    "count": 1
+  }
+}

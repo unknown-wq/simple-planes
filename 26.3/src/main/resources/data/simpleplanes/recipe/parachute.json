@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "www",
+    "s s",
+    " s "
+  ],
+  "key": {
+    "w": "#minecraft:wool",
+    "s": "#c:strings"
+  },
+  "result": {
+    "id": "simpleplanes:parachute"
+  }
+}

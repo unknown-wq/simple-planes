@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "GGG",
+    "QDQ",
+    "WWW"
+  ],
+  "key": {
+    "Q": "#c:gems/quartz",
+    "G": "#c:glass_blocks/colorless",
+    "W": "#c:gems/lapis",
+    "D": "minecraft:daylight_detector"
+  },
+  "result": {
+    "id": "simpleplanes:solar_panel",
+    "count": 1
+  }
+}

@@ -1,0 +1,1034 @@
+package xyz.przemyk.simpleplanes.autopilot;
+
+import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
+import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.context.ParsedCommandNode;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.entity.EntityTypeTest;
+import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.entities.PlaneEntity;
+import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
+
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * {@code /autopilot} — drives the whole feature so the flight model can be exercised on a headless
+ * dedicated server.
+ *
+ * <p><b>No subcommand requires a player.</b> Every one of them takes explicit coordinates, so they
+ * all run from the server console, a command block or a datapack function. A player is only an
+ * optional convenience: it makes relative coordinates ({@code ~ ~ ~}) work and decides which side an
+ * attack run comes in from.
+ *
+ * <pre>
+ * /autopilot strike &lt;target&gt; [distance] [bearing] [blast] [blocks] [fire]
+ * /autopilot tool &lt;distance&gt; [bearing] [blast] [blocks] [fire]
+ * /autopilot route &lt;from&gt; &lt;to&gt; [speed]
+ * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed] [delay &lt;seconds&gt;]
+ * /autopilot inbound &lt;from&gt; &lt;airfield&gt; [speed]
+ * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
+ * /autopilot airfields [info|show|resurvey|remove|rename|park|unpark] …
+ * /autopilot tower [&lt;airfield&gt;]
+ * /autopilot status
+ * /autopilot stop
+ * </pre>
+ *
+ * <p><b>Positions may be unloaded.</b> Everything except {@code survey} takes its coordinates with
+ * {@link BlockPosArgument#getBlockPos}, because a destination hundreds of blocks away is by
+ * definition outside anyone's simulation distance and the aircraft loads its own chunks as it goes.
+ * {@code survey} is the exception and keeps the loaded requirement, since it measures real blocks.
+ * {@code flight} and {@code inbound} take airfields by name and so sidestep the question entirely.
+ */
+public final class AutopilotCommand {
+
+    private AutopilotCommand() {}
+
+    /** Tab completion for airfield-name arguments, from whatever is registered in this dimension. */
+    private static final SuggestionProvider<CommandSourceStack> AIRFIELD_SUGGESTIONS =
+        (context, builder) -> SharedSuggestionProvider.suggest(
+            AutopilotSavedData.get(context.getSource().getLevel()).airfieldList().stream()
+                .map(airfield -> "\"" + airfield.name() + "\""), builder);
+
+    /** Tab completion for helipad-name arguments. Its own registry, so its own provider. */
+    private static final SuggestionProvider<CommandSourceStack> HELIPAD_SUGGESTIONS =
+        (context, builder) -> SharedSuggestionProvider.suggest(
+            AutopilotSavedData.get(context.getSource().getLevel()).helipadList().stream()
+                .map(pad -> "\"" + pad.name() + "\""), builder);
+
+    public static void register() {
+        CommandRegistrationCallback.EVENT.register((dispatcher, registry, environment) -> {
+            LiteralArgumentBuilder<CommandSourceStack> root = Commands.literal("autopilot")
+                .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS));
+
+            // strike <target> [distance] [bearing] [blast] [blocks] [fire]
+            //
+            // bearing is the compass direction the aircraft comes IN FROM, in degrees: it is where
+            // the aircraft is placed relative to the target, not the direction it then flies. 0
+            // spawns it north of the target and it attacks southbound; 90 spawns it east of the
+            // target and it attacks westbound. That is the useful way round, because what a person
+            // choosing a bearing is picking is which side of the target the run-in passes over.
+            // Left off, the run-in comes from wherever the order was given, which for a player
+            // means the aircraft passes them on its way in.
+            //
+            // Positional and progressively optional, which is the shape the subcommand already had.
+            // Every level executes the same method: the optional arguments are read back by name
+            // from the parsed context, so the tree stays flat instead of gaining a lambda per
+            // combination. See optionalInt/optionalFloat/optionalBool below.
+            root.then(Commands.literal("strike")
+                .then(Commands.argument("target", BlockPosArgument.blockPos())
+                    .executes(AutopilotCommand::strike)
+                    .then(Commands.argument("distance", IntegerArgumentType.integer(20, 4000))
+                        .executes(AutopilotCommand::strike)
+                        .then(Commands.argument("bearing", IntegerArgumentType.integer(0, 359))
+                            .executes(AutopilotCommand::strike)
+                            .then(Commands.argument("blast",
+                                    FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_POWER))
+                                .executes(AutopilotCommand::strike)
+                                .then(Commands.argument("blocks", BoolArgumentType.bool())
+                                    .executes(AutopilotCommand::strike)
+                                    .then(Commands.argument("fire", BoolArgumentType.bool())
+                                        .executes(AutopilotCommand::strike))))))));
+
+            // tool <distance> [bearing] [blast] [blocks] [fire]
+            //
+            // The same arguments in the same order as strike, minus the target — the target of a
+            // tool strike is whatever block gets right-clicked. Written onto the strike tool in
+            // hand, so a setting that the item's one spare gesture cannot reach is still reachable,
+            // and a strike worked out at the console can be carried into the world and repeated.
+            root.then(Commands.literal("tool")
+                .then(Commands.argument("distance", IntegerArgumentType.integer(20, 4000))
+                    .executes(AutopilotCommand::tool)
+                    .then(Commands.argument("bearing", IntegerArgumentType.integer(-1, 359))
+                        .executes(AutopilotCommand::tool)
+                        .then(Commands.argument("blast",
+                                FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_POWER))
+                            .executes(AutopilotCommand::tool)
+                            .then(Commands.argument("blocks", BoolArgumentType.bool())
+                                .executes(AutopilotCommand::tool)
+                                .then(Commands.argument("fire", BoolArgumentType.bool())
+                                    .executes(AutopilotCommand::tool)))))));
+
+            root.then(Commands.literal("route")
+                .then(Commands.argument("from", BlockPosArgument.blockPos())
+                    .then(Commands.argument("to", BlockPosArgument.blockPos())
+                        .executes(context -> route(context, AutopilotConfig.CRUISE_SPEED))
+                        .then(aircraftTypeArgument(context -> route(context, AutopilotConfig.CRUISE_SPEED)))
+                        .then(Commands.argument("speed", cruiseSpeedArgument())
+                            .executes(context -> route(context, requestedSpeed(context)))
+                            .then(aircraftTypeArgument(context -> route(context, requestedSpeed(context))))))));
+
+            // flight <from> <to> [speed] [delay <seconds>]
+            //
+            // The delay is what a person thinks of first, but it cannot be the first argument: every
+            // existing `/autopilot flight "a" "b"` and `/autopilot flight "a" "b" 2.60` has to keep
+            // parsing exactly as it does, and inserting a positional argument in front of them would
+            // reinterpret the airfield names. A trailing positional would not work either — it would
+            // be reachable only by also giving a speed. A keyword branch off both the two-argument
+            // and the three-argument forms gets the delay without touching either, and reads as what
+            // it is at the call site.
+            root.then(Commands.literal("flight")
+                .then(Commands.argument("from", StringArgumentType.string())
+                    .suggests(AIRFIELD_SUGGESTIONS)
+                    .then(Commands.argument("to", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .executes(AutopilotCommand::flight)
+                        .then(departureDelayArgument())
+                        .then(aircraftTypeArgument(AutopilotCommand::flight))
+                        .then(Commands.argument("speed", cruiseSpeedArgument())
+                            .executes(AutopilotCommand::flight)
+                            .then(departureDelayArgument())
+                            .then(aircraftTypeArgument(AutopilotCommand::flight))))));
+
+            root.then(Commands.literal("inbound")
+                .then(Commands.argument("from", BlockPosArgument.blockPos())
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .executes(context -> inbound(context, AutopilotConfig.CRUISE_SPEED))
+                        .then(aircraftTypeArgument(context -> inbound(context, AutopilotConfig.CRUISE_SPEED)))
+                        .then(Commands.argument("speed", cruiseSpeedArgument())
+                            .executes(context -> inbound(context, requestedSpeed(context)))
+                            .then(aircraftTypeArgument(context -> inbound(context, requestedSpeed(context))))))));
+
+            root.then(Commands.literal("survey")
+                .then(Commands.argument("threshold1", BlockPosArgument.blockPos())
+                    .then(Commands.argument("threshold2", BlockPosArgument.blockPos())
+                        .executes(AutopilotCommand::survey))));
+
+            root.then(Commands.literal("airfields")
+                .executes(AutopilotCommand::airfields)
+                .then(Commands.literal("info")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .executes(AutopilotCommand::airfieldInfo)))
+                .then(Commands.literal("show")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .executes(AutopilotCommand::airfieldShow)))
+                .then(Commands.literal("resurvey")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .executes(AutopilotCommand::airfieldResurvey)))
+                .then(Commands.literal("remove")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .executes(AutopilotCommand::airfieldRemove)))
+                .then(Commands.literal("rename")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .then(Commands.argument("name", StringArgumentType.string())
+                            .executes(AutopilotCommand::airfieldRename))))
+                .then(Commands.literal("park")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .then(Commands.argument("spot", BlockPosArgument.blockPos())
+                            .executes(AutopilotCommand::airfieldPark))))
+                .then(Commands.literal("unpark")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .then(Commands.argument("spot", BlockPosArgument.blockPos())
+                            .executes(AutopilotCommand::airfieldUnpark)))));
+
+            // ---- helipads and helicopter sorties ----
+            //
+            // A separate branch of the tree from `survey`/`airfields`/`flight`/`inbound`, not a mode
+            // of them. Two reasons, and the first is the one that matters: a pad and a runway are
+            // different objects in different registries, so a command that took either would have to
+            // resolve a name against both and would be ambiguous the moment somebody renamed a pad
+            // to "airfield-1". The second is that the arguments are genuinely different — a pad
+            // survey takes two corners of an area, a runway survey takes two ends of a line.
+            root.then(Commands.literal("helipad")
+                .then(Commands.literal("survey")
+                    .then(Commands.argument("corner1", BlockPosArgument.blockPos())
+                        .then(Commands.argument("corner2", BlockPosArgument.blockPos())
+                            .executes(AutopilotCommand::helipadSurvey)))));
+
+            root.then(Commands.literal("helipads")
+                .executes(AutopilotCommand::helipads)
+                .then(Commands.literal("info")
+                    .then(Commands.argument("helipad", StringArgumentType.string())
+                        .suggests(HELIPAD_SUGGESTIONS)
+                        .executes(AutopilotCommand::helipadInfo)))
+                .then(Commands.literal("show")
+                    .then(Commands.argument("helipad", StringArgumentType.string())
+                        .suggests(HELIPAD_SUGGESTIONS)
+                        .executes(AutopilotCommand::helipadShow)))
+                .then(Commands.literal("resurvey")
+                    .then(Commands.argument("helipad", StringArgumentType.string())
+                        .suggests(HELIPAD_SUGGESTIONS)
+                        .executes(AutopilotCommand::helipadResurvey)))
+                .then(Commands.literal("remove")
+                    .then(Commands.argument("helipad", StringArgumentType.string())
+                        .suggests(HELIPAD_SUGGESTIONS)
+                        .executes(AutopilotCommand::helipadRemove)))
+                .then(Commands.literal("rename")
+                    .then(Commands.argument("helipad", StringArgumentType.string())
+                        .suggests(HELIPAD_SUGGESTIONS)
+                        .then(Commands.argument("name", StringArgumentType.string())
+                            .executes(AutopilotCommand::helipadRename)))));
+
+            // heliflight <from> <to> [speed] [delay <seconds>] - the same shape as `flight`, and
+            // deliberately so: the delay is a keyword branch off both the two- and three-argument
+            // forms for exactly the reason it is there, which is that a positional would make
+            // "wait 30 seconds" reachable only by also naming a speed.
+            root.then(Commands.literal("heliflight")
+                .then(Commands.argument("from", StringArgumentType.string())
+                    .suggests(HELIPAD_SUGGESTIONS)
+                    .then(Commands.argument("to", StringArgumentType.string())
+                        .suggests(HELIPAD_SUGGESTIONS)
+                        .executes(AutopilotCommand::heliflight)
+                        .then(heliDelayArgument())
+                        .then(Commands.argument("speed", heliSpeedArgument())
+                            .executes(AutopilotCommand::heliflight)
+                            .then(heliDelayArgument())))));
+
+            root.then(Commands.literal("heliinbound")
+                .then(Commands.argument("from", BlockPosArgument.blockPos())
+                    .then(Commands.argument("helipad", StringArgumentType.string())
+                        .suggests(HELIPAD_SUGGESTIONS)
+                        .executes(AutopilotCommand::heliinbound)
+                        .then(Commands.argument("speed", heliSpeedArgument())
+                            .executes(AutopilotCommand::heliinbound)))));
+
+            root.then(Commands.literal("tower")
+                .executes(AutopilotCommand::tower)
+                .then(Commands.argument("airfield", StringArgumentType.string())
+                    .suggests(AIRFIELD_SUGGESTIONS)
+                    .executes(AutopilotCommand::towerOne)));
+
+            root.then(Commands.literal("status").executes(AutopilotCommand::status));
+            root.then(Commands.literal("stop").executes(AutopilotCommand::stop));
+
+            dispatcher.register(root);
+        });
+    }
+
+    /**
+     * True when an optional argument was actually supplied on this invocation.
+     *
+     * <p>Brigadier has no notion of a default value: an argument that was not parsed simply is not
+     * in the context, and asking for it throws {@code IllegalArgumentException}. The parsed argument
+     * map is private, but the list of nodes that were actually matched is not, and an argument node
+     * carries its argument name — so walking it is the exception-free way to ask, and it lets one
+     * method serve every level of an optional positional chain.
+     */
+    private static boolean has(CommandContext<CommandSourceStack> context, String name) {
+        for (ParsedCommandNode<CommandSourceStack> node : context.getNodes()) {
+            if (node.getNode().getName().equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int optionalInt(CommandContext<CommandSourceStack> context, String name, int fallback) {
+        return has(context, name) ? IntegerArgumentType.getInteger(context, name) : fallback;
+    }
+
+    private static float optionalFloat(CommandContext<CommandSourceStack> context, String name, float fallback) {
+        return has(context, name) ? FloatArgumentType.getFloat(context, name) : fallback;
+    }
+
+    private static boolean optionalBool(CommandContext<CommandSourceStack> context, String name, boolean fallback) {
+        return has(context, name) ? BoolArgumentType.getBool(context, name) : fallback;
+    }
+
+    /**
+     * The optional cruise-speed argument shared by {@code route}, {@code flight} and {@code inbound},
+     * in blocks per tick.
+     *
+     * <p>The accepted range is deliberately wider than the flyable one and the value is put through
+     * {@link AutopilotConfig#clampCruiseSpeed} instead: a syntax error for asking a plane to go too
+     * fast tells the user nothing, whereas the launch line reports the speed the aircraft is
+     * actually being sent at, clamp and all.
+     */
+    private static DoubleArgumentType cruiseSpeedArgument() {
+        return DoubleArgumentType.doubleArg(0.0, 10.0);
+    }
+
+    private static double requestedSpeed(CommandContext<CommandSourceStack> context) {
+        return has(context, "speed")
+            ? AutopilotConfig.clampCruiseSpeed(DoubleArgumentType.getDouble(context, "speed"))
+            : AutopilotConfig.CRUISE_SPEED;
+    }
+
+    /**
+     * {@code delay <seconds>} — how long a sortie waits on its parking spot before it asks for the
+     * runway.
+     *
+     * <p>Seconds, because that is what a person thinks in; the flight plan stores ticks. Bounded
+     * rather than unbounded because a parked aircraft holds one of the
+     * {@link AutopilotConfig#MAX_ACTIVE_AUTOPILOTS} slots for the whole wait, so a mistyped delay is
+     * indistinguishable from a launch that failed.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> departureDelayArgument() {
+        return Commands.literal("delay")
+            .then(Commands.argument("seconds",
+                    IntegerArgumentType.integer(0, AutopilotConfig.MAX_DEPARTURE_DELAY_SECONDS))
+                .executes(AutopilotCommand::flight)
+                .then(aircraftTypeArgument(AutopilotCommand::flight)));
+    }
+
+    private static int departureDelayTicks(CommandContext<CommandSourceStack> context) {
+        return optionalInt(context, "seconds", 0) * 20;
+    }
+
+    /**
+     * {@code type <plane|large|cargo|random>} — which airframe flies the sortie.
+     *
+     * <p>A keyword branch for the same reason the delay is one: every existing invocation has to
+     * keep parsing unchanged, and there is now more than one optional thing to say. It is accepted
+     * last, after {@code delay}, so the two read in the order a person says them ("in thirty
+     * seconds, a cargo plane") without doubling the size of the tree to allow both orders.
+     *
+     * <p>{@code random} draws from the three fixed-wing airframes. Helicopters are excluded
+     * deliberately — see {@link AircraftType}.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> aircraftTypeArgument(
+            com.mojang.brigadier.Command<CommandSourceStack> action) {
+        return Commands.literal("type")
+            .then(Commands.argument("aircraft", StringArgumentType.word())
+                .suggests((context, builder) -> SharedSuggestionProvider.suggest(
+                    Arrays.stream(AircraftType.values()).map(AircraftType::getSerializedName), builder))
+                .executes(action));
+    }
+
+    private static AircraftType aircraftType(CommandContext<CommandSourceStack> context) {
+        return has(context, "aircraft")
+            ? AircraftType.byName(StringArgumentType.getString(context, "aircraft"))
+            : AircraftType.PLANE;
+    }
+
+    /**
+     * True when the caller asked a fixed-wing command for a helicopter, having already told them
+     * what to type instead.
+     *
+     * <p>{@code type helicopter} now parses — {@link AircraftType} has the value, because a status
+     * line has to be able to name a rotorcraft — so the refusal has to be here rather than in the
+     * argument. It is a refusal and not a silent substitution: {@code route}, {@code flight} and
+     * {@code inbound} are all written in runways, thresholds and glide slopes, and a machine that
+     * cannot use any of the three would not fly them badly, it would sit on a threshold for ever.
+     */
+    private static boolean refusedRotorcraft(CommandContext<CommandSourceStack> context, String alternative) {
+        if (!aircraftType(context).isRotorcraft()) {
+            return false;
+        }
+        context.getSource().sendFailure(Component.literal(
+            "A helicopter cannot use a runway sortie: it has no take-off roll and nothing on the"
+                + " approach applies to it. Mark a helipad (/autopilot helipad survey) and use "
+                + alternative + " instead."));
+        return true;
+    }
+
+    /** "cargo plane", "large plane", "plane" — read off the entity, so it cannot disagree with it. */
+    private static String airframeOf(PlaneEntity plane) {
+        return BuiltInRegistries.ENTITY_TYPE.getKey(plane.getType()).getPath().replace('_', ' ');
+    }
+
+    /** " at 2.40 blocks/tick", or " at the default 2.40 blocks/tick" — always says what was ordered. */
+    private static String describeSpeed(double cruiseSpeed) {
+        return String.format(" at %.2f blocks/tick", cruiseSpeed);
+    }
+
+    /**
+     * The warhead this strike carries.
+     *
+     * <p>Every field defaults to what an aircraft has always done — {@value Blast#DEFAULT_POWER}
+     * strength, blocks broken, no fire — so an argument-free {@code /autopilot strike} is unchanged.
+     * {@link Blast} clamps the power itself, so the range on the argument is a helpful error message
+     * rather than the actual guard.
+     */
+    private static Blast blastFrom(CommandContext<CommandSourceStack> context) {
+        return new Blast(
+            optionalFloat(context, "blast", Blast.DEFAULT_POWER),
+            optionalBool(context, "blocks", true),
+            optionalBool(context, "fire", false));
+    }
+
+    private static int strike(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        int distance = optionalInt(context, "distance", AutopilotConfig.STRIKE_SPAWN_DISTANCE);
+        // Explicit run-in bearing in compass degrees, or null to derive one from wherever the
+        // command was issued.
+        Double compassBearing = has(context, "bearing")
+            ? (double) IntegerArgumentType.getInteger(context, "bearing")
+            : null;
+        Blast blast = blastFrom(context);
+        // getBlockPos, not getLoadedBlockPos. The target of an attack run is by definition hundreds
+        // of blocks away and therefore outside anyone's simulation distance, so demanding a loaded
+        // position rejected exactly the flights this command exists to fly ("That position is not
+        // loaded"). The aircraft carries its own chunk tickets — see AutopilotRegistry — so the
+        // destination does not have to be resident when the order is given.
+        BlockPos target = BlockPosArgument.getBlockPos(context, "target");
+
+        double bearing = compassBearing != null
+            ? AutopilotMath.yawFromCompass(compassBearing)
+            : AutopilotSpawner.approachBearingFrom(source.getPosition(), target);
+
+        if (!RunwayOccupancy.canActivateAnother()) {
+            source.sendFailure(Component.literal("Too many autopilot aircraft already flying ("
+                + RunwayOccupancy.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS + ")."));
+            return 0;
+        }
+
+        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing,
+            source.getPlayer(), blast);
+        if (plane == null) {
+            source.sendFailure(Component.literal("Could not create the aircraft."));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal(
+            AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
+                + " Warhead: " + blast.describe() + "."), true);
+        return 1;
+    }
+
+    /**
+     * Writes strike settings onto the strike tool the player is holding.
+     *
+     * <p>Requires a player, unlike everything else here, because the thing being configured is an
+     * item in a hand. Main hand first, then off hand, so it works however the tool is being carried.
+     *
+     * <p>A {@code bearing} of -1 means "unpin": the run-in goes back to being worked out from where
+     * the player is standing when the strike is ordered. Every argument that is left off keeps its
+     * current value rather than resetting to the default, so a second call can change one setting
+     * without restating the others.
+     */
+    private static int tool(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        ServerPlayer player = source.getPlayerOrException();
+
+        ItemStack stack = player.getMainHandItem();
+        if (!(stack.getItem() instanceof PlaneStrikeToolItem)) {
+            stack = player.getOffhandItem();
+        }
+        if (!(stack.getItem() instanceof PlaneStrikeToolItem)) {
+            source.sendFailure(Component.literal(
+                "Hold a strike tool to configure it (/give @s simpleplanes:plane_strike_tool)."));
+            return 0;
+        }
+
+        Blast current = PlaneStrikeToolItem.getBlast(stack);
+        Blast blast = new Blast(
+            optionalFloat(context, "blast", current.power()),
+            optionalBool(context, "blocks", current.breaksBlocks()),
+            optionalBool(context, "fire", current.fire()));
+
+        stack.set(AutopilotComponents.STRIKE_DISTANCE, IntegerArgumentType.getInteger(context, "distance"));
+        stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
+        stack.set(AutopilotComponents.STRIKE_BLOCKS, blast.breaksBlocks());
+        stack.set(AutopilotComponents.STRIKE_FIRE, blast.fire());
+
+        Integer bearing = PlaneStrikeToolItem.getBearing(stack);
+        if (has(context, "bearing")) {
+            int requested = IntegerArgumentType.getInteger(context, "bearing");
+            if (requested < 0) {
+                stack.remove(AutopilotComponents.STRIKE_BEARING);
+                bearing = null;
+            } else {
+                stack.set(AutopilotComponents.STRIKE_BEARING, requested);
+                bearing = requested;
+            }
+        }
+
+        ItemStack configured = stack;
+        Integer reportedBearing = bearing;
+        source.sendSuccess(() -> Component.literal("Strike tool set: "
+            + PlaneStrikeToolItem.getDistance(configured) + " blocks out, bearing "
+            + (reportedBearing == null
+                ? "from wherever you stand" : String.format("%03d", reportedBearing))
+            + ", warhead " + blast.describe() + "."), false);
+        return 1;
+    }
+
+    private static int route(CommandContext<CommandSourceStack> context, double cruiseSpeed)
+        throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        // Unloaded positions accepted, for the same reason as the strike target above.
+        BlockPos from = BlockPosArgument.getBlockPos(context, "from");
+        BlockPos to = BlockPosArgument.getBlockPos(context, "to");
+        List<BlockPos> waypoints = List.of(from, to);
+
+        if (refusedRotorcraft(context, "/autopilot heliflight")) {
+            return 0;
+        }
+        if (!RunwayOccupancy.canActivateAnother()) {
+            source.sendFailure(Component.literal("Too many autopilot aircraft already flying ("
+                + RunwayOccupancy.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS + ")."));
+            return 0;
+        }
+
+        int cruiseAltitude = AutopilotSpawner.cruiseAltitudeFor(level, waypoints);
+        Airfield nearest = AutopilotSavedData.get(level).nearest(from.getX(), from.getZ(), 512);
+        PlaneEntity plane = AutopilotSpawner.launchRoute(level, waypoints, cruiseAltitude, 2,
+            nearest == null ? null : nearest.name(), source.getPlayer(),
+            cruiseSpeed, Blast.DEFAULT, aircraftType(context));
+        if (plane == null) {
+            source.sendFailure(Component.literal("Could not create the aircraft."));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " flying "
+            + from.toShortString() + " -> " + to.toShortString() + " -> " + from.toShortString()
+            + " at altitude " + cruiseAltitude + describeSpeed(cruiseSpeed) + ", "
+            + (nearest == null ? "improvised landing" : "landing at " + nearest.name())
+            + ", " + airframeOf(plane)), true);
+        return 1;
+    }
+
+    /**
+     * The whole sortie: spawn parked at one registered airfield, taxi out, take off, cruise, and fly
+     * an instrument approach onto the other.
+     *
+     * <p>Takes the airfields by name, so it needs no block-position argument and cannot be refused
+     * for pointing at unloaded ground — which is the normal case, since both runways are usually
+     * nowhere near a player. The spawner makes the departure and destination chunks resident itself.
+     */
+    private static int flight(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        double cruiseSpeed = requestedSpeed(context);
+        int delayTicks = departureDelayTicks(context);
+        String fromName = StringArgumentType.getString(context, "from");
+        String toName = StringArgumentType.getString(context, "to");
+
+        if (refusedRotorcraft(context, "/autopilot heliflight")) {
+            return 0;
+        }
+        AutopilotSavedData data = AutopilotSavedData.get(level);
+        Airfield from = data.get(fromName);
+        Airfield to = data.get(toName);
+        if (from == null || to == null) {
+            source.sendFailure(Component.literal("No such airfield: "
+                + (from == null ? fromName : toName) + ". Use /autopilot airfields to list them."));
+            return 0;
+        }
+        if (from.name().equals(to.name())) {
+            source.sendFailure(Component.literal("Departure and destination are the same airfield."));
+            return 0;
+        }
+        // Refused here rather than discovered by an aircraft in the air. Both ends are checked: the
+        // departure has to be long enough to get off, and the destination long enough to get back on.
+        //
+        // Parking is checked at both ends too, and for the symmetrical reason: the departure is
+        // where the aircraft stands before it moves, and the destination is where it has to taxi to
+        // after it lands. Both are no-ops on an airfield surveyed before the rule existed.
+        for (Airfield airfield : List.of(from, to)) {
+            Component refusal = AirfieldBrowser.usabilityRefusal(airfield);
+            if (refusal == null) {
+                refusal = AirfieldBrowser.standsRefusal(airfield);
+            }
+            if (refusal != null) {
+                source.sendFailure(refusal);
+                return 0;
+            }
+        }
+        if (!AutopilotRegistry.canActivateAnother()) {
+            source.sendFailure(Component.literal("Too many autopilot aircraft already flying ("
+                + AutopilotRegistry.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS + ")."));
+            return 0;
+        }
+
+        PlaneEntity plane = AutopilotSpawner.launchSortie(level, from, to, source.getPlayer(),
+            cruiseSpeed, Blast.DEFAULT, delayTicks, aircraftType(context));
+        if (plane == null) {
+            source.sendFailure(Component.literal("Could not create the aircraft."));
+            return 0;
+        }
+        double distance = AutopilotMath.horizontalDistance(from.centre(), to.centre());
+        source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " parked at "
+            + from.name() + " (" + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
+            + ", " + Math.round(plane.getZ()) + "), sortie to " + to.name()
+            + " - " + Math.round(distance) + " blocks" + describeSpeed(cruiseSpeed)
+            + (delayTicks > 0 ? ", departing in " + delayTicks / 20 + "s" : "")
+            + " (once the runway is free), " + airframeOf(plane) + "."), true);
+        return 1;
+    }
+
+    /**
+     * A one-way arrival: launch in the air at a given point and fly an approach into a named
+     * airfield. Exists so the landing can be exercised on its own, without first surviving the
+     * departure, and because a genuine inbound flight is something {@code route} cannot express.
+     */
+    private static int inbound(CommandContext<CommandSourceStack> context, double cruiseSpeed)
+        throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        BlockPos from = BlockPosArgument.getBlockPos(context, "from");
+        String name = StringArgumentType.getString(context, "airfield");
+
+        if (refusedRotorcraft(context, "/autopilot heliinbound")) {
+            return 0;
+        }
+        Airfield destination = AutopilotSavedData.get(level).get(name);
+        if (destination == null) {
+            source.sendFailure(AirfieldBrowser.unknown(name));
+            return 0;
+        }
+        Component refusal = AirfieldBrowser.usabilityRefusal(destination);
+        if (refusal == null) {
+            refusal = AirfieldBrowser.standsRefusal(destination);
+        }
+        if (refusal != null) {
+            source.sendFailure(refusal);
+            return 0;
+        }
+        if (!AutopilotRegistry.canActivateAnother()) {
+            source.sendFailure(Component.literal("Too many autopilot aircraft already flying ("
+                + AutopilotRegistry.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS + ")."));
+            return 0;
+        }
+
+        PlaneEntity plane = AutopilotSpawner.launchInbound(level,
+            new Vec3(from.getX() + 0.5, from.getY(), from.getZ() + 0.5), destination, source.getPlayer(),
+            cruiseSpeed, Blast.DEFAULT, aircraftType(context));
+        if (plane == null) {
+            source.sendFailure(Component.literal("Could not create the aircraft."));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " inbound to "
+            + destination.name() + " from " + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
+            + ", " + Math.round(plane.getZ()) + " - "
+            + Math.round(AutopilotMath.horizontalDistance(plane.position(), destination.centre()))
+            + " blocks" + describeSpeed(cruiseSpeed) + ", " + airframeOf(plane) + "."), true);
+        return 1;
+    }
+
+    private static int survey(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        // getLoadedBlockPos is correct here and is deliberately kept: a survey measures real blocks —
+        // surface heights, width, slope, roughness — so surveying unloaded ground would silently
+        // register a runway made of nothing. Refusing with "That position is not loaded" is the right
+        // answer; go and stand on the runway.
+        BlockPos first = BlockPosArgument.getLoadedBlockPos(context, "threshold1");
+        BlockPos second = BlockPosArgument.getLoadedBlockPos(context, "threshold2");
+        AirfieldReport.surveyAndRegister(AutopilotOutput.toSource(source), source.getLevel(), first, second);
+        return 1;
+    }
+
+    // ------------------------------------------------------------------ helipads
+
+    /**
+     * The rotorcraft cruise-speed argument.
+     *
+     * <p>Its own range, not the fixed-wing one. A helicopter's useful band starts below a plane's
+     * stall speed and stops well below its cruise, so sharing {@code cruiseSpeedArgument} would let
+     * a machine be ordered at 2.80 and clamped to 2.00 with nothing saying so — or worse, a slow
+     * approach at 0.25 be silently raised to 0.40. Wider than the flyable range on purpose, for the
+     * same reason the fixed-wing one is: the launch line reports what the machine is really being
+     * sent at, clamp and all.
+     */
+    private static DoubleArgumentType heliSpeedArgument() {
+        return DoubleArgumentType.doubleArg(0.0, 10.0);
+    }
+
+    private static double heliSpeed(CommandContext<CommandSourceStack> context) {
+        return has(context, "speed")
+            ? RotorcraftConfig.clampCruiseSpeed(DoubleArgumentType.getDouble(context, "speed"))
+            : RotorcraftConfig.CRUISE_SPEED;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> heliDelayArgument() {
+        return Commands.literal("delay")
+            .then(Commands.argument("seconds",
+                    IntegerArgumentType.integer(0, AutopilotConfig.MAX_DEPARTURE_DELAY_SECONDS))
+                .executes(AutopilotCommand::heliflight));
+    }
+
+    /**
+     * Surveys a helipad from two clicked corners.
+     *
+     * <p>{@code getLoadedBlockPos}, exactly as {@code survey} uses, and for the same reason: this
+     * measures real blocks — the pad surface, the column above it and every approach sector — and
+     * surveying unloaded ground would register a pad made of nothing.
+     */
+    private static int helipadSurvey(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        BlockPos first = BlockPosArgument.getLoadedBlockPos(context, "corner1");
+        BlockPos second = BlockPosArgument.getLoadedBlockPos(context, "corner2");
+        Helipad pad = HelipadReport.surveyAndRegister(AutopilotOutput.toSource(source),
+            source.getLevel(), first, second);
+        return pad == null ? 0 : 1;
+    }
+
+    private static int helipads(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return HelipadBrowser.list(AutopilotOutput.toSource(source), source.getLevel(),
+            source.getPosition(), originName(source));
+    }
+
+    private static int helipadInfo(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        Helipad pad = namedPad(context);
+        if (pad == null) {
+            source.sendFailure(HelipadBrowser.unknown(StringArgumentType.getString(context, "helipad")));
+            return 0;
+        }
+        HelipadBrowser.detail(AutopilotOutput.toSource(source), source.getLevel(), pad,
+            source.getPosition(), originName(source));
+        return 1;
+    }
+
+    private static int helipadShow(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        Helipad pad = namedPad(context);
+        if (pad == null) {
+            source.sendFailure(HelipadBrowser.unknown(StringArgumentType.getString(context, "helipad")));
+            return 0;
+        }
+        HelipadReport.highlight(source.getLevel(), pad);
+        source.sendSuccess(() -> Component.literal("Marked " + pad.name() + " at "
+            + pad.centre().toShortString() + "."), false);
+        return 1;
+    }
+
+    private static int helipadResurvey(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return HelipadBrowser.resurvey(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "helipad")) ? 1 : 0;
+    }
+
+    private static int helipadRemove(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return HelipadBrowser.remove(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "helipad")) ? 1 : 0;
+    }
+
+    private static int helipadRename(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return HelipadBrowser.rename(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "helipad"),
+            StringArgumentType.getString(context, "name")) ? 1 : 0;
+    }
+
+    private static @Nullable Helipad namedPad(CommandContext<CommandSourceStack> context) {
+        return AutopilotSavedData.get(context.getSource().getLevel())
+            .helipad(StringArgumentType.getString(context, "helipad"));
+    }
+
+    /** A helicopter sortie between two registered pads: lift off, transit, let down, park. */
+    private static int heliflight(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        double cruiseSpeed = heliSpeed(context);
+        int delayTicks = optionalInt(context, "seconds", 0) * 20;
+        String fromName = StringArgumentType.getString(context, "from");
+        String toName = StringArgumentType.getString(context, "to");
+
+        AutopilotSavedData data = AutopilotSavedData.get(level);
+        Helipad from = data.helipad(fromName);
+        Helipad to = data.helipad(toName);
+        if (from == null || to == null) {
+            source.sendFailure(HelipadBrowser.unknown(from == null ? fromName : toName));
+            return 0;
+        }
+        if (from.name().equals(to.name())) {
+            source.sendFailure(Component.literal("Departure and destination are the same helipad."));
+            return 0;
+        }
+        if (!AutopilotRegistry.canActivateAnother()) {
+            source.sendFailure(Component.literal("Too many autopilot aircraft already flying ("
+                + AutopilotRegistry.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS + ")."));
+            return 0;
+        }
+        // Refused here rather than discovered by a machine hovering over an occupied square. The
+        // departure pad is the one that matters at this moment — the destination is checked again
+        // when the machine gets there, because in the minutes between it can change either way.
+        AutopilotSpawner.loadRegion(level, from.touchdown());
+        if (!from.free(level, null)) {
+            source.sendFailure(Component.literal(from.name()
+                + " already has an aircraft on it; there is nowhere to put another one."));
+            return 0;
+        }
+
+        PlaneEntity plane = AutopilotSpawner.launchHelicopterSortie(level, from, to,
+            source.getPlayer(), cruiseSpeed, delayTicks);
+        if (plane == null) {
+            source.sendFailure(Component.literal("Could not create the helicopter."));
+            return 0;
+        }
+        double distance = AutopilotMath.horizontalDistance(from.touchdown(), to.touchdown());
+        source.sendSuccess(() -> Component.literal("Helicopter #" + plane.getId() + " on the pad at "
+            + from.name() + " (" + String.format("%.1f, %.1f, %.1f",
+                plane.getX(), plane.getY(), plane.getZ())
+            + "), sortie to " + to.name() + " - " + Math.round(distance) + " blocks"
+            + describeSpeed(cruiseSpeed)
+            + (delayTicks > 0 ? ", lifting off in " + delayTicks / 20 + "s" : "") + "."), true);
+        return 1;
+    }
+
+    /** The arrival half on its own: launch in the air and fly the let-down onto a named pad. */
+    private static int heliinbound(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        BlockPos from = BlockPosArgument.getBlockPos(context, "from");
+        String name = StringArgumentType.getString(context, "helipad");
+
+        Helipad destination = AutopilotSavedData.get(level).helipad(name);
+        if (destination == null) {
+            source.sendFailure(HelipadBrowser.unknown(name));
+            return 0;
+        }
+        if (!AutopilotRegistry.canActivateAnother()) {
+            source.sendFailure(Component.literal("Too many autopilot aircraft already flying ("
+                + AutopilotRegistry.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS + ")."));
+            return 0;
+        }
+        double cruiseSpeed = heliSpeed(context);
+        PlaneEntity plane = AutopilotSpawner.launchHelicopterInbound(level,
+            new Vec3(from.getX() + 0.5, from.getY(), from.getZ() + 0.5), destination,
+            source.getPlayer(), cruiseSpeed);
+        if (plane == null) {
+            source.sendFailure(Component.literal("Could not create the helicopter."));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("Helicopter #" + plane.getId() + " inbound to "
+            + destination.name() + " from " + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
+            + ", " + Math.round(plane.getZ()) + " - "
+            + Math.round(AutopilotMath.horizontalDistance(plane.position(), destination.touchdown()))
+            + " blocks" + describeSpeed(cruiseSpeed) + "."), true);
+        return 1;
+    }
+
+    /**
+     * The tower board for every runway in this dimension: free or occupied, by whom, in what mode,
+     * for how long, and who is holding for it.
+     *
+     * <p>Read-only. It reserves nothing and releases nothing; occupancy comes from
+     * {@link RunwayOccupancy#holder}, the same validated answer the aircraft themselves get.
+     *
+     * <p>The board's sentences carry an English fallback, so a player reading it in chat gets their
+     * own language and the dedicated server console — which loads no mod language files — still
+     * prints English rather than raw translation keys.
+     */
+    private static int tower(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<Component> lines = TowerBoard.board(source.getLevel());
+        for (Component line : lines) {
+            source.sendSuccess(() -> line, false);
+        }
+        return lines.size();
+    }
+
+    private static int towerOne(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        String name = StringArgumentType.getString(context, "airfield");
+        List<Component> lines = TowerBoard.board(source.getLevel(), name);
+        if (lines.isEmpty()) {
+            source.sendFailure(TowerBoard.unknownAirfield(name));
+            return 0;
+        }
+        for (Component line : lines) {
+            source.sendSuccess(() -> line, false);
+        }
+        return lines.size();
+    }
+
+    private static int airfields(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return AirfieldBrowser.list(AutopilotOutput.toSource(source), source.getLevel(),
+            source.getPosition(), originName(source));
+    }
+
+    /**
+     * What the distances in the browser are measured from.
+     *
+     * <p>A player is at a place they can see. The console and a command block are not: their source
+     * position is the world spawn, which is a perfectly good origin as long as the header says that
+     * is what it is — an unlabelled "1.2 km" is a number nobody can act on.
+     */
+    private static String originName(CommandSourceStack source) {
+        if (source.getPlayer() != null) {
+            return source.getPlayer().getName().getString();
+        }
+        Vec3 origin = source.getPosition();
+        return String.format("%.0f, %.0f (world origin)", origin.x, origin.z);
+    }
+
+    private static int airfieldInfo(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        Airfield airfield = named(context);
+        if (airfield == null) {
+            source.sendFailure(AirfieldBrowser.unknown(StringArgumentType.getString(context, "airfield")));
+            return 0;
+        }
+        AirfieldBrowser.detail(AutopilotOutput.toSource(source), source.getLevel(), airfield,
+            source.getPosition(), originName(source));
+        return 1;
+    }
+
+    /**
+     * Draws the runway in world with particles — the same highlight the survey itself produces, so
+     * a field registered a week ago can be found again without re-surveying it.
+     */
+    private static int airfieldShow(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        Airfield airfield = named(context);
+        if (airfield == null) {
+            source.sendFailure(AirfieldBrowser.unknown(StringArgumentType.getString(context, "airfield")));
+            return 0;
+        }
+        AirfieldReport.highlight(source.getLevel(), airfield);
+        source.sendSuccess(() -> Component.literal("Marked " + airfield.name() + " at "
+            + airfield.thresholdA().toShortString() + "."), false);
+        return 1;
+    }
+
+    /**
+     * Re-measures a registered airfield from its own stored thresholds. The one command that
+     * rewrites saved runway geometry — see {@link AirfieldBrowser#resurvey}.
+     */
+    private static int airfieldResurvey(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return AirfieldBrowser.resurvey(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "airfield")) ? 1 : 0;
+    }
+
+    private static int airfieldRemove(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return AirfieldBrowser.remove(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "airfield")) ? 1 : 0;
+    }
+
+    private static int airfieldRename(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return AirfieldBrowser.rename(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "airfield"),
+            StringArgumentType.getString(context, "name")) ? 1 : 0;
+    }
+
+    private static int airfieldPark(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        // getLoadedBlockPos, as for survey and for the same reason: marking a parking spot measures
+        // the ground there and the ground all the way to the threshold, and unloaded ground reads as
+        // nothing at all.
+        BlockPos spot = BlockPosArgument.getLoadedBlockPos(context, "spot");
+        return AirfieldBrowser.park(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "airfield"), spot) ? 1 : 0;
+    }
+
+    private static int airfieldUnpark(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack source = context.getSource();
+        BlockPos spot = BlockPosArgument.getBlockPos(context, "spot");
+        return AirfieldBrowser.unpark(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "airfield"), spot) ? 1 : 0;
+    }
+
+    private static @Nullable Airfield named(CommandContext<CommandSourceStack> context) {
+        return AutopilotSavedData.get(context.getSource().getLevel())
+            .get(StringArgumentType.getString(context, "airfield"));
+    }
+
+    private static int status(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<? extends PlaneEntity> planes = activePlanes(source.getLevel());
+        source.sendSuccess(() -> Component.literal(RunwayOccupancy.activeCount() + "/"
+            + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS + " autopilot aircraft active, "
+            + planes.size() + " in this dimension."), false);
+        for (PlaneEntity plane : planes) {
+            PlaneAutopilot autopilot = plane.getAutopilot();
+            if (autopilot != null) {
+                source.sendSuccess(() -> Component.literal("  " + autopilot.statusLine(plane)), false);
+            }
+        }
+        return planes.size();
+    }
+
+    private static int stop(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<? extends PlaneEntity> planes = activePlanes(source.getLevel());
+        for (PlaneEntity plane : planes) {
+            PlaneAutopilot autopilot = plane.getAutopilot();
+            if (autopilot != null) {
+                autopilot.stop(plane);
+            }
+            plane.setAutopilot(null);
+        }
+        source.sendSuccess(() -> Component.literal("Stopped " + planes.size() + " autopilot aircraft."), true);
+        return planes.size();
+    }
+
+    private static List<? extends PlaneEntity> activePlanes(ServerLevel level) {
+        return level.getEntities(EntityTypeTest.forClass(PlaneEntity.class),
+            plane -> plane.getAutopilot() != null && plane.getAutopilot().isActive());
+    }
+}
