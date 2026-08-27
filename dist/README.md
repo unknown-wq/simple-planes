@@ -1,20 +1,41 @@
 # dist
 
-Compiled build of the Fabric / Minecraft 26.2 port (source in `../26.2/`).
+Compiled builds. **Two jars, one per Minecraft version — take the one that matches your game.**
+Neither needs compiling; drop it and Fabric API into `mods/`.
 
-The jar below is a **finished, ready-to-install build** — you do not need to compile anything to
-play, just drop it into `mods/` (see below). The sources it was built from live in `../26.2/`.
+| | 26.3 | 26.2 |
+|---|---|---|
+| File | `simpleplanes-26.3-5.3.10.jar` | `simpleplanes-26.2-5.3.10.jar` |
+| Minecraft | 26.3-snapshot-10 | 26.2 |
+| Loader | Fabric, loader ≥ 0.19.4 | Fabric, loader ≥ 0.19.3 |
+| Java | 25 | 25 |
+| Requires | Fabric API 0.158.3+26.3 or newer | Fabric API 0.154.2+26.2 or newer |
+| Source | `../26.3/` | `../26.2/` |
+| sha256 | `5b4380cc6d11ea236087b929c6943e509cf5652429bb7946bf3acda0f0b9aa84` | `1c47da2b26e1a7ffab095b35a022e86415bbd784ca5f701d74e5784798cf47c9` |
 
-| File | `simpleplanes-26.2-5.3.10.jar` |
-|---|---|
-| Minecraft | 26.2 |
-| Loader | Fabric, loader ≥ 0.19.3 |
-| Java | 25 |
-| Requires | Fabric API 0.154.2+26.2 or newer |
-| sha256 | `1c47da2b26e1a7ffab095b35a022e86415bbd784ca5f701d74e5784798cf47c9` |
+The two jars carry the **same mod version, 5.3.10, and the same features** — 26.3 is a retarget, not
+a release. The changelog below therefore describes both.
 
-Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
-or server.
+## About the 26.3 build
+
+Minecraft 26.3 is a snapshot, so this build is for a snapshot: it tracks `26.3-snapshot-10`
+specifically and is not expected to load on the release when there is one.
+
+What it was checked with: a clean build with no errors or warnings, and autopilot sorties flown on a
+headless dedicated server — two aircraft departing one airfield seconds apart (the second held on the
+stand for the runway, replanned its arrival when the runway was busy, and both parked on separate
+stands), the reverse leg, a strike, and a gunship sortie. Airfields survived a save and restart.
+
+One flight in the tests was lost in the descent, entity and chunk together. That is **not new in
+26.3**: the same scenario was run against a 26.2 server and a 26.2 jar with the same world seed
+pinned, and the transcripts differ in that one line and nowhere else — the outbound sortie matches
+block for block and tick for tick on both. The rolling chunk ticket does not always keep up on the
+arc onto final, and it did not on 26.2 either.
+
+**Nothing client-side was run.** The GUI, the renderers and the camera mixin compile, and the mixin's
+target was read out of the snapshot-10 sources, but no screen has been drawn and no aircraft ridden
+on this build. Helicopters, the parachute and every upgrade except the furnace engine are likewise
+untested here, as is any world that is not superflat.
 
 ## Changes in this build
 
