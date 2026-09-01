@@ -201,7 +201,9 @@ truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
 - `client/gui/PlaneInventoryScreen` — `Upgrade#renderScreen` / `#renderScreenBg` overlays (furnace
   burn bar, energy bar, fluid tank) are not drawn: same `GuiGraphics` removal.
 - `client/gui/StorageScreen` — Iron Chests layout support removed with `compat/**`; the screen is
-  always the vanilla-chest layout sized from `StorageContainer.rowCount`.
+  always the `vanilla_chest.png` layout, sized through `ChestTypes.getXSize/getYSize` (184x168 for
+  the 27-slot chest) and blitted in one piece, because that texture is a finished panel rather than
+  a `generic_54.png`-style sheet.
 - `client/render/UpgradesModels` — `SHULKER_FOLDING` dropped (the folding upgrade's shulker lid).
   `ShulkerModel` moved to `net.minecraft.client.model.monster.shulker` and is now
   `EntityModel<ShulkerRenderState>`, which does not fit the plane render state.
