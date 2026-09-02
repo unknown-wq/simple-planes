@@ -245,6 +245,8 @@ public final class PlaneCollisions {
         boolean blockedY = Math.abs(blocked.y) > CONTACT_EPSILON;
         boolean blockedZ = Math.abs(blocked.z) > CONTACT_EPSILON;
 
+        armSoftLanding(plane, achieved);
+
         restoreCollisionResponse(plane, blocked);
 
         if (state.softLandingTicks > 0 && --state.softLandingTicks == 0) {
@@ -383,6 +385,31 @@ public final class PlaneCollisions {
     private static boolean isWaterAt(PlaneEntity plane, Vec3 position) {
         BlockPos pos = new BlockPos(Mth.floor(position.x), Mth.floor(position.y + 0.4), Mth.floor(position.z));
         return plane.level().getBlockState(pos).getFluidState().is(FluidTags.WATER);
+    }
+
+    /**
+     * Runs the part of {@code Entity.move()} that 26.2 skips for client-authoritative vehicles:
+     * the fall-damage hook, which is where a block gets to say how soft it is to land on.
+     *
+     * <p>{@code Entity.move()} calls {@code checkFallDamage} only under
+     * {@code isLocalInstanceAuthoritative()}, and on the server that is
+     * {@code !isClientAuthoritative()} — false as soon as a {@link Player} is the controlling
+     * passenger, because {@code Player.isClientAuthoritative()} returns {@code true}
+     * unconditionally. So for the ordinary case, a plane somebody is flying, the server never
+     * reached {@code PlaneEntity#checkFallDamage} at all, and {@link State#softLandingMultiplier}
+     * — the whole point of that path, hay 0.2 / slime 0.0 / honey 0.2 / stalagmite 2.0 — was only
+     * ever armed on the pilot's client, which is not the side that applies the damage. The
+     * multiplier worked exclusively for aircraft with nobody aboard.
+     *
+     * <p>Guarded on the same test the engine uses, so this fires exactly when the engine skipped
+     * it and the hook still runs once per {@code move()}, never twice.
+     */
+    private static void armSoftLanding(PlaneEntity plane, Vec3 achieved) {
+        if (plane.isLocalInstanceAuthoritative()) {
+            return;
+        }
+        BlockPos onPos = plane.getOnPosLegacy();
+        plane.checkFallDamage(achieved.y, plane.onGround(), plane.level().getBlockState(onPos), onPos);
     }
 
     /**
