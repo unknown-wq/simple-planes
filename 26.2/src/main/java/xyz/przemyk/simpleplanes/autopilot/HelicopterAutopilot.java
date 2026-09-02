@@ -548,14 +548,22 @@ public final class HelicopterAutopilot {
             + (overheadTick >= 0 ? (ticks - overheadTick) + " ticks from the run-in" : ticks + " ticks");
         String problem = landingProblem(plane, miss, tolerance);
         reported = true;
+        // Whether the pad is now blocked and whether the landing was a good one are two different
+        // questions, and this used to answer only the first when the second came out clean. An
+        // arrival that came to rest just outside the tolerance — 2.5 blocks off the centre of a pad
+        // whose tolerance is 2 — is still sitting squarely on the pad, and without a record the
+        // entity search goes blind as soon as the chunk unloads and the next arrival lands on top of
+        // it, which is the whole reason StandOccupancy exists. So the pad is remembered whenever the
+        // machine is actually standing on it, over exactly the footprint Helipad#free searches, and
+        // the outcome line below is decided on its own terms.
+        if (destination.covers(position, 1.0) && plane.level() instanceof ServerLevel serverLevel) {
+            StandOccupancy.take(serverLevel, destination.name(), destination.centre(), plane);
+        }
         if (problem == null) {
             AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId() + " landed at "
                 + destination.name() + ", " + where + String.format(" (%.2f blocks from the pad centre "
                 + "%.1f, %.1f, %.1f, tolerance %.1f; ", miss, pad.x, pad.y, pad.z, tolerance)
                 + timings + ").");
-            if (plane.level() instanceof ServerLevel serverLevel) {
-                StandOccupancy.take(serverLevel, destination.name(), destination.centre(), plane);
-            }
         } else {
             AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId()
                 + " did not land on " + destination.name() + ": came to rest " + problem
