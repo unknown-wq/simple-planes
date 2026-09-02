@@ -8,7 +8,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.loot.LootContext;
 import net.minecraft.world.level.storage.loot.LootParams;
 import net.minecraft.world.level.storage.loot.parameters.LootContextParamSets;
-import net.minecraft.world.level.storage.loot.providers.number.ResolvableNumber;
+import net.minecraft.world.level.storage.loot.providers.number.ints.ResolvableInt;
 
 import java.util.Optional;
 
@@ -19,7 +19,7 @@ import java.util.Optional;
  * {@code FuelValues} table with {@code isFuel(stack)} and {@code burnDuration(stack)}. 26.3 deletes
  * that class and makes fuel a data component instead: an item is fuel iff it carries
  * {@link DataComponents#COOKING_FUEL}, and its burn time is a
- * {@link net.minecraft.world.level.storage.loot.providers.number.NumberProvider} resolved against a
+ * {@link net.minecraft.world.level.storage.loot.providers.number.ints.ContextIntProvider} resolved against a
  * {@link LootContext}. {@code AbstractFurnaceBlockEntity#getBurnDuration} is the vanilla call and
  * this mirrors it.
  *
@@ -49,7 +49,7 @@ public final class FuelValues {
         if (!(level instanceof ServerLevel serverLevel) || !isFuel(stack)) {
             return 0;
         }
-        return ResolvableNumber.getIntFromItem(
+        return ResolvableInt.getFromItem(
             stack, DataComponents.COOKING_FUEL, CookingFuel::burnTime, lootContext(serverLevel), 0);
     }
 
