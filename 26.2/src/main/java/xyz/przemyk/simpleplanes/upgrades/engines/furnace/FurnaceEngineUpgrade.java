@@ -5,6 +5,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.inventory.DataSlot;
 import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.ItemStackTemplate;
 import net.minecraft.world.level.storage.ValueInput;
@@ -39,11 +40,15 @@ public class FurnaceEngineUpgrade extends EngineUpgrade {
             if (itemBurnTime > 0) {
                 burnTimeTotal = itemBurnTime;
                 burnTime = itemBurnTime;
-                ItemStackTemplate remainder = itemStack.getItem().getCraftingRemainder();
-                if (remainder != null) {
-                    container.setItem(0, remainder.create());
+                // Same order as a vanilla furnace: burn one, and hand back the crafting remainder
+                // only once the stack has run out. Substituting it straight away replaced the whole
+                // slot with a single item and threw away the rest of a stacked fuel.
+                Item fuelItem = itemStack.getItem();
+                itemStack.shrink(1);
+                if (itemStack.isEmpty()) {
+                    ItemStackTemplate remainder = fuelItem.getCraftingRemainder();
+                    container.setItem(0, remainder != null ? remainder.create() : ItemStack.EMPTY);
                 } else {
-                    itemStack.shrink(1);
                     container.setItem(0, itemStack);
                 }
                 updateClient();
