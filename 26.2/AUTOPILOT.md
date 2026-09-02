@@ -540,7 +540,9 @@ you retune one, retune all three.
 **The landing gates.** Below 30 blocks above the touchdown point, the approach must satisfy *all* of:
 
 * heading within 10° of the runway heading — this is the "no landing at an angle" rule
-* lateral offset within the runway width (minimum 10 blocks)
+* lateral offset within half the runway width (minimum 10 blocks) — the same half-width the
+  roll-out judges the stopped aircraft against, so a landing the gates clear is one the report
+  will call a landing
 * bank within 12° — `PlaneEntity#causeFallDamage` explodes the plane above 45°, so this matters
 * sink rate under 0.45 blocks/tick
 

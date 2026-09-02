@@ -1673,7 +1673,14 @@ public class PlaneAutopilot {
         if (headingError > AutopilotConfig.GATE_HEADING_ERROR) {
             return String.format("heading %.0f deg off the runway", headingError);
         }
-        double allowedLateral = Math.max(AutopilotConfig.GATE_LATERAL_OFFSET, landingAirfield.width());
+        // Half the width, because that is what "off the centreline" means everywhere else this
+        // number appears — landingProblem judges the aircraft that has stopped against width/2, and
+        // the survey funnel is sampled across width/2 either side. Against the full width the gate
+        // allowed twice the strip: on a 25-wide runway an aircraft 20 blocks off the centreline was
+        // cleared to flare, put its wheels down beside the strip, and was then told by the roll-out
+        // that it had not landed. GATE_LATERAL_OFFSET stays as the floor so a narrow field is still
+        // landable.
+        double allowedLateral = Math.max(AutopilotConfig.GATE_LATERAL_OFFSET, landingAirfield.width() / 2.0);
         if (Math.abs(lateral) > allowedLateral) {
             return String.format("%.0f blocks off the centreline", Math.abs(lateral));
         }
