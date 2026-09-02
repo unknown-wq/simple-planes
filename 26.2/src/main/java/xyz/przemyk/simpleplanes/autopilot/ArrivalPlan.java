@@ -136,6 +136,14 @@ public record ArrivalPlan(RunwayEnd end, Entry entry, double interceptDistance, 
      * the aircraft: {@value AutopilotConfig#ARRIVAL_DECISION_TURN_RADII} radii is the sideways
      * displacement of a course reversal, which is the worst entry there is, and it is 119 blocks for
      * the starter airframe at cruise and 573 for a cargo plane at the same speed.
+     *
+     * <p><b>The fix distance has to be this airframe's, not the constant.</b>
+     * {@link #decide} builds every plan from {@link AutopilotConfig#minimumInterceptDistance}, which
+     * is 300 on the starter plane but 402 on a large one and 780 on a cargo plane. Handing over on
+     * {@link AutopilotConfig#FINAL_INTERCEPT_DISTANCE} therefore put the decision *inside* the fix
+     * the planner was about to choose: a cargo plane decided 896 blocks out for a fix at 780, which
+     * is 116 blocks of room for a join that needs 596. The room the two radii buy only exists if
+     * they are added to the distance the aircraft is actually going to fly.
      */
     public static double decisionRange(Capability aircraft, double interceptDistance) {
         double join = Math.max(AutopilotConfig.ARRIVAL_DECISION_FLOOR,
@@ -143,9 +151,9 @@ public record ArrivalPlan(RunwayEnd end, Entry entry, double interceptDistance, 
         return interceptDistance + join;
     }
 
-    /** The decision range for the standard final, which is what the cruise leg hands over on. */
-    public static double decisionRange(Capability aircraft) {
-        return decisionRange(aircraft, AutopilotConfig.FINAL_INTERCEPT_DISTANCE);
+    /** The shortest final this airframe can fly, which is where {@link #decide} starts its ladder. */
+    public static double standardInterceptDistance(Capability aircraft) {
+        return AutopilotConfig.minimumInterceptDistance(aircraft.rotationMultiplier());
     }
 
     /**
@@ -165,7 +173,7 @@ public record ArrivalPlan(RunwayEnd end, Entry entry, double interceptDistance, 
         // This is a floor, and joinFits() below is the test: the floor keeps a heavy airframe from
         // even attempting a final it cannot make, and the feasibility test extends beyond the floor
         // when the aircraft's actual position needs more than its airframe alone does.
-        double standard = AutopilotConfig.minimumInterceptDistance(aircraft.rotationMultiplier());
+        double standard = standardInterceptDistance(aircraft);
         if (!runwayFree) {
             return new ArrivalPlan(end, Entry.TRAFFIC, standard, 0);
         }

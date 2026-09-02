@@ -270,6 +270,23 @@ public final class RoutePlanner {
             && AirspaceGuards.isAvoided(guarded, new Vec3(position.x, altitude, position.z));
 
         Probe straight = probe(level, position, altitude, heading, horizon, guarded);
+        if (straight.climb() == UNSEEN) {
+            // A hole in the loaded ground on the track itself. knownHorizon walks the same ray at
+            // its own spacing, so it can report a horizon whose intermediate columns are still
+            // unloaded — most easily on a diagonal, where the ray crosses more chunks than either
+            // sampling visits. The candidate loop already skips an unseen heading; letting the
+            // straight one through instead scored it as UNSEEN blocks of climb, which every visible
+            // candidate beats, so the aircraft bought a deviation of up to the full deviation limit
+            // from nothing at all and reported saving Long.MAX_VALUE of climb.
+            //
+            // Same answer as too short a horizon: hold whatever is being flown and let the heightmap
+            // terrain following cope, which it does by holding altitude.
+            if (committedTicks == 0) {
+                offset = 0;
+                verdict = Verdict.BLIND;
+            }
+            return;
+        }
         straightClimb = straight.climb();
         straightAvoided = straight.avoided();
         if (straightClimb <= 0 && straightAvoided == 0) {

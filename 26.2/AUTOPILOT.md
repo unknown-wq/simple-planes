@@ -403,7 +403,10 @@ separate gates — see [Departure delay and the runway gate](#departure-delay-an
 chasing the point and simply holds the runway heading until it is within `TAXI_ALIGNED_ERROR` (8°) —
 chasing a point the aircraft is nearly on top of makes the nosewheel hunt. Throttle is capped at 3
 so it creeps rather than charges. `TAXI_TIMEOUT` (900 ticks) departs anyway rather than circling a
-threshold for ever.
+threshold for ever. The run *to* the threshold is bounded by the same 900 ticks and by the arrival
+taxi's stall detector (`TAXI_IN_STALLED_SPEED` for `TAXI_IN_STALLED_TICKS`), and it ends the flight
+where it stands instead of departing: an aircraft that never reaches the threshold is holding a
+reservation the rest of the field is queued behind, and the runway gate has no timeout of its own.
 
 **Departure.** Along the *surveyed* runway, on its real heading, from its real threshold.
 
@@ -537,7 +540,9 @@ you retune one, retune all three.
 **The landing gates.** Below 30 blocks above the touchdown point, the approach must satisfy *all* of:
 
 * heading within 10° of the runway heading — this is the "no landing at an angle" rule
-* lateral offset within the runway width (minimum 10 blocks)
+* lateral offset within half the runway width (minimum 10 blocks) — the same half-width the
+  roll-out judges the stopped aircraft against, so a landing the gates clear is one the report
+  will call a landing
 * bank within 12° — `PlaneEntity#causeFallDamage` explodes the plane above 45°, so this matters
 * sink rate under 0.45 blocks/tick
 
@@ -1105,6 +1110,11 @@ against what the airframe can actually do, and a commit point.
 ```
 decisionRange = interceptDistance + max(ARRIVAL_DECISION_FLOOR, 2 × turnRadius)
 ```
+
+`interceptDistance` here is `minimumInterceptDistance` — the shortest final *this* airframe can fly,
+which is the distance `ArrivalPlan.decide` starts its ladder from. Against the constant 300 the
+decision landed inside the fix it was about to choose: a cargo plane decided 896 blocks out for a fix
+at 780, leaving 116 blocks for a join that needs 596.
 
 `turnRadius` is `v / yawRate`, and `tickYaw` clamps the yaw rate to `2.5°/tick × the airframe's
 getRotationSpeedMultiplier`. **That multiplier is the whole reason this is not a constant**: 1.0 on

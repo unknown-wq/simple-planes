@@ -45,6 +45,28 @@ public record DeparturePlan(RunwayEnd end, double turn, int climbOutObstacles) {
     private static final double STRAIGHT_OUT = 20.0;
 
     /**
+     * Rotation multiplier this decision is scored with, whoever asks for it.
+     *
+     * <p>The choice is made twice for every sortie and the two must agree: once by
+     * {@code AutopilotSpawner#launchSortie}, through {@code Airfield#departureEnd}, to decide which
+     * threshold to put the parking spot beside, and again by {@code PlaneAutopilot#resolveDeparture}
+     * when the flight starts. The first of those has no aircraft yet — it is what decides where the
+     * aircraft is created — so the score cannot be a function of the airframe without the two halves
+     * answering differently.
+     *
+     * <p>They did. {@link #cost} weighs the turn onto course by the turn radius at
+     * {@link AutopilotConfig#CLIMB_SPEED}, which is 16 blocks at 1.0 and 80 at the cargo plane's 0.2,
+     * so the turn term differed fivefold between the two calls and flipped the end outright on a
+     * destination roughly abeam the field. The aircraft was then parked beside one threshold and
+     * ordered to taxi to the other, across the strip it was about to depart from.
+     *
+     * <p>Fixed at the starter airframe's value, which is what {@code Airfield#departureEnd} has
+     * always passed. Making the departure end airframe-aware is a separate change and needs both
+     * halves moved together.
+     */
+    public static final double SCORING_ROTATION_MULTIPLIER = 1.0;
+
+    /**
      * Chooses the departure end for a flight going to {@code destination}.
      *
      * @param destination the first waypoint, or null when the flight has none — in which case there
