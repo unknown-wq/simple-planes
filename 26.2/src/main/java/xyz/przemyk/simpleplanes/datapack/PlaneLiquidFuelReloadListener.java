@@ -12,6 +12,7 @@ import net.minecraft.util.GsonHelper;
 import net.minecraft.util.StrictJsonParser;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.Fluids;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,8 +52,13 @@ public class PlaneLiquidFuelReloadListener extends SimplePreparableReloadListene
         for (Map.Entry<Identifier, JsonElement> entry : map.entrySet()) {
             try {
                 JsonObject jsonObject = GsonHelper.convertToJsonObject(entry.getValue(), "top element");
-                Fluid fluidType = BuiltInRegistries.FLUID.getValue(Identifier.parse(jsonObject.get("fluid").getAsString()));
-                if (fluidType == null) {
+                // Skipped quietly, not reported: the shipped files name fluids from other mods on
+                // purpose, and most of them are absent on any given install. getOptional is what
+                // notices that — the fluid registry is defaulted, so getValue answers with
+                // minecraft:empty for an id that is not there and would register that as a fuel.
+                Identifier fluidId = Identifier.parse(GsonHelper.getAsString(jsonObject, "fluid"));
+                Fluid fluidType = BuiltInRegistries.FLUID.getOptional(fluidId).orElse(null);
+                if (fluidType == null || fluidType == Fluids.EMPTY) {
                     continue;
                 }
                 int fuelPerMb = jsonObject.get("burn_time_per_mb").getAsInt();
