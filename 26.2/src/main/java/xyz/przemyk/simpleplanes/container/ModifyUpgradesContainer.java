@@ -31,6 +31,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ModifyUpgradesContainer extends AbstractContainerMenu {
 
+    /** Six upgrade slots followed by eight cargo slots. */
+    private static final int SLOT_COUNT = 14;
+
     private final MyItemStackHandler itemHandler;
     public PlaneEntity planeEntity;
     public int errorSlot = -1;
@@ -76,6 +79,12 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
             i = 6;
             if (entity instanceof CargoPlaneEntity cargoPlaneEntity) {
                 for (LargeUpgrade upgrade : cargoPlaneEntity.largeUpgrades) {
+                    // The bay is meant to hold eight, but only one of the paths that add to
+                    // largeUpgrades enforces that; loading from disk and reading the spawn packet do
+                    // not. Running off the end of the handler throws out of the menu constructor.
+                    if (i >= SLOT_COUNT) {
+                        break;
+                    }
                     itemHandler.setStackInSlot(i, upgrade.getItemStack());
                     i++;
                 }
@@ -261,7 +270,7 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
     private class MyItemStackHandler extends ItemStackHandler {
 
         public MyItemStackHandler() {
-            super(14);
+            super(SLOT_COUNT);
         }
 
         @Override
