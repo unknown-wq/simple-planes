@@ -42,9 +42,13 @@ import org.jspecify.annotations.Nullable;
  * {@code 100 * s} — about 300 blocks at bow speed. Long before that the arrival speed, and with it
  * the damage, has decayed to nothing, which is why the engagement radius is a fraction of it.
  *
- * <p>This models the projectile exactly and the world not at all: it ignores the block the arrow
- * clips on the way (checked separately by the line-of-sight raycast) and water (which changes the
- * inertia to {@code getWaterInertia}). Both are refusals to fire, not corrections to the aim.
+ * <p>This models the projectile exactly and the world not at all. Blocks in the way are handled
+ * elsewhere and are a refusal to fire rather than a correction to the aim — {@code GunshipSortie}
+ * sweeps the solved arc for them. <b>Water is not handled anywhere.</b> An arrow in water swaps
+ * {@code getAirDrag} for {@code getWaterInertia}, which is far stronger than the 0.99 assumed here,
+ * and the sweep deliberately ignores fluids ({@code ClipContext.Fluid.NONE}) so that a puddle at a
+ * target's feet does not silence the gun. A shot that spends part of its flight in water therefore
+ * falls short of where it was aimed.
  */
 public final class Ballistics {
 

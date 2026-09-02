@@ -42,9 +42,15 @@ public class CargoPlaneEntity extends PlaneEntity {
     public void tick() {
         super.tick();
 
+        // The side test used to sit inside the loop, so the client paid for the spatial query
+        // every tick to reach a body that never runs there.
+        if (level().isClientSide()) {
+            return;
+        }
+
         List<Entity> list = level().getEntities(this, getBoundingBox().inflate(0.2F, -0.01F, 0.2F), EntitySelector.pushableBy(this));
         for (Entity entity : list) {
-            if (!level().isClientSide() && !(getControllingPassenger() instanceof Player) &&
+            if (!(getControllingPassenger() instanceof Player) &&
                     !entity.hasPassenger(this) &&
                     !entity.isPassenger() && entity instanceof LivingEntity && !(entity instanceof Player)) {
                 entity.startRiding(this);
@@ -129,16 +135,25 @@ public class CargoPlaneEntity extends PlaneEntity {
         upgrade.readPacket(packetBuffer);
     }
 
+    /**
+     * Server-authoritative, for the reason {@link LargeAirframeEntity#dropPayload()} gives and one
+     * more that is specific to this airframe: {@link CargoUpgradeRemovedPacket} addresses a rack by
+     * its index in {@link #largeUpgrades}, so a client that had already dropped one of its own
+     * would apply every later removal to the wrong rack.
+     */
     @Override
     public void dropPayload() {
-        for (LargeUpgrade upgrade : largeUpgrades) {
+        if (level().isClientSide()) {
+            SimplePlanesClientNetworking.sendDropPayload();
+            return;
+        }
+        for (int index = 0; index < largeUpgrades.size(); index++) {
+            LargeUpgrade upgrade = largeUpgrades.get(index);
             if (upgrade.canBeDroppedAsPayload()) {
                 upgrade.dropAsPayload();
                 if (upgrade.removed) {
-                    largeUpgrades.remove(upgrade);
-                }
-                if (level().isClientSide()) {
-                    SimplePlanesClientNetworking.sendDropPayload();
+                    largeUpgrades.remove(index);
+                    SimplePlanesNetworking.sendToPlayersTrackingEntity(this, new CargoUpgradeRemovedPacket((byte) index, getId()));
                 }
                 break;
             }
