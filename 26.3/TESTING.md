@@ -78,8 +78,8 @@ Keep it outside the repo — nothing there is committed.
 
 ```
 sp-testserver/
-├── fabric-server-launch.jar     Fabric loader 0.19.4 server launcher for 26.3-snapshot-10
-├── mods/fabric-api-….jar        Fabric API 0.158.3+26.3
+├── fabric-server-launch.jar     Fabric loader 0.19.5 server launcher for 26.3-pre-1
+├── mods/fabric-api-….jar        Fabric API 0.159.1+26.3
 ├── mods/simpleplanes-….jar      the mod under test — recopy after every build
 ├── start.sh  cmd.sh  stop.sh    control scripts
 ├── console.log                  full server output

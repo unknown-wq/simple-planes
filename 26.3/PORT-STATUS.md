@@ -1,7 +1,7 @@
-# PORT-STATUS — Simple Planes → Fabric / Minecraft 26.3-snapshot-10
+# PORT-STATUS — Simple Planes → Fabric / Minecraft 26.3-pre-1
 
-`26.3/` is a copy of `26.2/` converted to **Minecraft 26.3-snapshot-10 / Fabric loader 0.19.4 /
-Fabric API 0.158.3+26.3 / Loom 1.17.19 / Java 25**. `26.2/` is untouched and remains the 26.2
+`26.3/` is a copy of `26.2/` converted to **Minecraft 26.3-pre-1 / Fabric loader 0.19.5 /
+Fabric API 0.159.1+26.3 / Loom 1.17.19 / Java 25**. `26.2/` is untouched and remains the 26.2
 build. The heavy lifting — NeoForge → Fabric, and the 1.21.1 → 26.2 render-state and
 `ValueInput`/`ValueOutput` rewrites — was done in the 26.2 port and carries over unchanged; this
 document covers only what 26.2 → 26.3 broke.
@@ -111,7 +111,40 @@ Contrary to expectation, none of these needed any work:
 
 `pack.mcmeta` had its `max_format` raised from 107 to 120 (snapshot-10 is resource-pack 96 /
 data-pack 117), and `fabric.mod.json` now requires `minecraft >=26.3-alpha.0 <26.4` and
-`fabricloader >=0.19.4`.
+`fabricloader >=0.19.5`.
+
+## 26.3-snapshot-10 → 26.3-pre-1
+
+The pre-release moved the module from snapshot-10 to `26.3-pre-1` (world version 5017, resource
+pack 97 / data pack 119, still inside `pack.mcmeta`'s 88–120 window) and with it to Fabric loader
+**0.19.5** and Fabric API **0.159.1+26.3** — the first API build compiled against the reorganised
+loot number providers below, which is why the previous 0.158.3 will not do.
+
+**One compile error, in one file.** `net.minecraft.world.level.storage.loot.providers.number` is
+split into an `ints` and a `floats` half. The sealed `ResolvableNumber` is gone: the int half is
+`…providers.number.ints.ResolvableInt`, the float half `…providers.number.floats.ResolvableFloat`,
+and the static readers lost the type from their names — `getIntFromItem`/`getFloatFromItem` are
+both just `getFromItem` on their own interface. `NumberProvider` likewise became
+`ints.ContextIntProvider` / `floats.ContextFloatProvider`, and `CookingFuel#burnTime()` now returns
+`ResolvableInt`.
+
+`misc/FuelValues#burnDuration` is the only place this mod touches any of it, and the fix is the
+rename: `ResolvableNumber.getIntFromItem(...)` → `ResolvableInt.getFromItem(...)`. The arguments,
+the empty-parameter-set loot context and the resolution path are unchanged, and coal still reads
+1600 ticks on the rig.
+
+The mod's own two block loot tables are plain `"rolls": 1` pools and parse unchanged; `/loot spawn`
+drops both. Nothing else in the mod names a number provider.
+
+Everything else compiled untouched: the camera mixin's target `Camera#alignWithEntity(float)` and
+its `setPosition(DDD)V` call site both survive, and all four access widener entries still resolve.
+
+Re-run headless on a `26.3-pre-1` dedicated server: clean boot, `simpleplanes 5.3.10` in the mod
+list, all five entity types summoned and ticked, both blocks placed, both block loot tables spawned,
+every upgrade type attached to one airframe and ticked, `/reload` clean, an `autopilot strike` on
+target, an `autopilot inbound` sortie flown to a landing, taxi and parking, and airfield saved data
+plus aircraft upgrade data read back across two restarts. No `ERROR`, no `WARN` and no exception
+from this mod anywhere in the log.
 
 ## Verified on the rig
 
