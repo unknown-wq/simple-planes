@@ -542,14 +542,22 @@ public final class AirfieldBrowser {
         BlockPos closest = null;
         double best = Double.MAX_VALUE;
         for (BlockPos spot : airfield.parkingSpots()) {
-            double distance = spot.distSqr(near);
+            // Horizontally: a stand is stored on the surface of its column, and the block that is
+            // clicked to remove it is whichever one the player is looking at on that square.
+            double dx = spot.getX() - near.getX();
+            double dz = spot.getZ() - near.getZ();
+            double distance = dx * dx + dz * dz;
             if (distance < best) {
                 best = distance;
                 closest = spot;
             }
         }
-        if (closest == null || best > AutopilotConfig.PARKING_MAX_TAXI_DISTANCE
-            * AutopilotConfig.PARKING_MAX_TAXI_DISTANCE) {
+        // Within a stand's own clearance. The point of taking the nearest is that a click anywhere
+        // on the square works, not that a click on the far side of the field removes whichever stand
+        // happened to be closest to it: this was bounded by PARKING_MAX_TAXI_DISTANCE, so a
+        // mistyped coordinate 60 blocks out silently deleted a stand the player was not aiming at.
+        if (closest == null || best > AutopilotConfig.PARKING_SPOT_CLEARANCE
+            * AutopilotConfig.PARKING_SPOT_CLEARANCE) {
             output.component(AutopilotText.tr("manage.unpark_none",
                 "No parking spot of %s near %s.", name, near.toShortString())
                 .withStyle(ChatFormatting.RED));
