@@ -155,7 +155,10 @@ truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
   Fabric config library is a follow-up confined to that one file.
 - `items/PlaneArmorItem` (Agent A) — `isEnchantable`/`getEnchantmentValue`/`supportsEnchantment`
   no longer exist on `Item` in 26.2. Enchantment value 9 moved to `Item.Properties#enchantable(9)`
-  at registration; the "always allow Protection" special case is dropped (data-driven now).
+  at registration; the "always allow Protection" special case is data-driven now —
+  `data/minecraft/tags/item/enchantable/armor.json` puts the item in the tag Protection is gated on,
+  which is what makes `ArmorUpgrade`'s protection level anything other than 0. The tag is coarser
+  than the old allowance: it opens every armour enchantment, though only Protection is read.
 - `client/render/PlaneItemColors` item tint (Agent A resources) — item colour providers are gone in
   26.2. `assets/simpleplanes/items/{plane,large_plane,cargo_plane,helicopter}.json` now use a
   constant tint (`0xB28F55`, the old `DEFAULT_COLOR`) instead of sampling the material block texture.
