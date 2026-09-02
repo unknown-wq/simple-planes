@@ -20,6 +20,7 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesConfig;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 import xyz.przemyk.simpleplanes.upgrades.UpgradeType;
+import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
 /**
  * The helicopter flight model.
@@ -318,7 +319,11 @@ public class HelicopterEntity extends LargeAirframeEntity {
     @Override
     protected void readAdditionalSaveData(net.minecraft.world.level.storage.ValueInput input) {
         super.readAdditionalSaveData(input);
-        setThrottle(input.getIntOr("throttle", getThrottle()));
+        // Clamped, because this value is thrust: the collective is the one control the airframe
+        // reads straight off the save, and a hand-edited or corrupted tag would otherwise put the
+        // machine on the MAX_SPEED backstop climbing vertically. The ceiling is the boosted one,
+        // which is a legitimate value for an airframe that had a booster fitted.
+        setThrottle(Mth.clamp(input.getIntOr("throttle", getThrottle()), 0, BoosterUpgrade.MAX_THROTTLE));
         setMoveUp(input.getBooleanOr("collective_boost", getCollectiveBoost()));
         setCyclicForward(input.getIntOr("cyclic_forward", getCyclicForward()));
         setCyclicRight(input.getIntOr("cyclic_right", getCyclicRight()));
