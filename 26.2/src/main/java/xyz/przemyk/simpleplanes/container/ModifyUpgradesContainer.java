@@ -105,7 +105,11 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
     }
 
     public void itemsChanged(ItemStack previousStack, ItemStack newStack, int slot) {
-        if (planeEntity.level().isClientSide() || internalItemsChange || ItemStack.isSameItemSameComponents(previousStack, newStack)) {
+        // planeEntity stays null when the constructor could not resolve the id, which on the client
+        // is any plane the level does not have yet. Every slot the server syncs into this menu comes
+        // through here, so the test has to come before the level is read off it.
+        if (planeEntity == null || planeEntity.level().isClientSide() || internalItemsChange
+                || ItemStack.isSameItemSameComponents(previousStack, newStack)) {
             return;
         }
 
