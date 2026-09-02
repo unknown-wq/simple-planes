@@ -163,6 +163,11 @@ truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
   and no `block/cloud_*` models exist.
 - `blocks/ChargingStationBlockEntity` (Agent A) — charged any `IEnergyStorage` capability holder
   standing on it; now looks up `ElectricEngineUpgrade` on a `PlaneEntity` directly (contract C4).
+  **The block is inert as shipped.** Its own buffer was filled through the same capability, and
+  nothing on Fabric fills it now, so it holds 0 for ever and charges nothing — while still being
+  craftable and listed in the creative tab. Restoring it needs an energy input (a transfer API, or
+  an in-world source); whether to keep shipping the block meanwhile is a content decision, not a
+  port one. Until then the solar panel is the only way to charge an electric engine.
 
 ### Agent C (client) cuts
 
