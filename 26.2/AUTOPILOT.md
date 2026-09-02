@@ -403,7 +403,10 @@ separate gates — see [Departure delay and the runway gate](#departure-delay-an
 chasing the point and simply holds the runway heading until it is within `TAXI_ALIGNED_ERROR` (8°) —
 chasing a point the aircraft is nearly on top of makes the nosewheel hunt. Throttle is capped at 3
 so it creeps rather than charges. `TAXI_TIMEOUT` (900 ticks) departs anyway rather than circling a
-threshold for ever.
+threshold for ever. The run *to* the threshold is bounded by the same 900 ticks and by the arrival
+taxi's stall detector (`TAXI_IN_STALLED_SPEED` for `TAXI_IN_STALLED_TICKS`), and it ends the flight
+where it stands instead of departing: an aircraft that never reaches the threshold is holding a
+reservation the rest of the field is queued behind, and the runway gate has no timeout of its own.
 
 **Departure.** Along the *surveyed* runway, on its real heading, from its real threshold.
 

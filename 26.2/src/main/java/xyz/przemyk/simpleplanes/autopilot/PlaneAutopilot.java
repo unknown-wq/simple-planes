@@ -107,6 +107,8 @@ public class PlaneAutopilot {
     private int departureHoldTicks;
     /** Set once "waiting for the runway" has been reported, so a long wait says it exactly once. */
     private boolean departureBlockedReported;
+    /** Consecutive ticks the taxi out has spent going nowhere. */
+    private int taxiOutStalledTicks;
     /** Marked stand this arrival is taxiing to, and standing on once it gets there. */
     private Airfield.@Nullable ParkingSpot standTarget;
     /** Legs still to drive on the way to the stand; the last one is the stand itself. */
@@ -195,6 +197,7 @@ public class PlaneAutopilot {
         this.departurePlan = null;
         this.departureHoldTicks = 0;
         this.departureBlockedReported = false;
+        this.taxiOutStalledTicks = 0;
         this.standTarget = null;
         this.taxiInRoute = List.of();
         this.clearOfRunway = false;
@@ -809,6 +812,12 @@ public class PlaneAutopilot {
      *
      * <p>Nothing here moves the aircraft: it is throttle, the same nosewheel steering the roll-out
      * uses, and the elevator held at neutral.
+     *
+     * <p><b>Both stages are bounded, and they end differently.</b> The lineup gives up and departs
+     * anyway, because by then the aircraft owns the strip and the only question left is whether it
+     * is straight on it. The run to the threshold gives up and ends the flight, because an aircraft
+     * that cannot reach the threshold is not going to fly and is sitting on a reservation the whole
+     * field is queued behind.
      */
     private void tickTaxi(PlaneEntity plane) {
         if (departureEnd == null) {
@@ -834,6 +843,29 @@ public class PlaneAutopilot {
 
         if (distance > AutopilotConfig.TAXI_LINEUP_RADIUS) {
             cmdHeading = AutopilotMath.headingTo(plane.position(), lineup);
+            // Stuck, or taking implausibly long, on the way to the threshold. The timeout below
+            // covers the lineup and nothing else, because it is only reached once the aircraft is
+            // already at the threshold — so a taxi that never gets there had no bound at all, and
+            // the runway reservation is taken on the way into this mode. One aircraft grinding
+            // against a fence therefore shut the whole field: the departure gate has no timeout by
+            // design, and an arrival that cannot occupy the strip holds instead of landing.
+            //
+            // Ending the flight where it stands is the same answer tickTaxiIn gives to the same
+            // question, and for the same reason: there is nothing to wait for, and stop() gives the
+            // strip back so the rest of the traffic moves again.
+            if (plane.getDeltaMovement().horizontalDistance() < AutopilotConfig.TAXI_IN_STALLED_SPEED) {
+                taxiOutStalledTicks++;
+            } else {
+                taxiOutStalledTicks = 0;
+            }
+            if (taxiOutStalledTicks > AutopilotConfig.TAXI_IN_STALLED_TICKS
+                || modeTicks > AutopilotConfig.TAXI_TIMEOUT) {
+                AutopilotFeedback.report(owner, "Plane #" + plane.getId()
+                    + " gave up taxiing out at " + departureEnd.airfield().name() + "/"
+                    + departureEnd.designator() + ", " + Math.round(distance)
+                    + " blocks short of the threshold; runway released.");
+                stop(plane);
+            }
             return;
         }
 
