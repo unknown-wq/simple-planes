@@ -969,12 +969,28 @@ public final class HelicopterAutopilot {
             SimplePlanesUpgrades.BOOSTER.get())) ? BoosterUpgrade.MAX_THROTTLE : PlaneEntity.MAX_THROTTLE;
     }
 
-    /** Lowest altitude that clears the terrain the scanner can see, or the plan's when it sees none. */
+    /**
+     * Lowest altitude that clears the terrain the scanner can see, or no constraint at all when it
+     * sees none.
+     *
+     * <p><b>Deliberately not floored at the cruise altitude.</b> It used to be, and that made the
+     * run-in level flight on every single sortie. {@link #cruiseAltitude} comes from
+     * {@link Helipad#cruiseAltitude}, which is the highest ground on the leg — the two pads included
+     * — plus {@link RotorcraftConfig#CRUISE_CLEARANCE}, so it is never below the destination pad's
+     * own elevation plus that same 30 blocks. {@link RotorcraftConfig#DEPARTURE_HEIGHT} is 30 as
+     * well, so {@code max(destination.elevation() + DEPARTURE_HEIGHT, terrainFloor())} could not
+     * come out as anything but the altitude the machine was already cruising at, whatever the
+     * terrain said: the descent phase commanded exactly the same number as the cruise phase and the
+     * whole arrival was flown as a vertical let-down from cruise, which on a leg over high ground is
+     * a hundred blocks of it.
+     *
+     * <p>The cruise floor belongs to the cruise, and {@link #tickTransit} applies it there. Every
+     * other caller wants the terrain and its own pad-relative demand and nothing else.
+     */
     private double terrainFloor() {
         double safe = scanner.safeAltitude();
-        return safe == TerrainScanner.UNKNOWN_HEIGHT ? cruiseAltitude
-            : Math.max(safe - AutopilotConfig.TERRAIN_CLEARANCE + RotorcraftConfig.CRUISE_CLEARANCE,
-                cruiseAltitude);
+        return safe == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
+            : safe - AutopilotConfig.TERRAIN_CLEARANCE + RotorcraftConfig.CRUISE_CLEARANCE;
     }
 
     // ------------------------------------------------------------------ readouts
