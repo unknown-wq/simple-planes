@@ -314,13 +314,15 @@ public final class HelicopterAutopilot {
         double distance = AutopilotMath.horizontalDistance(position, hover);
 
         double altitude = Math.max(cruiseAltitude, terrainFloor());
-        double speed = distance < RotorcraftConfig.DECELERATION_DISTANCE
-            ? Mth.lerp(distance / RotorcraftConfig.DECELERATION_DISTANCE,
-                RotorcraftConfig.APPROACH_SPEED, cruiseSpeed)
-            : cruiseSpeed;
-        fly(plane, AutopilotMath.headingTo(position, hover), altitude, speed,
+        // Cruise speed right up to the run-in, and there is no deceleration schedule here on
+        // purpose. There used to be one, ramped from cruise down to the approach speed across
+        // DECELERATION_DISTANCE — which is also the distance at which this phase ends, three lines
+        // below, so the ramp was only ever evaluated on the tick that left the phase and never
+        // slowed anything. The braking belongs to the closure law the run-in flies: see station()
+        // and RotorcraftConfig#CLOSURE_BRAKING, which stops the machine well inside the 90 blocks.
+        fly(plane, AutopilotMath.headingTo(position, hover), altitude, cruiseSpeed,
             RotorcraftConfig.CLIMB_RATE, false);
-        checkSpeedShortfall(plane, speed);
+        checkSpeedShortfall(plane, cruiseSpeed);
 
         if (distance <= RotorcraftConfig.DECELERATION_DISTANCE) {
             if (!padAvailable(plane)) {
