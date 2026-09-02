@@ -4,6 +4,7 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.minecraft.client.gui.screens.MenuScreens;
 import xyz.przemyk.simpleplanes.client.gui.ModifyUpgradesScreen;
@@ -34,6 +35,11 @@ public class SimplePlanesClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(ClientEventHandler::onClientTick);
 
         HudElementRegistry.addLast(ModBusClientEventHandler.HUD_ELEMENT_ID, ModBusClientEventHandler.INSTANCE);
+
+        // The sound classes remember what they are playing in static tables keyed by entity, and the
+        // sound engine drops its own instances on world unload without telling them. Leaving a world
+        // is the one point at which those tables are known to be stale.
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> PlaneSound.clear());
 
         SimplePlanesNetworking.registerClient();
 
