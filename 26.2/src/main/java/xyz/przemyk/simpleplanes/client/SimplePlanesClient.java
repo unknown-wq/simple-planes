@@ -39,7 +39,10 @@ public class SimplePlanesClient implements ClientModInitializer {
         // The sound classes remember what they are playing in static tables keyed by entity, and the
         // sound engine drops its own instances on world unload without telling them. Leaving a world
         // is the one point at which those tables are known to be stale.
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> PlaneSound.clear());
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            PlaneSound.clear();
+            MovingSound.clear();
+        });
 
         SimplePlanesNetworking.registerClient();
 
