@@ -1811,10 +1811,17 @@ public class PlaneAutopilot {
             // Airfield#arrivalStand. Said out loud rather than passed over in silence, because "the
             // aircraft is sitting on the runway" now has two possible causes and they need telling
             // apart.
+            //
+            // An improvised strip is the second of them, and it gets its own sentence: resolveLanding
+            // invented it for this one flight and never registered it, so neither the survey tool nor
+            // the park subcommand has anything to act on under that name and naming them would be
+            // advice nobody can follow.
             AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " stopped on the runway at "
-                + landingAirfield.name() + ": no marked parking. Mark a stand with the Runway Survey"
-                + " Tool in parking mode, or /autopilot airfields park \""
-                + landingAirfield.name() + "\" <x y z>.");
+                + landingAirfield.name() + ": " + (isRegistered(plane, landingAirfield)
+                    ? "no marked parking. Mark a stand with the Runway Survey Tool in parking mode,"
+                        + " or /autopilot airfields park \"" + landingAirfield.name() + "\" <x y z>."
+                    : "improvised landing ground, so there are no stands to taxi to. Survey a runway"
+                        + " here to give arrivals somewhere to park."));
             return false;
         }
         // Every stand resident before any of them is judged. "Is that stand free" is answered partly
@@ -1843,6 +1850,12 @@ public class PlaneAutopilot {
             + " via " + taxiInRoute.size() + (taxiInRoute.size() == 1 ? " leg." : " legs."));
         setMode(plane, AutopilotMode.TAXI_IN);
         return true;
+    }
+
+    /** Whether this is a surveyed field, as opposed to one {@link #resolveLanding} invented. */
+    private static boolean isRegistered(PlaneEntity plane, Airfield airfield) {
+        return plane.level() instanceof ServerLevel serverLevel
+            && AutopilotSavedData.get(serverLevel).get(airfield.name()) != null;
     }
 
     /**
