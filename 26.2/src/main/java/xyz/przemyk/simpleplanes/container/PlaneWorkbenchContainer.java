@@ -77,11 +77,32 @@ public class PlaneWorkbenchContainer extends AbstractContainerMenu {
         updateCraftingResult();
     }
 
+    /**
+     * The selected recipe's index, clamped into {@link #recipeList}.
+     *
+     * <p>The index is persisted by the block entity while the list is rebuilt from the server's
+     * synchronised recipes every time the menu opens, so a datapack or mod update that drops a
+     * plane recipe leaves behind a stored index that addresses nothing. Reset rather than refuse:
+     * the alternative is an IndexOutOfBoundsException thrown out of openMenu on the server thread.
+     *
+     * <p>Callers must have tested {@link #recipeList} for emptiness first.
+     */
+    private int selectedRecipeIndex() {
+        int index = selectedRecipe.get();
+        if (index < 0 || index >= recipeList.size()) {
+            index = 0;
+            selectedRecipe.set(index);
+        }
+        return index;
+    }
+
     public void cycleItems(CycleItemsPacket.Direction direction) {
         if (recipeList.isEmpty()) {
             return;
         }
-        int prevSelectedRecipe = selectedRecipe.get();
+        // Clamped once here: every step below moves by one from a valid index and wraps at the
+        // ends, so the loop stays in range for as long as it starts in range.
+        int prevSelectedRecipe = selectedRecipeIndex();
         ItemStack ingredient = itemHandler.getStackInSlot(0);
         ItemStack material = itemHandler.getStackInSlot(1);
 
@@ -111,7 +132,7 @@ public class PlaneWorkbenchContainer extends AbstractContainerMenu {
 
     public void onCrafting() {
         if (!player.level().isClientSide() && !recipeList.isEmpty()) {
-            PlaneWorkbenchRecipe recipe = recipeList.get(selectedRecipe.get()).value();
+            PlaneWorkbenchRecipe recipe = recipeList.get(selectedRecipeIndex()).value();
             itemHandler.extractItem(0, recipe.ingredientAmount(), false);
             itemHandler.extractItem(1, recipe.materialAmount(), false);
             updateCraftingResult();
@@ -126,7 +147,7 @@ public class PlaneWorkbenchContainer extends AbstractContainerMenu {
             Item materialItem = materialStack.getItem();
 
             if (!recipeList.isEmpty()) {
-                PlaneWorkbenchRecipe recipe = recipeList.get(selectedRecipe.get()).value();
+                PlaneWorkbenchRecipe recipe = recipeList.get(selectedRecipeIndex()).value();
 
                 if (recipe.canCraft(ingredientStack, materialStack) && materialItem instanceof BlockItem blockItem &&
                     blockItem.getBlock().builtInRegistryHolder().is(PLANE_MATERIALS_TAG)) {
