@@ -484,6 +484,11 @@ public final class PlaneCollisions {
                     double otherMass = massOf(otherPlane);
                     applyDamage(otherPlane, serverLevel, mass * H_DAMAGE_FACTOR * energy);
                     selfDamage += (float) (otherMass * H_DAMAGE_FACTOR * energy);
+                    // One collision, one bill. The other aircraft runs this same loop later in the
+                    // same tick and sees the same pair, and its own cooldown is the only thing that
+                    // stops it charging both of them a second time: applyDamage sets the victim's
+                    // impactCooldown, which guards afterMove and not this.
+                    otherPlane.collisionState.entityRamCooldown = ENTITY_RAM_COOLDOWN;
                 }
                 continue;
             }
