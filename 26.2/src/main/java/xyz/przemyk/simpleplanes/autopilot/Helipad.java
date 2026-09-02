@@ -566,9 +566,20 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
                 // surface: near the pad the sloped path is barely above the ground it lands on, and
                 // without the floor the pad itself counts as an obstacle in every sector. The same
                 // trap Airfield#countApproachObstacles documents.
+                //
+                // The floor is the surface plus the roughness the survey is willing to accept on it,
+                // and the second term is not a nicety. The scan starts one block from the centre, so
+                // it reads the pad before it reads anything else; padRoughness accepts a spread of
+                // PAD_MAX_ROUGHNESS, so an accepted pad may have columns a block above its modal
+                // surface; and with the floor at the modal surface every one of those columns was
+                // counted as terrain across the sector it happened to lie in. A pad with a one-block
+                // kerb round it lost all eight bearings that way and was refused with "no clear
+                // approach" while standing in the open. Past six blocks or so the sloped term is
+                // already above this and the floor stops mattering, so the allowance out in the
+                // approach itself is unchanged.
                 double allowed = Math.max(
                     pad.elevation() + gradient * distance - RotorcraftConfig.APPROACH_MARGIN,
-                    pad.elevation());
+                    pad.elevation() + RotorcraftConfig.PAD_MAX_ROUGHNESS);
                 int terrain = TerrainScanner.surfaceHeight(level, x, z);
                 // Unloaded counts against the sector rather than being skipped. A survey is run
                 // standing on the pad and refuses unloaded ground under it, so a column out here
