@@ -69,8 +69,9 @@ public class ModifyUpgradesScreen extends AbstractContainerScreen<ModifyUpgrades
             }
         }
 
-        if (this.menu.errorSlot != -1) {
-            Slot slot = this.menu.slots.get(this.menu.errorSlot);
+        int errorSlot = this.menu.errorSlot.get();
+        if (errorSlot >= 0 && errorSlot < this.menu.slots.size()) {
+            Slot slot = this.menu.slots.get(errorSlot);
             graphics.blit(RenderPipelines.GUI_TEXTURED, GUI, i + slot.x - 1, j + slot.y - 1, 176.0F, 76.0F, 18, 18, 256, 256);
         }
     }

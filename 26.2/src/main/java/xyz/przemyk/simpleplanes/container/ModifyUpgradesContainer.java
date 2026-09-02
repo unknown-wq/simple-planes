@@ -6,6 +6,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.DataSlot;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -36,7 +37,12 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
 
     private final MyItemStackHandler itemHandler;
     public PlaneEntity planeEntity;
-    public int errorSlot = -1;
+    /**
+     * Slot whose item could not be turned into an upgrade, or -1 for none. Only the server works
+     * this out and only the screen draws it, so it travels as a synched data slot; as a plain field
+     * it stayed at -1 on the client and the marker was never drawn.
+     */
+    public final DataSlot errorSlot = DataSlot.standalone();
     private boolean internalItemsChange;
 
     @SuppressWarnings("PatternVariableHidesField")
@@ -44,6 +50,8 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
         super(SimplePlanesContainers.UPGRADES_REMOVAL.get(), id);
         internalItemsChange = true;
         this.itemHandler = new MyItemStackHandler();
+        errorSlot.set(-1);
+        addDataSlot(errorSlot);
 
         addSlot(new PlaneUpgradeSlot(itemHandler, 0, 8, 17, this));
         addSlot(new PlaneUpgradeSlot(itemHandler, 1, 26, 17, this));
@@ -162,11 +170,11 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
             }
 
             if (success.get()) {
-                if (errorSlot == slot) {
-                    errorSlot = -1;
+                if (errorSlot.get() == slot) {
+                    errorSlot.set(-1);
                 }
             } else {
-                errorSlot = slot;
+                errorSlot.set(slot);
             }
         } else if (planeEntity instanceof CargoPlaneEntity cargoPlaneEntity) {
             if (newStack.isEmpty()) {
