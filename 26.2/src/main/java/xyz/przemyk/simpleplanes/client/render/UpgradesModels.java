@@ -84,6 +84,9 @@ public final class UpgradesModels {
 
     public static final Map<UpgradeType, ModelEntry> MODEL_ENTRIES = new HashMap<>();
 
+    /** The set the current models were baked from; see {@link #bake(EntityModelSet)}. */
+    private static @Nullable EntityModelSet bakedFrom;
+
     public record ModelEntry(@Nullable EntityModel<PlaneRenderState> normal, @Nullable Identifier normalTexture,
                              @Nullable EntityModel<PlaneRenderState> large, @Nullable Identifier largeTexture,
                              @Nullable EntityModel<PlaneRenderState> heli, @Nullable Identifier heliTexture,
@@ -99,10 +102,19 @@ public final class UpgradesModels {
     }
 
     /**
-     * (Re-)bakes every upgrade model. Called from each {@link PlaneRenderer} constructor, i.e. once per
-     * resource reload, which is exactly when the {@link EntityModelSet} changes.
+     * (Re-)bakes every upgrade model.
+     *
+     * <p>Called from every {@link PlaneRenderer} constructor, and there is one of those per aircraft
+     * type, so a single resource reload asks for the same bake four times over. {@code ModelManager}
+     * builds a fresh {@link EntityModelSet} on each reload and hands that one instance to all the
+     * renderers it then rebuilds, so the set itself says whether this is a new reload or a repeat.
      */
     public static void bake(EntityModelSet models) {
+        if (models == bakedFrom) {
+            return;
+        }
+        bakedFrom = models;
+
         MODEL_ENTRIES.clear();
 
         MODEL_ENTRIES.put(SimplePlanesUpgrades.FURNACE_ENGINE.get(), new ModelEntry(
