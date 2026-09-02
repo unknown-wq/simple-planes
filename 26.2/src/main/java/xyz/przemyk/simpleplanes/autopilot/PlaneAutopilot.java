@@ -1079,8 +1079,10 @@ public class PlaneAutopilot {
         cmdSpeed = AutopilotConfig.STRIKE_SPEED;
         // A strike aircraft carries a booster, which raises the throttle ceiling from 5 to 10. The
         // throttle loop clamps to this, so without it the loop would quietly pull the lever back to
-        // 5 and the run would arrive slow.
-        cmdMaxThrottle = BoosterUpgrade.MAX_THROTTLE;
+        // 5 and the run would arrive slow. Asked of the airframe rather than assumed, as every other
+        // mode does: PlaneEntity#setThrottle does not clamp, so a hard 10 on an aircraft with no
+        // booster would command a notch it does not have.
+        cmdMaxThrottle = maxThrottle(plane);
 
         double distance = AutopilotMath.horizontalDistance(position, target);
 
