@@ -336,8 +336,23 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             return new ParkingSpot(straightBack, AutopilotMath.headingTo(straightBack, threshold), false, null);
         }
 
-        // Nothing off the strip qualifies. Park on the strip, facing down it.
-        Vec3 onRunway = AutopilotMath.pointAlong(threshold, heading, AutopilotConfig.PARKING_ON_RUNWAY_OFFSET);
+        // Nothing off the strip qualifies. Park on the strip, facing down it — stepping further
+        // along it for each square that is taken, which is the check every candidate above it
+        // already makes and the last resort was the one place that did not. The offset is fixed, so
+        // without the walk every departure from this end is placed on the same block and the second
+        // aircraft is spawned inside the first: the failure the derived aprons were given their own
+        // occupancy test for, on the one candidate that cannot fall through to anything else.
+        // Bounded by the take-off run that has to be left behind the new position, so the aircraft
+        // is never moved so far down the strip that it cannot get off it; past that the threshold
+        // square is returned, which is what this always returned.
+        double along = AutopilotConfig.PARKING_ON_RUNWAY_OFFSET;
+        Vec3 onRunway = AutopilotMath.pointAlong(threshold, heading, along);
+        while (!standFree(level, onRunway, null, null)
+            && along + AutopilotConfig.PARKING_SPOT_CLEARANCE
+                + AutopilotConfig.TAKEOFF_LENGTH_NEEDED <= departure.length()) {
+            along += AutopilotConfig.PARKING_SPOT_CLEARANCE;
+            onRunway = AutopilotMath.pointAlong(threshold, heading, along);
+        }
         return new ParkingSpot(onRunway, heading, true, null);
     }
 
