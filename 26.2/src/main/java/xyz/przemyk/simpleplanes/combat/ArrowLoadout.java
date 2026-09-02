@@ -78,9 +78,9 @@ public final class ArrowLoadout {
      * <p>Pickup is disabled. The magazine was conjured by a command and never existed as items, so
      * letting it be picked up off the ground would mint arrows out of nothing.
      *
-     * @return the arrow, or null if the item's projectile is not an arrow after all
+     * @return the round that was put into the world
      */
-    public @Nullable Projectile spawn(ServerLevel level, Vec3 muzzle, Vec3 velocity, Entity owner) {
+    public Projectile spawn(ServerLevel level, Vec3 muzzle, Vec3 velocity, Entity owner) {
         Projectile projectile = ((ProjectileItem) round.getItem())
             .asProjectile(level, muzzle, round, Direction.UP);
         projectile.setPos(muzzle.x, muzzle.y, muzzle.z);
