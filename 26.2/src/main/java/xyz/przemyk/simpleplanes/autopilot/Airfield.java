@@ -658,8 +658,14 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             return "the ground between it and the threshold is not level all the way";
         }
         for (BlockPos existing : airfield.parkingSpots()) {
-            if (existing.distSqr(spot) < AutopilotConfig.PARKING_SPOT_CLEARANCE
-                * AutopilotConfig.PARKING_SPOT_CLEARANCE) {
+            // Horizontally, and about the column rather than the block that was named. A stand is
+            // stored on the surface of its column, so naming a block a few above an existing stand
+            // is the same square — and BlockPos#distSqr is three-dimensional, so the height
+            // difference alone carried it past this clearance and marked a second stand on the exact
+            // coordinates of the first.
+            if (AutopilotMath.horizontalDistance(probe,
+                new Vec3(existing.getX() + 0.5, 0, existing.getZ() + 0.5))
+                < AutopilotConfig.PARKING_SPOT_CLEARANCE) {
                 return "there is already a parking spot at " + existing.toShortString();
             }
         }
