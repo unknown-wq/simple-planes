@@ -395,12 +395,37 @@ public final class AirfieldBrowser {
                 .withStyle(ChatFormatting.RED));
             return false;
         }
+        // The runway reservation covers a flight; it does not cover an aircraft that has already
+        // finished one and is standing on a stand. That matters here and not in remove(), because
+        // the field survives a rename and its stands survive with it: the stand memory is keyed by
+        // the airfield's name, so a rename has to drop the records, and dropping one under a parked
+        // aircraft leaves its square reading free the moment the chunk unloads — after which the
+        // next arrival taxis onto it. Refused rather than renamed silently, exactly as a field with
+        // an aircraft on its runway is.
+        BlockPos parked = occupiedStand(level, airfield);
+        if (parked != null) {
+            output.component(AutopilotText.tr("manage.stand_busy",
+                "%s has an aircraft on the stand at %s; try again when its parking is empty.",
+                from, parked.toShortString()).withStyle(ChatFormatting.RED));
+            return false;
+        }
         data.remove(from);
         data.put(airfield.withName(to));
         StandOccupancy.forget(level, from);
         output.component(AutopilotText.tr("manage.renamed", "Renamed %s to %s.", from, to)
             .withStyle(ChatFormatting.GREEN));
         return true;
+    }
+
+    /** The first marked stand of this airfield that something is standing on, or null when none is. */
+    private static @Nullable BlockPos occupiedStand(ServerLevel level, Airfield airfield) {
+        for (BlockPos spot : airfield.parkingSpots()) {
+            Vec3 position = new Vec3(spot.getX() + 0.5, spot.getY(), spot.getZ() + 0.5);
+            if (!Airfield.standFree(level, airfield, position, spot, null)) {
+                return spot;
+            }
+        }
+        return null;
     }
 
     /**
