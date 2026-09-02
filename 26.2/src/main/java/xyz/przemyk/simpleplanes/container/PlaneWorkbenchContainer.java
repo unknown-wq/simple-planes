@@ -42,7 +42,6 @@ public class PlaneWorkbenchContainer extends AbstractContainerMenu {
     private final Player player;
     private final DataSlot selectedRecipe;
 
-    private final CompoundTag resultItemTag = new CompoundTag();
     private final List<RecipeHolder<PlaneWorkbenchRecipe>> recipeList;
 
     public PlaneWorkbenchContainer(int id, Inventory playerInventory) {
@@ -134,6 +133,11 @@ public class PlaneWorkbenchContainer extends AbstractContainerMenu {
 
                     result = recipe.result().create();
                     Block block = blockItem.getBlock();
+                    // A fresh tag per result. The component stores the CompoundTag by reference and
+                    // ItemStack.copy() only shallow-copies the component map, so one shared instance
+                    // stays reachable from every plane already crafted at this bench and the next
+                    // material change rewrites them all.
+                    CompoundTag resultItemTag = new CompoundTag();
                     resultItemTag.putString("material", BuiltInRegistries.BLOCK.getKey(block).toString());
                     result.set(SimplePlanesComponents.ENTITY_TAG, resultItemTag);
                 }
