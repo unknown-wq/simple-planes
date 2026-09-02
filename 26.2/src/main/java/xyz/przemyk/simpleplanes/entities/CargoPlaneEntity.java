@@ -42,9 +42,15 @@ public class CargoPlaneEntity extends PlaneEntity {
     public void tick() {
         super.tick();
 
+        // The side test used to sit inside the loop, so the client paid for the spatial query
+        // every tick to reach a body that never runs there.
+        if (level().isClientSide()) {
+            return;
+        }
+
         List<Entity> list = level().getEntities(this, getBoundingBox().inflate(0.2F, -0.01F, 0.2F), EntitySelector.pushableBy(this));
         for (Entity entity : list) {
-            if (!level().isClientSide() && !(getControllingPassenger() instanceof Player) &&
+            if (!(getControllingPassenger() instanceof Player) &&
                     !entity.hasPassenger(this) &&
                     !entity.isPassenger() && entity instanceof LivingEntity && !(entity instanceof Player)) {
                 entity.startRiding(this);
