@@ -244,6 +244,11 @@ public class PlaneAutopilot {
      * {@link DeparturePlan}. It reproduces the choice {@code AutopilotSpawner} already made when it
      * put the aircraft on its parking spot — the same inputs and the same score — so the aircraft
      * never taxis to the opposite end from the one it was parked beside.
+     *
+     * <p>The score therefore uses {@link DeparturePlan#SCORING_ROTATION_MULTIPLIER} rather than this
+     * aircraft's own rotation multiplier: the spawner picks the parking spot before there is an
+     * aircraft to ask, so a multiplier read from the entity here is one the other half of the pair
+     * cannot see. See that constant for the measurement.
      */
     private static @Nullable DeparturePlan resolveDeparture(PlaneEntity plane, FlightPlan plan) {
         if (plan.departureAirfield() == null || !(plane.level() instanceof ServerLevel serverLevel)) {
@@ -254,7 +259,7 @@ public class PlaneAutopilot {
             return null;
         }
         return DeparturePlan.decide(serverLevel, airfield, plan.currentWaypointGround(),
-            plane.autopilotRotationSpeedMultiplier());
+            DeparturePlan.SCORING_ROTATION_MULTIPLIER);
     }
 
     /**
