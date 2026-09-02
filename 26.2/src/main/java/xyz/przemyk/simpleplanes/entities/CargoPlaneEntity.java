@@ -129,16 +129,25 @@ public class CargoPlaneEntity extends PlaneEntity {
         upgrade.readPacket(packetBuffer);
     }
 
+    /**
+     * Server-authoritative, for the reason {@link LargeAirframeEntity#dropPayload()} gives and one
+     * more that is specific to this airframe: {@link CargoUpgradeRemovedPacket} addresses a rack by
+     * its index in {@link #largeUpgrades}, so a client that had already dropped one of its own
+     * would apply every later removal to the wrong rack.
+     */
     @Override
     public void dropPayload() {
-        for (LargeUpgrade upgrade : largeUpgrades) {
+        if (level().isClientSide()) {
+            SimplePlanesClientNetworking.sendDropPayload();
+            return;
+        }
+        for (int index = 0; index < largeUpgrades.size(); index++) {
+            LargeUpgrade upgrade = largeUpgrades.get(index);
             if (upgrade.canBeDroppedAsPayload()) {
                 upgrade.dropAsPayload();
                 if (upgrade.removed) {
-                    largeUpgrades.remove(upgrade);
-                }
-                if (level().isClientSide()) {
-                    SimplePlanesClientNetworking.sendDropPayload();
+                    largeUpgrades.remove(index);
+                    SimplePlanesNetworking.sendToPlayersTrackingEntity(this, new CargoUpgradeRemovedPacket((byte) index, getId()));
                 }
                 break;
             }

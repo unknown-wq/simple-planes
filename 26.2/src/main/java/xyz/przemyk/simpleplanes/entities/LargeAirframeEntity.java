@@ -5,12 +5,15 @@ import net.minecraft.world.entity.EntitySelector;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import xyz.przemyk.simpleplanes.datapack.PayloadEntry;
 import xyz.przemyk.simpleplanes.datapack.PlanePayloadReloadListener;
+import xyz.przemyk.simpleplanes.network.SUpgradeRemovedPacket;
 import xyz.przemyk.simpleplanes.network.SimplePlanesClientNetworking;
+import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 import xyz.przemyk.simpleplanes.upgrades.LargeUpgrade;
@@ -123,16 +126,25 @@ public class LargeAirframeEntity extends PlaneEntity {
         return false;
     }
 
+    /**
+     * Server-authoritative, because a payload drop has to reach every client that tracks the
+     * aircraft and not only the one that pressed the key. Dropping the rack locally and telling
+     * nobody left the payload hanging under the plane on every other client until the entity was
+     * re-tracked, and left their upgrade map disagreeing with the server's.
+     */
     @Override
     public void dropPayload() {
+        if (level().isClientSide()) {
+            SimplePlanesClientNetworking.sendDropPayload();
+            return;
+        }
         for (Upgrade upgrade : upgrades.values()) {
             if (upgrade.canBeDroppedAsPayload()) {
                 upgrade.dropAsPayload();
                 if (upgrade.removed) {
-                    upgrades.remove(SimplePlanesRegistries.UPGRADE_TYPE.getKey(upgrade.getType()));
-                }
-                if (level().isClientSide()) {
-                    SimplePlanesClientNetworking.sendDropPayload();
+                    Identifier upgradeID = SimplePlanesRegistries.UPGRADE_TYPE.getKey(upgrade.getType());
+                    upgrades.remove(upgradeID);
+                    SimplePlanesNetworking.sendToPlayersTrackingEntity(this, new SUpgradeRemovedPacket(upgradeID, getId()));
                 }
                 break;
             }
