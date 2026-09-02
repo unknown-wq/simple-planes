@@ -491,13 +491,20 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
     }
 
     /**
-     * How far anything stands above the pad inside the vertical clearance, and the refusal if it
-     * does.
+     * How far anything stands above the pad, and the refusal if anything does.
      *
      * <p>Uses {@code MOTION_BLOCKING}, which reports the top of the highest thing in the column — so
      * a branch overhanging the pad with air underneath it is caught, which is exactly the case a
      * "walk up from the ground" test would miss. Every column of the pad plus its clearance ring is
      * read; a vertical departure passes through all of them.
+     *
+     * <p><b>There is no ceiling on the test, and the refusal no longer claims one.</b> It named
+     * {@link RotorcraftConfig#PAD_CLEAR_HEIGHT} while measuring nothing of the kind, which read as a
+     * height a player could clear to and be done. The heightmap is why it cannot be bounded: it
+     * gives the top of the column and says nothing about what is underneath, so a canopy thirty
+     * blocks up may have a trunk five blocks up, and a test that ignored the canopy for being above
+     * some ceiling would be ignoring the trunk with it. Anything at all standing over the pad is a
+     * refusal, and the message says so in the terms the survey actually works in.
      */
     private static int columnObstruction(Level level, Helipad pad, List<String> refusals) {
         int reach = pad.radius() + RotorcraftConfig.PAD_CLEARANCE_MARGIN;
@@ -523,8 +530,8 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
             refusals.add("something stands " + tallest + " blocks above the pad at "
                 + (where == null ? "?" : where.toShortString())
                 + "; a departure is vertical, so the column above the pad and "
-                + RotorcraftConfig.PAD_CLEARANCE_MARGIN + " blocks of ring around it must be clear to "
-                + RotorcraftConfig.PAD_CLEAR_HEIGHT + " blocks");
+                + RotorcraftConfig.PAD_CLEARANCE_MARGIN
+                + " blocks of ring around it must be clear all the way up");
         }
         return tallest;
     }
