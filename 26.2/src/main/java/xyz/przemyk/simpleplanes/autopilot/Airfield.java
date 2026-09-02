@@ -586,8 +586,17 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      */
     public static boolean standFree(Level level, Vec3 position, @Nullable BlockPos marked,
                                     @Nullable PlaneEntity asker) {
-        AABB box = AABB.ofSize(position, AutopilotConfig.PARKING_SPOT_CLEARANCE * 2,
-            6.0, AutopilotConfig.PARKING_SPOT_CLEARANCE * 2);
+        // One clearance across, not two. AABB#ofSize takes the full extent, so the box used to reach
+        // a whole PARKING_SPOT_CLEARANCE to either side of the square — and that is exactly the
+        // smallest gap parkingSpotProblem lets a player leave between two stands. An aircraft is up
+        // to 3 blocks wide, so a machine standing on the next stand at the minimum legal separation
+        // had its hull inside this box and both squares read as occupied: the pair of stands could
+        // never be used at once, an arrival skipped the free one and stopped on the runway, and a
+        // departure fell through to the derived apron. Half the extent keeps the test on the square
+        // itself, still catches anything actually parked on it, and leaves a block of daylight
+        // against an aircraft on the neighbouring stand.
+        AABB box = AABB.ofSize(position, AutopilotConfig.PARKING_SPOT_CLEARANCE,
+            6.0, AutopilotConfig.PARKING_SPOT_CLEARANCE);
         if (!level.getEntities(EntityTypeTest.forClass(PlaneEntity.class), box,
             plane -> plane != asker).isEmpty()) {
             return false;
