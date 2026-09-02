@@ -6,6 +6,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.DataSlot;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -31,9 +32,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ModifyUpgradesContainer extends AbstractContainerMenu {
 
+    /** Six upgrade slots followed by eight cargo slots. */
+    private static final int SLOT_COUNT = 14;
+
     private final MyItemStackHandler itemHandler;
     public PlaneEntity planeEntity;
-    public int errorSlot = -1;
+    /**
+     * Slot whose item could not be turned into an upgrade, or -1 for none. Only the server works
+     * this out and only the screen draws it, so it travels as a synched data slot; as a plain field
+     * it stayed at -1 on the client and the marker was never drawn.
+     */
+    public final DataSlot errorSlot = DataSlot.standalone();
     private boolean internalItemsChange;
 
     @SuppressWarnings("PatternVariableHidesField")
@@ -41,6 +50,8 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
         super(SimplePlanesContainers.UPGRADES_REMOVAL.get(), id);
         internalItemsChange = true;
         this.itemHandler = new MyItemStackHandler();
+        errorSlot.set(-1);
+        addDataSlot(errorSlot);
 
         addSlot(new PlaneUpgradeSlot(itemHandler, 0, 8, 17, this));
         addSlot(new PlaneUpgradeSlot(itemHandler, 1, 26, 17, this));
@@ -76,6 +87,12 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
             i = 6;
             if (entity instanceof CargoPlaneEntity cargoPlaneEntity) {
                 for (LargeUpgrade upgrade : cargoPlaneEntity.largeUpgrades) {
+                    // The bay is meant to hold eight, but only one of the paths that add to
+                    // largeUpgrades enforces that; loading from disk and reading the spawn packet do
+                    // not. Running off the end of the handler throws out of the menu constructor.
+                    if (i >= SLOT_COUNT) {
+                        break;
+                    }
                     itemHandler.setStackInSlot(i, upgrade.getItemStack());
                     i++;
                 }
@@ -96,7 +113,11 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
     }
 
     public void itemsChanged(ItemStack previousStack, ItemStack newStack, int slot) {
-        if (planeEntity.level().isClientSide() || internalItemsChange || ItemStack.isSameItemSameComponents(previousStack, newStack)) {
+        // planeEntity stays null when the constructor could not resolve the id, which on the client
+        // is any plane the level does not have yet. Every slot the server syncs into this menu comes
+        // through here, so the test has to come before the level is read off it.
+        if (planeEntity == null || planeEntity.level().isClientSide() || internalItemsChange
+                || ItemStack.isSameItemSameComponents(previousStack, newStack)) {
             return;
         }
 
@@ -149,11 +170,11 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
             }
 
             if (success.get()) {
-                if (errorSlot == slot) {
-                    errorSlot = -1;
+                if (errorSlot.get() == slot) {
+                    errorSlot.set(-1);
                 }
             } else {
-                errorSlot = slot;
+                errorSlot.set(slot);
             }
         } else if (planeEntity instanceof CargoPlaneEntity cargoPlaneEntity) {
             if (newStack.isEmpty()) {
@@ -261,7 +282,7 @@ public class ModifyUpgradesContainer extends AbstractContainerMenu {
     private class MyItemStackHandler extends ItemStackHandler {
 
         public MyItemStackHandler() {
-            super(14);
+            super(SLOT_COUNT);
         }
 
         @Override
