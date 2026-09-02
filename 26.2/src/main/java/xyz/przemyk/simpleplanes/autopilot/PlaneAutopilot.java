@@ -1174,10 +1174,13 @@ public class PlaneAutopilot {
      * </ul>
      *
      * <p>The range itself is {@link ArrivalPlan#decisionRange}, which is the fix distance plus two
-     * of the aircraft's own turn radii — 419 blocks for the starter airframe at cruise speed. It is
-     * measured to the <em>threshold</em> rather than to the intercept fix because an arrival from
-     * abeam never passes near the fix at all: it would sail past the decision and end up overhead
-     * again, which is the behaviour being removed.
+     * of the aircraft's own turn radii — 419 blocks for the starter airframe at cruise speed. The
+     * fix distance is {@link ArrivalPlan#standardInterceptDistance}, i.e. the shortest final this
+     * airframe can fly rather than the constant 300; see that method for why the two are not the
+     * same thing on anything heavier than the starter plane. It is measured to the
+     * <em>threshold</em> rather than to the intercept fix because an arrival from abeam never passes
+     * near the fix at all: it would sail past the decision and end up overhead again, which is the
+     * behaviour being removed.
      */
     private boolean arrivalDecisionReached(PlaneEntity plane) {
         if (plan == null || !plan.onFinalLeg() || plan.airfieldName() == null
@@ -1192,8 +1195,9 @@ public class PlaneAutopilot {
             return false;
         }
         RunwayEnd end = landingEnd != null ? landingEnd : airfield.bestEnd(serverLevel, plane.position());
+        ArrivalPlan.Capability me = capability(plane);
         return AutopilotMath.horizontalDistance(plane.position(), end.threshold())
-            <= ArrivalPlan.decisionRange(capability(plane));
+            <= ArrivalPlan.decisionRange(me, ArrivalPlan.standardInterceptDistance(me));
     }
 
     /**

@@ -1111,6 +1111,11 @@ against what the airframe can actually do, and a commit point.
 decisionRange = interceptDistance + max(ARRIVAL_DECISION_FLOOR, 2 × turnRadius)
 ```
 
+`interceptDistance` here is `minimumInterceptDistance` — the shortest final *this* airframe can fly,
+which is the distance `ArrivalPlan.decide` starts its ladder from. Against the constant 300 the
+decision landed inside the fix it was about to choose: a cargo plane decided 896 blocks out for a fix
+at 780, leaving 116 blocks for a join that needs 596.
+
 `turnRadius` is `v / yawRate`, and `tickYaw` clamps the yaw rate to `2.5°/tick × the airframe's
 getRotationSpeedMultiplier`. **That multiplier is the whole reason this is not a constant**: 1.0 on
 the starter plane, 0.5 on the large one, **0.2 on the cargo plane**. The same 0.50 b/t approach is an
