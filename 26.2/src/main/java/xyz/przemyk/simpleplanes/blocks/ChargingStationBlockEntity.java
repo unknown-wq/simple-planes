@@ -22,7 +22,7 @@ public class ChargingStationBlockEntity extends BlockEntity {
     }
 
     public static void tick(ChargingStationBlockEntity blockEntity) {
-        if (blockEntity.level == null) {
+        if (blockEntity.level == null || blockEntity.energyStorage.getEnergyStored() <= 0) {
             return;
         }
         // Contract C4: no capability lookup on Fabric. The only energy consumer this ever charged was
@@ -33,7 +33,12 @@ public class ChargingStationBlockEntity extends BlockEntity {
                     if (upgrade instanceof ElectricEngineUpgrade electricEngineUpgrade) {
                         int available = blockEntity.energyStorage.extractEnergy(1000, true);
                         int accepted = electricEngineUpgrade.energyStorage.receiveEnergy(available, false);
-                        blockEntity.energyStorage.extractEnergy(accepted, false);
+                        if (accepted > 0) {
+                            blockEntity.energyStorage.extractEnergy(accepted, false);
+                            // saveAdditional writes this buffer, so a drain has to mark the chunk
+                            // dirty or the old level comes back on reload.
+                            blockEntity.setChanged();
+                        }
                     }
                 }
             }

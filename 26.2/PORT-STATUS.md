@@ -155,7 +155,10 @@ truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
   Fabric config library is a follow-up confined to that one file.
 - `items/PlaneArmorItem` (Agent A) — `isEnchantable`/`getEnchantmentValue`/`supportsEnchantment`
   no longer exist on `Item` in 26.2. Enchantment value 9 moved to `Item.Properties#enchantable(9)`
-  at registration; the "always allow Protection" special case is dropped (data-driven now).
+  at registration; the "always allow Protection" special case is data-driven now —
+  `data/minecraft/tags/item/enchantable/armor.json` puts the item in the tag Protection is gated on,
+  which is what makes `ArmorUpgrade`'s protection level anything other than 0. The tag is coarser
+  than the old allowance: it opens every armour enchantment, though only Protection is read.
 - `client/render/PlaneItemColors` item tint (Agent A resources) — item colour providers are gone in
   26.2. `assets/simpleplanes/items/{plane,large_plane,cargo_plane,helicopter}.json` now use a
   constant tint (`0xB28F55`, the old `DEFAULT_COLOR`) instead of sampling the material block texture.
@@ -163,6 +166,11 @@ truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
   and no `block/cloud_*` models exist.
 - `blocks/ChargingStationBlockEntity` (Agent A) — charged any `IEnergyStorage` capability holder
   standing on it; now looks up `ElectricEngineUpgrade` on a `PlaneEntity` directly (contract C4).
+  **The block is inert as shipped.** Its own buffer was filled through the same capability, and
+  nothing on Fabric fills it now, so it holds 0 for ever and charges nothing — while still being
+  craftable and listed in the creative tab. Restoring it needs an energy input (a transfer API, or
+  an in-world source); whether to keep shipping the block meanwhile is a content decision, not a
+  port one. Until then the solar panel is the only way to charge an electric engine.
 
 ### Agent C (client) cuts
 
