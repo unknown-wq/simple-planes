@@ -200,7 +200,7 @@ any nearby non-player `LivingEntity` from their own `tick()`, so this happens by
 with a pig aboard a 200-block out-and-back: commanded heading 236, nose reading 236, and the
 aircraft flying the other way with the range to its target growing 380 → 1287 blocks and never
 coming back. The test is now `getPlayer() == null`, which is exactly "is anyone's client
-authoritative here". See `PHYSICS-AUDIT.md`, "Thrust does not go through it".
+authoritative here".
 
 ---
 
@@ -1983,7 +1983,7 @@ tested and shipped — in order to teach it about an aircraft it will never fly.
 
 It is also the split the airframe itself makes: `HelicopterEntity` overrides all six of
 `PlaneEntity`'s flight hooks, so **not one line of the fixed-wing flight model runs on it** — no
-wing, no lift, no stall speed, no take-off speed (`HELICOPTER-PHYSICS.md` §1.2). A controller shared
+wing, no lift, no stall speed, no take-off speed. A controller shared
 with the plane would be a controller with two disjoint halves.
 
 The fixed-wing state machine is therefore **not modified at all**. `PlaneAutopilot` gains one field,
@@ -2047,8 +2047,8 @@ it this way, and it is worth recording as a result rather than as an intention.
 | **cyclic** (`setCyclicForward` / `setCyclicRight`) | proportional-plus-integral on the **velocity error**, integrated in the **world** frame and resolved into the two sticks every tick |
 | **pedal** (`setPedal`) | `AutopilotMath.bangBang` on the heading error, unchanged from the fixed-wing rudder |
 
-**The collective is a search, not a table and not a PID.** `HELICOPTER-PHYSICS.md` §2 measures the
-ladder exactly — notches 0 to 5 settle at −8.6, −6.2, −3.5, 0.0, +2.7, +4.8 blocks per second, with
+**The collective is a search, not a table and not a PID.** The ladder measures exactly —
+notches 0 to 5 settle at −8.6, −6.2, −3.5, 0.0, +2.7, +4.8 blocks per second, with
 0.000 blocks of drift in 400 ticks at the hover notch — so "pick the notch nearest the demand" is
 the entire vertical controller. Copying that table into the autopilot would have been the wrong way
 to use it: those are the equilibria at a *level* disc, and level flight at 25° of tilt wants notch
@@ -2129,8 +2129,8 @@ separate question, and inside the let-down the answer is "hold the bearing you r
 "Four things flying it found" below for what happens when it is allowed to chase the pad instead.
 
 Braking is the same command with the sign reversed, which on a position-command cyclic is simply a
-negative stick. Full aft is 24 blocks/s to a stop in 60 ticks and 43 blocks (`HELICOPTER-PHYSICS.md`
-§3), so there is **no deceleration table anywhere in this arrival** — nothing of what the fixed-wing
+negative stick. Full aft is 24 blocks/s to a stop in 60 ticks and 43 blocks, so there is
+**no deceleration table anywhere in this arrival** — nothing of what the fixed-wing
 side needs 270 blocks of runway-in to do. What there is instead is one line of arithmetic: the
 closure demand is `sqrt(2·CLOSURE_BRAKING·distance)` capped at `APPROACH_SPEED`, a constant-
 deceleration profile rather than a schedule fitted to anything. It replaced a demand proportional to
@@ -2180,7 +2180,7 @@ sortie to the tick, because none of those phases is speed-dependent:
 
 **The cruise is 1.10 whatever it is told above that, and it now says so.** Level flight at full
 forward cyclic wants collective 3.31, the collective is an integer, and the loop dithers 3/4 —
-`HELICOPTER-PHYSICS.md` §3 says exactly this. Commanded 0.50 is made good at 0.524 and commanded 0.80
+Commanded 0.50 is made good at 0.524 and commanded 0.80
 at 0.817, with the cyclic off its stop 96% of the time; commanded 1.20 and commanded 1.75 both fly
 1.10 with the stick pinned for the whole leg. That last case used to be silent, and it was a real
 piece of dishonesty — a 3400-block leg ordered at 1.75 and the same leg ordered at 1.20 took the same
@@ -3005,7 +3005,7 @@ world cannot double-count either.
 * **The default cruise is the fastest level flight there is, so it is never quite made good.**
   Holding altitude at full forward cyclic wants collective 3.31 and the collective is an integer, so
   the loop dithers 3/4 and the machine settles around **1.10 blocks/tick against the 1.20 it is
-  commanded** (`HELICOPTER-PHYSICS.md` §3). Ask for less and it holds exactly what it was asked for —
+  commanded**. Ask for less and it holds exactly what it was asked for —
   0.50 flies 0.524, 0.80 flies 0.814. What it does *not* do is refuse a speed it cannot make good:
   `/autopilot heliflight … 1.75` is inside the argument's range, is accepted, is echoed back in the
   launch line and then flies 1.10. It now says so once from the air, which is the honest half of the

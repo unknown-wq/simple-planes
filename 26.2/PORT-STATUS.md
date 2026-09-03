@@ -1,8 +1,7 @@
 # PORT-STATUS — Simple Planes → Fabric / Minecraft 26.2
 
 Live status + **the law** for every agent working in `26.2/`. Read this whole file before
-your first edit. Background reference: `../porting-26.2/PORTING-GUIDE-26.2.md` (§3 breaking
-changes) and `../porting-26.2/PORT-CHEATSHEET.md` (verified fixes for recurring errors).
+your first edit.
 
 ## What this port is
 
@@ -135,8 +134,7 @@ dependency.
 **The client is untested** — this container has no display, so nothing visual (renderers,
 models, screens, HUD) has ever been executed. Compile-clean is all that is established there.
 
-Three runtime faults were fixed after the first boot; they are documented with their ground
-truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
+Three runtime faults were fixed after the first boot:
 1. recipe results must be `ItemStackTemplate` — `ItemStack.CODEC` demands bound components,
    which mod items do not have during datapack load (the 4 plane recipes silently vanished);
 2. `#minecraft:non_flammable_wood` is an item tag, so a block tag referencing it fails wholesale;

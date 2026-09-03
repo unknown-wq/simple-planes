@@ -135,8 +135,6 @@ back as body-frame rotations, so a 3.0°/tick pedal gave 3.309 with the disc 25�
 applied while pitch *and* roll are non-zero. The yaw input now inverts the Y-X-Z euler-rate
 kinematics.
 
-Full model and every measurement: `../26.2/HELICOPTER-PHYSICS.md`.
-
 ### Helipads, and helicopter sorties between them
 
 A helipad is not a runway — no heading, no centreline, approach from any bearing — so it has its own
@@ -507,11 +505,8 @@ approach obstacles.
 
 **Route flights now complete, including the landing.** The 180-degree turnback between legs and
 the landing descent used to bleed speed into an unrecovered stall and pancake in; both fly
-cleanly and end on a runway. See "Aircraft that turned lost all their thrust" below.
+cleanly and end on a runway. See "Aircraft that turned lost all their thrust" above.
 Helicopters remain out of scope.
-
-Details: [`../26.2/PHYSICS-AUDIT.md`](../26.2/PHYSICS-AUDIT.md) and
-[`../26.2/COLLISION-DIAGNOSIS.md`](../26.2/COLLISION-DIAGNOSIS.md).
 
 ## Changes since the first 26.2 build
 

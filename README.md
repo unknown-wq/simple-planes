@@ -103,8 +103,7 @@ The conversion moves along two axes at once:
   Blaze3D/Vulkan rendering, item model definitions.
 
 Mappings are Mojang official on both sides: 26.1 was the first unobfuscated release, so there is no
-Yarn/Intermediary step. General notes on porting any 1.21.x mod to 26.2 live in
-[`porting-26.2/`](porting-26.2/README.md).
+Yarn/Intermediary step.
 
 ## Repository layout
 
@@ -113,8 +112,7 @@ Yarn/Intermediary step. General notes on porting any 1.21.x mod to 26.2 live in
 ├── 1.21.1/            # upstream sources, unmodified — NeoForge 21.1.x / Minecraft 1.21.1
 ├── 26.2/              # source code of the Fabric / Minecraft 26.2 port (+ PORT-STATUS.md)
 ├── dist/              # COMPILED, ready-to-install jar for Minecraft 26.2
-├── gradle/            # vendored Gradle 9.6.1 distribution (offline install)
-└── porting-26.2/      # general 1.21.x → 26.2 porting notes for coding agents
+└── gradle/            # vendored Gradle 9.6.1 distribution (offline install)
 ```
 
 ## Building from source
