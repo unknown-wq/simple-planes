@@ -1,195 +1,203 @@
-# Команды Simple Planes (26.2)
+# Simple Planes Commands (26.2)
 
-Шпаргалка по автопилоту: всё, что можно ввести в чат или в консоль сервера.
+Autopilot cheat sheet: everything you can type in chat or on the server console.
 
-Все команды требуют уровень оператора 2 (`/op <ник>` или консоль сервера).
-Ни одна команда **не требует игрока** — все принимают явные координаты, поэтому работают
-из консоли, из командного блока и из функции датапака. Игрок нужен только там, где это
-сказано отдельно.
+Every command requires operator level 2 (`/op <name>` or the server console).
+**No command requires a player** — they all take explicit coordinates, so they all work
+from the console, from a command block, or from a datapack function. A player is only
+needed where that is called out separately.
 
 ---
 
-## Быстрый старт
+## Quick start
 
 ```mcfunction
-# 1. Выдать инструменты
+# 1. Give yourself the tools
 /give @s simpleplanes:runway_tool
 /give @s simpleplanes:helipad_tool
 /give @s simpleplanes:route_wand
 /give @s simpleplanes:plane_strike_tool
 
-# 2. Разметить полосу: ПКМ по одному торцу, затем по другому
-#    (или командой, если координаты уже известны)
+# 2. Survey a runway: right-click one threshold, then the other
+#    (or by command, if you already have the coordinates)
 /autopilot survey 654 68 -9 654 68 -75
 
-# 3. Посмотреть, что получилось
+# 3. See what you got
 /autopilot airfields
 
-# 4. Отправить самолёт с одного аэродрома на другой
+# 4. Send a plane from one airfield to another
 /autopilot flight "airfield-1" "airfield-2"
 
-# 5. Следить за ним
+# 5. Watch it fly
 /autopilot tower
 /autopilot status
 ```
 
 ---
 
-## Таран
+## Strike
 
 ```
-/autopilot strike <x y z> [дальность] [курс] [сила] [ломать блоки] [поджигать]
+/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]
 ```
 
-Спавнит самолёт в стороне от цели и направляет его в неё на полном газу.
+Spawns an aircraft off to one side of the target and flies it straight in at full throttle.
 
-| Аргумент | Диапазон | По умолчанию | Что делает |
+| Argument | Range | Default | What it does |
 |---|---|---|---|
-| `x y z` | любые | — | точка, в которую врежется самолёт. Можно `~ ~ ~` и `^ ^ ^5` |
-| дальность | 20…4000 | 400 | за сколько блоков до цели он появится |
-| курс | 0…359 | со стороны игрока | **с какой стороны заходит** — см. ниже |
-| сила | 0…16 | 4 | 4 — обычный динамит, 6 — заряженный крипер, 16 — потолок |
-| ломать блоки | true/false | true | `false` — рвёт сущности, но не трогает постройку |
-| поджигать | true/false | false | `true` — оставляет пожары |
+| `x y z` | any | — | the point the aircraft flies into. `~ ~ ~` and `^ ^ ^5` both work |
+| `distance` | 20…4000 | 400 | how many blocks out from the target it spawns |
+| `bearing` | 0…359 | from the caller's side | **which side the run-in comes from** — see below |
+| `blast` | 0…16 | 4 | 4 is ordinary TNT, 6 a charged creeper, 16 the ceiling |
+| `blocks` | true/false | true | `false` — damages entities but leaves the build alone |
+| `fire` | true/false | false | `true` — leaves fires burning |
 
 ```mcfunction
-# ровно то, о чём был вопрос: 400 блоков разбега, заход с северо-востока,
-# сила 15, ломает блоки и поджигает
+# 400 blocks of run-in, approaching from the northeast,
+# blast 15, breaks blocks and starts fires
 /autopilot strike ~ ~ ~ 400 50 15 true true
 
-# «учебный» таран: грохот и урон, но ни одного сломанного блока
+# a "clean" strike: the bang and the damage, but not one block broken
 /autopilot strike 100 70 200 400 0 8 false false
 
-# зажигательный, без разрушений
+# incendiary, no demolition
 /autopilot strike 100 70 200 400 0 8 false true
 ```
 
-### Как работает курс
+### How bearing works
 
-Курс — это **сторона, с которой самолёт приходит**, а не направление его полёта.
-Обычный авиационный курс в градусах: `0` — север, `90` — восток, `180` — юг, `270` — запад.
+`bearing` is **the side the aircraft comes in from**, not the direction it flies.
+Ordinary compass bearing, in degrees: `0` is north, `90` east, `180` south, `270` west.
 
-* `0` — самолёт появится **к северу** от цели и полетит на юг;
-* `90` — появится **к востоку** и полетит на запад;
-* `50` — появится с северо-востока и пойдёт на юго-запад.
+* `0` — the aircraft spawns **north** of the target and flies south;
+* `90` — spawns **east** and flies west;
+* `50` — spawns to the northeast and flies southwest.
 
-Так удобнее выбирать: вы решаете, над какой стороной цели пройдёт заход, — а не считаете
-в уме обратное направление.
+This way round is the useful one: you decide which side of the target the run-in
+passes over, instead of working out the reverse heading in your head.
 
-Если курс не указывать, он берётся от того, кто отдал команду: самолёт заходит так, чтобы
-пройти **над вами** по дороге к цели. Из консоли отсчёт идёт от точки спавна мира.
+If `bearing` is left off, it is taken from whoever gave the order: the aircraft comes
+in so that it passes **over you** on the way to the target. From the console it is
+measured from the world spawn point instead.
 
 ---
 
-## Вертолёт-ганшип
+## Gunship
 
 ```
-/gunship launch <x y z> [патронов] [темп] [боеприпас] [высота]
+/gunship launch <x y z> [arrows] [rate] [ammunition] [altitude]
 /gunship status
 /gunship stop
 ```
 
-Спавнит вооружённый вертолёт в указанной точке. Он взлетает, зависает над ней, расстреливает
-враждебных мобов стрелами, а когда боекомплект кончается — садится и исчезает. Если его собьют,
-он исчезает сразу, и в отчёте так и написано: борт потерян.
+Spawns an armed helicopter at the given point. It climbs, holds a hover over that spot,
+shoots hostile mobs with arrows, and once its magazine is empty it lands and despawns.
+If it gets shot down it despawns immediately, and the report says so: aircraft lost.
 
-| Аргумент | Диапазон | По умолчанию | Что делает |
+| Argument | Range | Default | What it does |
 |---|---|---|---|
-| `x y z` | любые | — | где встать. Можно `~ ~ ~` |
-| патронов | 1…1024 | 128 | размер боекомплекта — два полных стака |
-| темп | 0.5…20.0 | 10.0 | **выстрелов в секунду**, а не интервал в тиках |
-| боеприпас | любой метательный предмет | `minecraft:arrow` | берётся из реестра предметов |
-| высота | 2…120 | 18 | на сколько блоков над землёй он зависнет |
+| `x y z` | any | — | where it holds. `~ ~ ~` works |
+| `arrows` | 1…1024 | 128 | magazine size — two full stacks |
+| `rate` | 0.5…20.0 | 10.0 | **rounds per second**, not a tick interval |
+| `ammunition` | any projectile item | `minecraft:arrow` | resolved from the item registry |
+| `altitude` | 2…120 | 18 | how many blocks above the ground it holds |
 
 ```mcfunction
-# всё по умолчанию: 128 обычных стрел, 10 выстрелов в секунду, зависание на 18 блоках
+# all defaults: 128 ordinary arrows, 10 rounds/second, holding at 18 blocks
 /gunship launch ~ ~ ~
 
-# 64 стрелы с сильным ядом, 4 выстрела в секунду, повыше
+# 64 arrows of strong poison, 4 rounds/second, higher up
 /gunship launch 100 -60 200 64 4.0 minecraft:tipped_arrow[minecraft:potion_contents={potion:"minecraft:strong_poison"}] 30
 
-# спектральные стрелы — подсвечивают всё, во что попали
+# spectral arrows — light up anything they hit
 /gunship launch ~ ~ ~ 96 10.0 minecraft:spectral_arrow
 ```
 
-**Темп — выстрелы в секунду.** Так говорят люди: «десять выстрелов в секунду». Интервал в тиках
-считается наоборот (меньше значит чаще) и не выражает дробные темпы; 7.5 выстрела в секунду —
-законное значение и оно соблюдается точно, а не округляется до тика. Потолок 20 — это сама частота
-тиков: одна стрела в тик, больше сущностей в тик выпустить нельзя.
+**`rate` is rounds per second.** That is how people actually talk about it: "ten rounds
+a second". A tick-interval number would run backwards — smaller means faster — and
+could not express a fractional rate; 7.5 rounds/second is a legal value and is honoured
+exactly, not rounded to the nearest tick. The ceiling of 20 is the tick rate itself:
+one arrow entity per tick is the hard limit.
 
-**Боеприпас берётся из реестра**, а не из списка в коде: подходит всё, что реестр считает
-метательным (`ProjectileItem`). Поэтому работают и обычные стрелы, и спектральные, и стрелы с
-любым зельем (компонент едет вместе с предметом), и стрелы из других модов — про них тут ничего
-не написано, и писать не нужно. Не метательный предмет команда отклоняет с объяснением.
+**Ammunition is resolved from the item registry**, not from a hard-coded list: anything
+the registry considers a projectile (`ProjectileItem`) qualifies. That covers ordinary
+arrows, spectral arrows, arrows carrying any potion (the component travels with the
+item), and arrows from other mods — nothing here needs to know about them in advance.
+An item that is not a projectile is rejected with an explanation.
 
-### Кого он считает врагом
+### What counts as an enemy
 
-Интерфейс `net.minecraft.world.entity.monster.Enemy` — ровно то, по чему выбирают цель железный
-голем, снежный голем и кондуит в самой ваниле. Плюс отдельное правило для **спровоцированных
-нейтралов**: моб, который прямо сейчас атакует игрока, тоже враг, даже если он не `Enemy` (стая
-волков, разъярённые пчёлы).
+`net.minecraft.world.entity.monster.Enemy` — the same interface an iron golem, a snow
+golem and a conduit target in vanilla. Plus one extra rule for a **provoked neutral**: a
+mob currently attacking a player counts as an enemy too, even if it is not `Enemy` (an
+enraged wolf pack, angered bees).
 
-Категория спавна `MobCategory.MONSTER` не подошла: в 26.2 в ней сорок пять типов, и один из них —
-**зомби-конь**, совершенно безобидное ездовое животное. Правило «у моба есть цель» тоже не
-подошло, и по решающей причине: `Mob#getTarget()` возвращает `LivingEntity`, а вертолёт — не
-`LivingEntity`, так что моб в принципе не может взять его на прицел. Без игрока внизу ганшип
-не выстрелил бы ни разу.
+`MobCategory.MONSTER` did not work as the filter: in 26.2 it has forty-five entries, and
+one of them is the **zombie horse**, a perfectly harmless mount. "The mob has a target"
+did not work either, and for a decisive reason: `Mob#getTarget()` returns
+`LivingEntity`, and a gunship is not a `LivingEntity`, so no mob could ever put it on
+target in the first place. Without a player on the ground the gunship would never fire
+a shot.
 
-**Радиус — 40 блоков, сферой от вертолёта.** На высоте 18 блоков это круг радиусом около 35 блоков
-по земле. Дальше он не летает и не преследует: это сторожевой пост, а не охотник.
+**Radius is 40 blocks, a sphere centred on the gunship.** At the 18-block default
+altitude that is about a 35-block circle on the ground. It does not fly further or
+pursue beyond that — it is a sentry post, not a hunter.
 
-### По своим не стреляет
+### Won't hit friendlies
 
-Четыре отдельных правила, потому что «не берёт игрока в цель» и «не попадает в игрока» — разные
-вещи:
+Four separate rules, because "won't target a player" and "won't hit a player" are
+different things:
 
-* игрок никогда не цель;
-* выстрел **не производится**, если траектория проходит ближе 2.5 блока от хитбокса игрока —
-  именно баллистическая траектория, а не прямая до цели: на такой дальности дуга проходит на
-  несколько блоков выше хорды;
-* **и ни через кого другого, в кого он отказывается стрелять**: жители, железные големы, питомцы,
-  скот — им положен запас в полблока вокруг хитбокса. Не брать в цель и не простреливать насквозь —
-  разные вещи. Измерено на стенде: голем, стоящий за два блока до цели, ловил **15 выстрелов из
-  20**, пока запас считался от точки центра сущности, а не от её хитбокса (голем ростом 2.7 блока,
-  и его макушка на 1.35 выше той точки). Теперь в такой геометрии ганшип не стреляет вообще:
-  **0 из 20**;
-* свои стрелы не могут попасть в сам вертолёт (владелец снаряда — он).
+* a player is never a target;
+* a shot **is not fired at all** if its trajectory passes within 2.5 blocks of a
+  player's hitbox — the actual ballistic arc, not a straight line to the target, because
+  at this range the arc rises several blocks above the chord;
+* **and the same goes for anyone else it refuses to shoot**: villagers, iron golems,
+  pets, livestock — they get a half-block margin around their hitbox. Not targeting
+  something and not shooting through it are different guarantees. Measured on the rig: a
+  golem standing two blocks short of the target caught **15 shots out of 20** while the
+  margin was measured from the entity's centre point rather than its hitbox (the golem
+  is 2.7 blocks tall, and its head sits 1.35 blocks above that point). With the margin
+  measured correctly the gunship does not fire at all in that geometry: **0 out of 20**;
+* its own arrows cannot hit the gunship itself (it owns the projectile).
 
-Чего это не покрывает, честно: промахнувшаяся стрела куда-то падает, и игрок, зашедший под неё,
-может её поймать. Стрелы не наводятся.
+What this does not cover, to be honest about it: a missed arrow lands somewhere, and a
+player who walks under it can still be hit. Arrows do not home.
 
-### Темп стрельбы — это темп боя, а не темп по одному мобу
+### The rate is a combat rate, not a per-target rate
 
-`LivingEntity#hurtServer` после попадания ставит 20 тиков неуязвимости и, пока их больше 10,
-игнорирует следующий удар такой же силы. Стрелы одинаковые, поэтому по одному мобу быстрее
-примерно двух выстрелов в секунду стрелять бессмысленно. Ганшип это считает: выстрел делается
-только если стрела прилетит после окончания окна — и своего, и того, которое откроют стрелы,
-уже находящиеся в воздухе. Пока цель неуязвима, он переносит огонь на следующего врага, а если
-переносить не на кого — **не стреляет и сохраняет патрон**.
+`LivingEntity#hurtServer` sets 20 ticks of invulnerability after a hit and, for more
+than 10 of those ticks, ignores the next hit of the same strength. Arrows are all the
+same, so shooting one target faster than about two rounds per second is wasted. The
+gunship accounts for this: a shot is only taken if the arrow will land after that
+window closes — both its own window and whatever window the arrows already in flight
+will open. While the current target is invulnerable it switches fire to the next enemy,
+and if there is nobody else to switch to, **it does not fire and keeps the round**.
 
-Измерено на стенде: до этого правила один скелет (20 HP) стоил **14 патронов**; после — **3**.
-Шесть скелетов вокруг убиты **19 патронами**.
+Measured on the rig: before this rule, one skeleton (20 HP) cost **14 rounds**; after,
+**3**. Six skeletons around it died to **19 rounds**.
 
-### Сколько он попадает
+### How much it hits
 
-Стенд: суперплоский мир, полночь, `spawn_mobs false`, цели с 4096 HP, чтобы весь боекомплект ушёл
-в живую мишень.
+Rig: a superflat world, midnight, `spawn_mobs false`, targets with 4096 HP so the whole
+magazine goes into a live target.
 
-| По кому | Попаданий |
+| Target | Hits |
 |---|---|
-| неподвижная цель, наземная дальность 4…32 | **100 %** (60 из 60) |
-| зомби на своей скорости (0.23), 8 штук, идут мимо | **87…92 %** |
-| зомби с удвоенной скоростью (0.5) | **40…53 %** |
+| stationary target, 4…32 blocks out on the ground | **100%** (60 of 60) |
+| zombies at their own speed (0.23), 8 of them, walking past | **87…92%** |
+| zombies at double speed (0.5) | **40…53%** |
 
-Дальше 35 блоков по земле (при высоте 18) целей просто нет — радиус сферический.
-Промахи по идущей цели — это ошибка упреждения, а не превышения: по той же мишени, поставленной
-неподвижно, тот же выстрел попадает всегда.
+Past 35 blocks along the ground (at 18 blocks of altitude) there are no targets at
+all — the radius is a sphere. Misses against a moving target are lead error, not range:
+the same shot against the same target standing still always connects.
 
-### Посадка — это посадка
+### Landing is landing
 
-«Сел» пишется только если вертолёт **действительно стоит на земле**: колонка под ним проверяется
-по двум картам высот (`MOTION_BLOCKING` и `OCEAN_FLOOR`), и если между ними разница — под ним
-жидкость. Приводнение в отчёте называется приводнением:
+`landed` is only printed once the helicopter is **actually resting on the ground**: the
+column under it is checked against two height maps (`MOTION_BLOCKING` and
+`OCEAN_FLOOR`), and a mismatch between them means it is sitting on a fluid. Ditching in
+water is reported as ditching:
 
 ```
 Gunship #425 did not land: ditched in water at 66401, -61, 66401 - floating, not landed.
@@ -197,142 +205,160 @@ Gunship #425 did not land: ditched in water at 66401, -61, 66401 - floating, not
 
 ---
 
-## Инструмент тарана (скипетр)
+## Strike Tool
 
 `/give @s simpleplanes:plane_strike_tool`
 
-* **ПКМ по блоку** — запустить таран в этот блок;
-* **ПКМ по воздуху** — показать текущие настройки;
-* **Shift + ПКМ по воздуху** — перебрать дальность (100 → 200 → 400 → 800), а на каждом
-  круге ещё и силу взрыва.
+* **right-click a block** — launch a strike into that block;
+* **right-click the air** — show the current settings;
+* **sneak + right-click the air** — cycle the distance (100 → 200 → 400 → 800), and the
+  blast strength on every wraparound.
 
-Жест перебирает только два числа. Полный набор настроек, включая «не ломать блоки»,
-«поджигать» и закреплённый курс захода, записывается на инструмент **в руке** командой:
+The gesture only cycles those two numbers. The full set of settings, including "don't
+break blocks", "start fires" and a pinned bearing, is written onto the tool **in hand**
+with:
 
 ```
-/autopilot tool <дальность> [курс] [сила] [ломать блоки] [поджигать]
+/autopilot tool <distance> [bearing] [blast] [blocks] [fire]
 ```
 
-Те же аргументы в том же порядке, что и у `strike`, только без цели — целью будет тот блок,
-по которому вы кликнете.
+The same arguments in the same order as `strike`, minus the target — the target is
+whatever block you right-click.
 
 ```mcfunction
-# положить в скипетр ровно то, что было в команде выше
+# put exactly the setup from the strike example above onto the tool
 /autopilot tool 400 50 15 true true
 
-# снять закреплённый курс: -1 = «заходить со стороны игрока», как обычно
+# clear the pinned bearing: -1 means "approach from wherever the player stands", as usual
 /autopilot tool 400 -1
 ```
 
-Аргументы, которые не указаны, сохраняют текущее значение — второй вызов может поменять
-одну настройку, не перечисляя остальные. Настройки живут на самом предмете, поэтому
-переживают выход из игры, сундук и смерть.
+Arguments left off keep their current value — a second call can change one setting
+without restating the rest. Settings live on the item itself, so they survive logging
+out, a chest, and death.
 
 ---
 
-## Полёты
+## Flights
 
 ```
-/autopilot route   <откуда x y z> <куда x y z>       [скорость]
-/autopilot flight  <"аэродром"> <"аэродром">          [скорость]
-/autopilot inbound <откуда x y z> <"аэродром">        [скорость]
+/autopilot route   <from x y z> <to x y z>       [speed] [type <aircraft>]
+/autopilot flight  <"airfield"> <"airfield">      [speed] [delay <seconds>] [type <aircraft>]
+/autopilot inbound <from x y z> <"airfield">      [speed] [type <aircraft>]
 ```
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `route` | спавнит самолёт **в воздухе** над первой точкой, летит туда и обратно, потом садится на ближайший аэродром, если он есть |
-| `flight` | полный рейс: спавн на стоянке, выкатывание, взлёт, маршрут, заход по глиссаде и посадка |
-| `inbound` | спавн в указанной точке и заход на посадку — чтобы проверить именно посадку, без взлёта |
+| `route` | spawns an aircraft **in the air** above the first point, flies out and back, then lands at the nearest airfield if one exists |
+| `flight` | a full sortie: spawn on the stand, taxi out, take off, fly the route, fly the approach, land |
+| `inbound` | spawns at the given point and flies the approach — to test the landing on its own, without a departure |
 
-Скорость — в блоках за тик, диапазон **0.40…2.80**, по умолчанию **2.60**.
-Число вне диапазона не ошибка: оно поджимается к границе, а в отчёте о вылете пишется
-та скорость, с которой самолёт реально пошёл.
+`speed` is in blocks per tick, range **0.40…2.80**, default **2.60**. A value outside
+that range is not an error: it is clamped to the nearest bound, and the launch report
+says the speed the aircraft was actually sent at.
+
+`type <plane|large|cargo|random>` picks the airframe. Left off, `flight`, `route` and
+`inbound` all fly the starter plane. `random` draws from the three fixed-wing airframes
+only — a helicopter is never picked, and `type helicopter` is refused outright with a
+pointer to `heliflight`/`heliinbound` instead, since none of `route`, `flight` or
+`inbound` means anything for a rotorcraft: no take-off roll, no glide slope.
+
+`flight` also takes `delay <seconds>` (0…3600), how long the sortie waits parked before
+it asks for the runway. It comes after `speed` when both are given.
 
 ```mcfunction
-# рейс между двумя аэродромами — со взлётом и посадкой
+# a sortie between two airfields — take-off and landing
 /autopilot flight "airfield-1" "airfield-2"
 
-# то же, но не спеша
+# same, but slower
 /autopilot flight "airfield-1" "airfield-2" 1.20
 
-# отрезок туда-обратно без аэродромов
+# a cargo plane, departing in 30 seconds
+/autopilot flight "airfield-1" "airfield-2" delay 30 type cargo
+
+# an out-and-back leg with no airfields involved
 /autopilot route 654 68 -9 654 68 -600
 
-# проверить заход: самолёт появляется за 1500 блоков и садится
+# test the approach: the aircraft appears 1500 blocks out and lands
 /autopilot inbound 654 120 1500 "airfield-1"
 ```
 
-Имя аэродрома в кавычках. Подсказки по Tab работают.
+Airfield names go in quotes. Tab completion works.
 
 ---
 
-## Аэродромы
+## Airfields
 
 ```
-/autopilot survey <торец1 x y z> <торец2 x y z>
+/autopilot survey <threshold1 x y z> <threshold2 x y z>
 /autopilot airfields
-/autopilot airfields info   <"аэродром">
-/autopilot airfields show   <"аэродром">
-/autopilot airfields rename <"аэродром"> <"новое имя">
-/autopilot airfields remove <"аэродром">
-/autopilot airfields park   <"аэродром"> <x y z>
-/autopilot airfields unpark <"аэродром"> <x y z>
+/autopilot airfields info   <"airfield">
+/autopilot airfields show   <"airfield">
+/autopilot airfields rename <"airfield"> <"new name">
+/autopilot airfields remove <"airfield">
+/autopilot airfields park   <"airfield"> <x y z>
+/autopilot airfields unpark <"airfield"> <x y z>
 ```
 
-* `survey` — обмерить полосу по двум торцам и зарегистрировать её. Имя выдаётся само:
-  `airfield-1`, `airfield-2`, …
-* `airfields` — список, ближние сверху, с расстоянием и курсом. Имена кликабельны.
-* `info` — полные характеристики: длина, ширина, уклон, неровность, курсы обоих торцов,
-  препятствия на подходе, стоянки.
-* `show` — подсветить осевую линию, пороги и стоянки частицами прямо в мире.
-* `park` — отметить место стоянки, откуда самолёт будет выкатываться на вылет.
+* `survey` — measures a runway from its two thresholds and registers it. The name is
+  assigned automatically: `airfield-1`, `airfield-2`, …
+* `airfields` — the list, nearest first, with distance and bearing. Names are clickable.
+* `info` — full characteristics: length, width, slope, roughness, both thresholds'
+  headings, approach obstacles, stands.
+* `show` — highlights the centreline, thresholds and stands with particles in the world.
+* `park` — marks a stand, where an aircraft taxis out from before departure.
 
-**Полоса короче 30 блоков не принимается**: вылет на неё отклоняется с числами, а не
-заканчивается разбитым самолётом. Ограничивает не взлёт (разбег ~4 блока), а посадка.
+**A runway shorter than 18 blocks is not accepted**: a sortie into it is refused with
+the numbers, rather than ending in a wrecked aircraft. It is not the take-off that sets
+this floor (the ground roll is only about 4 blocks) but the landing.
 
-То же самое делается инструментом разметки:
+The runway tool does the same job:
 
 `/give @s simpleplanes:runway_tool`
 
-* **ПКМ по обоим торцам** — обмерить полосу;
-* **ПКМ по воздуху** — список аэродромов;
-* **Shift + ПКМ по воздуху** — переключить режим на разметку стоянок;
-* в режиме стоянок **ПКМ** отмечает стоянку, **Shift + ПКМ** убирает ближайшую.
+* **right-click both thresholds** — survey the runway;
+* **sneak + right-click a block** — cancel a half-marked runway;
+* **right-click the air** — list airfields;
+* **sneak + right-click the air** — switch to stand-marking mode;
+* in stand mode, **right-click** marks a stand, **sneak + right-click** removes the
+  nearest one.
 
 ---
 
-## Вертолётные площадки
+## Helipads
 
-Площадка — **не короткая ВПП**: у неё нет курса, нет осевой линии и заходить на неё можно с любой
-стороны. Поэтому у неё отдельный инструмент, отдельные команды и отдельный список.
+A helipad is **not a short runway** — it has no heading, no centreline, and can be
+approached from any side. That is why it has its own tool, its own commands and its own
+list.
 
 ```
-/autopilot helipad survey <угол1 x y z> <угол2 x y z>
+/autopilot helipad survey <corner1 x y z> <corner2 x y z>
 /autopilot helipads
-/autopilot helipads info     <"площадка">
-/autopilot helipads show     <"площадка">
-/autopilot helipads resurvey <"площадка">
-/autopilot helipads rename   <"площадка"> <"новое имя">
-/autopilot helipads remove   <"площадка">
+/autopilot helipads info     <"helipad">
+/autopilot helipads show     <"helipad">
+/autopilot helipads resurvey <"helipad">
+/autopilot helipads rename   <"helipad"> <"new name">
+/autopilot helipads remove   <"helipad">
 ```
 
-* `helipad survey` — отметить **два противоположных угла** площадки. Центр и размер считаются сами;
-  имя выдаётся само: `helipad-1`, `helipad-2`, …
-* Размер — от 3x3 до 15x15. Меньше и больше не принимается.
-* `show` — подсветить контур площадки, её центр и все свободные направления захода.
+* `helipad survey` — mark **two opposite corners** of the pad. Its centre and size are
+  worked out automatically; the name is assigned automatically too: `helipad-1`,
+  `helipad-2`, …
+* Size ranges from 3x3 to 15x15. Anything smaller or larger is refused.
+* `show` — highlights the pad's outline, its centre, and every clear approach bearing.
 
-### Что проверяет обмер, и что он не примет
+### What the survey checks, and what it refuses
 
-Площадка регистрируется, только если проходит **все** проверки. Проверяется каждый блок — шага
-выборки нигде нет.
+A helipad is registered only if it passes **every** check. Every single block is
+checked — there is no sampling step anywhere.
 
-| Проверка | Отказ, если |
+| Check | Refused if |
 |---|---|
-| поверхность | есть вода/лава, есть незагруженный чанк, перепад высот больше 1 блока |
-| столб над площадкой | что-то стоит над площадкой или в 2 блоках кольца вокруг неё (высота 24 блока) |
-| направления захода | 8 направлений через 45°, каждое до 64 блоков по наклонной 25°; нужно **хотя бы одно** свободное |
+| surface | there is water/lava, an unloaded chunk, or a height difference of more than 1 block |
+| the column above the pad | anything stands above the pad or the 2-block ring around it (up to 24 blocks high) |
+| approach bearings | 8 bearings 45° apart, each checked up to 64 blocks along a 25° glide; **at least one** must be clear |
 
-Отказ всегда называет и координату, и что надо исправить:
+A refusal always names both the coordinate and what needs fixing:
 
 ```
 REFUSED: the pad is not all solid ground - 1197, -60, -3 is water or lava
@@ -340,46 +366,49 @@ REFUSED: the pad surface varies by 6 blocks (highest at 1300, -54, 0); flatten i
 REFUSED: no clear approach: every one of the 8 bearings has terrain across it inside 64 blocks.
 ```
 
-Обмер **двигает центр на середину площадки**, а не берёт середину между кликами: если у площадки
-есть край (бортик, ступенька), центр находится по нему. Обе координаты печатаются рядом, и вертолёт
-садится именно на вычисленную:
+The survey **moves the centre to the middle of the pad**, rather than taking the
+midpoint of the two clicks: if the pad has an edge (a kerb, a step), the centre is found
+from that edge instead. Both coordinates are printed side by side, and the helicopter
+lands on the computed one:
 
 ```
 marked centre 999, -58, 999 -> pad centre 1000, -58, 1000 (moved 1.4 blocks); touchdown at 1000.5, -57.0, 1000.5
 ```
 
-На ровной земле без края (суперплоский мир, площадка вровень с полем) двигать не по чему — берутся
-клики как есть.
+On flat, edgeless ground (a superflat world, a pad flush with the field) there is
+nothing to move it by — the clicks are taken as-is.
 
-### Инструмент разметки площадок
+### Helipad tool
 
 `/give @s simpleplanes:helipad_tool`
 
-* **ПКМ по блоку** — отметить один угол площадки, затем противоположный (это запускает обмер);
-* **Shift + ПКМ по блоку** — отменить наполовину размеченную площадку;
-* **ПКМ по воздуху** — список площадок;
-* **Shift + ПКМ по воздуху** — обмерить площадку 7x7 вокруг того места, где вы стоите.
+* **right-click a block** — mark one corner of the pad, then the opposite one (this
+  runs the survey);
+* **sneak + right-click a block** — cancel a half-marked pad;
+* **right-click the air** — list helipads;
+* **sneak + right-click the air** — survey a 7x7 pad centred on where you are standing.
 
-Это **отдельный предмет**, а не третий режим инструмента ВПП: два клика там — это два торца
-**линии**, а здесь — два угла **площади**, и путать их молча нельзя.
+This is a **separate item**, not a third mode of the runway tool: two clicks there are
+the two ends of a **line**, and two clicks here are the two corners of an **area** — mixing
+them up silently is not an option.
 
 ---
 
-## Вертолётные рейсы
+## Helicopter flights
 
 ```
-/autopilot heliflight  <"площадка"> <"площадка"> [скорость] [delay <секунды>]
-/autopilot heliinbound <откуда x y z> <"площадка"> [скорость]
+/autopilot heliflight  <"helipad"> <"helipad"> [speed] [delay <seconds>]
+/autopilot heliinbound <from x y z> <"helipad"> [speed]
 ```
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `heliflight` | полный рейс: спавн на площадке, вертикальный взлёт, маршрут, зависание над второй площадкой, вертикальная посадка |
-| `heliinbound` | спавн в воздухе и только заход — чтобы проверять посадку без взлёта |
+| `heliflight` | a full sortie: spawn on the pad, vertical take-off, route, hover over the second pad, vertical landing |
+| `heliinbound` | spawns in the air and flies only the approach — to test the landing without a take-off |
 
-Скорость — в блоках за тик, диапазон **0.20…2.00**, по умолчанию **1.20**. Это **не** тот диапазон,
-что у самолётов: полезная скорость вертолёта начинается ниже самолётной скорости сваливания и
-заканчивается сильно ниже его крейсерской.
+`speed` is in blocks per tick, range **0.20…2.00**, default **1.20**. This is **not**
+the same range as a fixed-wing aircraft's: a helicopter's useful speed starts below a
+plane's stall speed and ends well below its cruise.
 
 ```mcfunction
 /autopilot heliflight "helipad-1" "helipad-2"
@@ -388,16 +417,16 @@ marked centre 999, -58, 999 -> pad centre 1000, -58, 1000 (moved 1.4 blocks); to
 /autopilot heliinbound 300 -30 0 "helipad-2"
 ```
 
-Отчёт о посадке всегда называет **промах от центра площадки**, а не просто «сел»:
+A landing report always names **how far off the pad centre it landed**, not just "landed":
 
 ```
 Helicopter #64 landed at helipad-2, 600.6, -60.0, 0.5 (0.13 blocks from the pad centre
 600.5, -60.0, 0.5, tolerance 3.0; 1087 ticks from lift-off, 436 ticks from the run-in).
 ```
 
-Слово `landed` печатается только если сходятся **три** измерения: борт на земле, не в воде, и стоит
-на самой площадке — и по горизонтали, и по высоте. Иначе строка другая, и в ней написано, что
-именно не сошлось:
+The word `landed` is only printed if **three** measurements agree: on the ground, not
+in water, and standing on the pad itself — both horizontally and in elevation.
+Otherwise the line says something else, and names exactly what did not line up:
 
 ```
 Helicopter #100 did not land on helipad-6: came to rest 16 blocks above the pad surface -
@@ -405,185 +434,195 @@ on something the survey did not measure, at 2800.5, -44.0, 0.5 (pad centre 2800.
 tolerance 3.0). 3007 ticks from lift-off, 390 ticks from the run-in.
 ```
 
-Это настоящий случай с полигона: площадка была обмерена, потом над ней построили каменную крышу, и
-борт аккуратно сел **на крышу** в 0.03 блока от центра площадки по горизонтали. Без проверки по
-высоте это печаталось как `landed`.
+That is a real case from the field: a helipad was surveyed, someone later built a stone
+roof over it, and the aircraft neatly landed **on the roof**, 0.03 blocks off the pad
+centre horizontally. Without the elevation check that would have printed as `landed`.
 
-Если долететь не удалось — в логе будет строка с причиной и координатой: не смог взлететь, сдался в
-пути, не смог выйти на зависание, не смог сесть, площадка так и не освободилась, или борт потерян.
+If the flight could not complete, the log carries a line with the reason and a
+coordinate: could not take off, gave up en route, could not reach a hover, could not
+land, the pad never cleared, or the aircraft was lost.
 
-**Заказанная скорость выше 1.10 блока/тик недостижима в горизонтальном полёте**, и об этом говорится
-вслух — один раз, в воздухе, а не постфактум по времени рейса:
+**A requested speed above 1.10 blocks/tick cannot be made good in level flight**, and
+that is said out loud — once, from the air, not after the fact from the flight time:
 
 ```
 Helicopter #253 cannot make good 1.75 blocks/tick in level flight - full forward cyclic is
 holding 1.11. The leg will take that much longer.
 ```
 
-**Вертолёт нельзя отправить по-самолётному.** `/autopilot flight`, `route` и `inbound` с
-`type helicopter` отклоняются: у вертолёта нет разбега и к нему не применимо ничего из захода по
-глиссаде. Если на площадке уже стоит борт, второй ждёт над ней по кругу и садится, когда она
-освободится.
+**A helicopter cannot be sent the fixed-wing way.** `/autopilot flight`, `route` and
+`inbound` with `type helicopter` are refused: a helicopter has no ground roll and
+nothing about a glide-slope approach applies to it. If a pad already has an aircraft on
+it, the second one holds overhead in a circle and lands once it clears.
 
 ---
 
-## Жезл маршрутов
+## Route Wand
 
 `/give @s simpleplanes:route_wand`
 
-* **ПКМ по блоку** — добавить точку маршрута;
-* **Shift + ПКМ по блоку** — закончить маршрут и запустить самолёт;
-* **ПКМ по воздуху** — показать маршрут частицами;
-* **Shift + ПКМ по воздуху** — стереть маршрут.
+* **right-click a block** — add a waypoint;
+* **sneak + right-click a block** — finish the route and launch the aircraft;
+* **right-click the air** — preview the route with particles;
+* **sneak + right-click the air** — clear the route.
 
 ---
 
-## Защита от взрывов
+## Blast protection
 
-Другой мод может попросить, чтобы взрыв самолёта был слабее или чтобы его не было совсем —
-например, мод на приватные территории, которому не нужны воронки внутри клейма. Такие
-запросы называются *защитниками* (blast guard); сам Simple Planes ни одного не создаёт, он
-только даёт их зарегистрировать. Переключатель нужен на случай, если такой мод у вас стоит,
-а вести себя так вы больше не хотите.
+Another mod may ask for an aircraft's explosion to be weaker, or not to happen at
+all — a claims mod, say, that does not want craters inside a claim. Such requests are
+called *blast guards*; Simple Planes itself never creates one, it only lets other mods
+register them. The switch exists for when such a mod is installed and you no longer
+want that behaviour.
 
 ```
-/blastguard            # то же, что status
-/blastguard status     # включено или нет, и сколько защитников зарегистрировано
-/blastguard on         # спрашивать защитников перед каждым взрывом
-/blastguard off        # не спрашивать никого
+/blastguard            # same as status
+/blastguard status     # on or off, and how many guards are registered
+/blastguard on         # ask guards before every explosion
+/blastguard off        # ask nobody
 ```
 
-`off` — это именно «выключено», а не третий режим: взрыв происходит ровно такой, какой
-заказал сам самолёт (сила, разрушение блоков, поджиг), то есть как до появления защитников.
-Регистрации при этом не теряются — `on` возвращает прежнее поведение без перезапуска.
+`off` really means "off", not a third mode: the explosion happens exactly as the
+aircraft ordered it (strength, block breaking, fire) — as it did before guards existed.
+Registrations are not lost while it is off — `on` restores the previous behaviour
+without a restart.
 
-По умолчанию **включено**. Если ни один мод защитника не зарегистрировал — а это любая
-сборка с одним только Simple Planes — переключатель не влияет ни на что: взрывы одинаковы
-в обоих положениях, и `status` прямо так и скажет.
+**Enabled by default.** If no guard mod has registered — true of any build running only
+Simple Planes — the switch changes nothing: explosions are identical in both positions,
+and `status` says so plainly.
 
-Настройка одна на весь сервер (не на измерение) и хранится в мире, в
-`<мир>/data/simpleplanes/blast_guard.dat`, поэтому переживает перезапуск.
+The setting is server-wide (not per dimension) and stored in the world, in
+`<world>/data/simpleplanes/blast_guard.dat`, so it survives a restart.
 
 ---
 
-## Чужое небо
+## Claimed airspace
 
-Тот же приём, что и с взрывами, но про маршрут. Другой мод — например, мод на клеймы —
-может сказать «вот этому пилоту лучше здесь не летать», и автопилот учтёт это, выбирая
-курс. Такие ответы называются *защитниками воздуха* (airspace guard); сам Simple Planes ни
-одного не создаёт, он только даёт их зарегистрировать.
+The same idea as the blast guards, but for the route. Another mod — a claims mod, say —
+can say "this pilot had better not fly here", and the autopilot factors that into its
+heading choice. Such answers are called *airspace guards*; Simple Planes itself never
+creates one, it only lets other mods register them.
 
 ```
-/airspaceguard            # то же, что status
-/airspaceguard status     # включено или нет, и сколько защитников зарегистрировано
-/airspaceguard on         # спрашивать защитников при выборе курса
-/airspaceguard off        # не спрашивать никого
+/airspaceguard            # same as status
+/airspaceguard status     # on or off, and how many guards are registered
+/airspaceguard on         # ask guards when choosing a heading
+/airspaceguard off        # ask nobody
 ```
 
-**Это не бесполётная зона.** Спрашивают только тогда, когда самолёт ведёт автопилот. Того,
-кто держит ручку сам, это не касается вообще: его никуда не сворачивают и нигде не
-останавливают.
+**This is not a no-fly zone.** Guards are only asked while the autopilot is flying the
+aircraft. A player holding the stick is not affected at all: nothing turns them away and
+nothing stops them anywhere.
 
-**И это не запрет, а совет.** Ответ «здесь нежелательно» попадает в тот же расчёт стоимости,
-который и так выбирает между «перелезть через хребет» и «обойти его». Если обойти дешевле —
-обойдёт. Если чужое небо шире, чем автопилот может обогнуть (максимальное отклонение — 60°),
-он пройдёт напрямую и честно напишет об этом на табло. Самолёт никогда не встаёт на границе,
-не кружит и не отказывается от участка маршрута.
+**And it is not a ban, only advice.** A "not wanted here" answer feeds into the same
+cost calculation that already chooses between climbing over a ridge and going around
+it. If going around is cheaper, it goes around. If the claimed airspace is wider than
+the autopilot can steer clear of (maximum deviation: 60°), it flies straight through and
+says so honestly on the board. An aircraft never stops at the boundary, never circles,
+and never abandons a leg.
 
-Отдельно про случай «уже внутри». Если автопилот включили, когда самолёт уже в чужом небе,
-он выходит из него ближайшим курсом, какой видит, — а не пытается «не входить» туда, где
-уже находится. На табло это отдельная строка, чтобы её не путали с обходом.
+There is a separate case for "already inside". If the autopilot is engaged while the
+aircraft is already inside claimed airspace, it leaves by the nearest heading it can
+see, rather than trying to "not enter" ground it is already standing on. That gets its
+own line on the board, so it is not confused with routing around.
 
-Какие именно правила применять, решает сам защитник: вместе с точкой ему передают и полёт
-целиком — что за самолёт, за кого он летит, **сидит ли этот игрок внутри**, откуда взлетели
-и куда летят сейчас. Поэтому мод на клеймы вправе, скажем, сворачивать только пилотируемые
-борта и пускать беспилотные напрямую, а территорию, внутри которой лежит точка вылета или
-точка назначения, не трогать вовсе — иначе с такого аэродрома нельзя было бы ни взлететь,
-ни сесть на него. Ни одно из этих правил не задано в Simple Planes и не известно ему: он
-сообщает факты и считает стоимость того, что ему ответили.
+Which rules to actually apply is entirely up to the guard: along with the point, it is
+handed the whole flight — what aircraft it is, who it is flying for, **whether that
+player is aboard**, where it took off from and where it is headed now. So a claims mod
+is free to, say, turn away only piloted aircraft and let unmanned ones through directly,
+and to leave alone the territory that contains the departure or destination point
+entirely — otherwise nothing could take off from or land at that airfield at all. None
+of these rules is set by Simple Planes, or known to it: it reports the facts and prices
+whatever answer it gets back.
 
-`off` — это именно «выключено»: автопилот прокладывает маршрут по одному рельефу, как до
-появления этой возможности. Регистрации не теряются — `on` возвращает прежнее поведение без
-перезапуска и не мешает уже летящим: маршрут пересчитывается на следующем цикле.
+`off` really means "off": the autopilot plans a route over terrain alone, as it did
+before this feature existed. Registrations are not lost — `on` restores the previous
+behaviour without a restart and does not disturb aircraft already in flight: the route
+is recalculated on the next planning cycle.
 
-По умолчанию **включено**. Если ни один мод защитника не зарегистрировал — а это любая
-сборка с одним только Simple Planes — переключатель не влияет ни на что: самолёты летают
-одинаково в обоих положениях, и `status` прямо так и скажет.
+**Enabled by default.** If no guard mod has registered — true of any build running only
+Simple Planes — the switch changes nothing: aircraft fly identically in both positions,
+and `status` says so plainly.
 
-Настройка одна на весь сервер (не на измерение) и хранится в мире, в
-`<мир>/data/simpleplanes/airspace_guard.dat`, поэтому переживает перезапуск.
+The setting is server-wide (not per dimension) and stored in the world, in
+`<world>/data/simpleplanes/airspace_guard.dat`, so it survives a restart.
 
 ---
 
-## Наблюдение
+## Monitoring
 
 ```
-/autopilot tower              # табло всех полос: свободна / занята / кто в зоне ожидания
-/autopilot tower <"аэродром"> # то же по одной полосе
-/autopilot status             # все самолёты под автопилотом: режим, высота, скорость, курс
-/autopilot stop               # снять с автопилота всё, что летит
+/autopilot tower              # a board of every runway: free / occupied / who is holding
+/autopilot tower <"airfield"> # the same for one runway
+/autopilot status             # every aircraft under autopilot: mode, altitude, speed, heading
+/autopilot stop               # take everything currently flying off autopilot
 ```
 
-Табло показывает то правило, которое действительно работает сейчас: очереди нет — полосу
-занимает тот, кто первым её опросит. Порядок вылетов пока не выстраивается.
+The board shows the rule that actually governs right now: there is no queue — a runway
+goes to whoever asks for it first. Departure ordering is not built yet.
 
-Чтобы посмотреть глазами:
+To watch it with your own eyes:
 
 ```mcfunction
 /gamemode spectator
-/autopilot status              # узнать номер и координаты борта
-/tp @s <координаты из status>
+/autopilot status              # find the aircraft's number and coordinates
+/tp @s <coordinates from status>
 ```
 
-В режиме наблюдателя чанки грузятся вокруг вас, так что самолёт можно вести взглядом весь
-рейс. Сам он в чанках не нуждается — автопилот держит собственные тикеты загрузки.
+In spectator mode chunks load around you, so you can follow an aircraft by eye for the
+whole sortie. The aircraft itself does not need you for that — the autopilot holds its
+own loading tickets.
 
 ---
 
-## Полезное из ванилы
+## Useful vanilla commands
 
 ```mcfunction
-/kill @e[type=simpleplanes:plane]        # убрать всё, что осталось после тестов
-/kill @e[type=simpleplanes:helicopter]   # то же для вертолётов
-/gamerule minecraft:spawn_mobs false     # в 26.2 правило называется так, не doMobSpawning
-/gamerule minecraft:advance_time false   # бывшее doDaylightCycle
-/time set midnight                       # иначе скелеты горят на солнце и «убивают себя сами»
-/summon simpleplanes:plane ~ ~ ~         # обычный самолёт, без автопилота
+/kill @e[type=simpleplanes:plane]        # clean up anything left over from testing
+/kill @e[type=simpleplanes:helicopter]   # same, for helicopters
+/gamerule minecraft:spawn_mobs false     # this is the 26.2 name, not doMobSpawning
+/gamerule minecraft:advance_time false   # the former doDaylightCycle
+/time set midnight                       # otherwise skeletons burn in the sun and "kill themselves"
+/summon simpleplanes:plane ~ ~ ~         # a plain aircraft, no autopilot
 /time set day
 /weather clear
 /gamerule doDaylightCycle false
 ```
 
-На выделенном сервере для полётов без игроков обязательно
-`pause-when-empty-seconds=0` в `server.properties` — иначе сервер засыпает и самолёты
-замирают в воздухе.
+On a dedicated server flying with no players present, set
+`pause-when-empty-seconds=0` in `server.properties` — otherwise the server goes to
+sleep and the aircraft freeze in mid-air.
 
 ---
 
-## Пределы
+## Limits
 
-| Что | Значение |
+| What | Value |
 |---|---|
-| Самолётов под автопилотом одновременно | 24 |
-| Крейсерская скорость | 0.40…2.80 блока/тик, по умолчанию 2.60 |
-| Сила взрыва | 0…16, по умолчанию 4 |
-| Дальность спавна тарана | 20…4000 блоков, по умолчанию 400 |
-| Минимальная пригодная полоса | 30 блоков |
-| Угол глиссады | 8° |
-| Размер вертолётной площадки | от 3x3 до 15x15 |
-| Крейсерская скорость вертолёта | 0.20…2.00 блока/тик, по умолчанию 1.20 (см. примечание) |
-| Направления захода на площадку | 8, проверяются до 64 блоков по наклонной 25° |
-| Ганшипов одновременно | 16 |
-| Боекомплект ганшипа | 1…1024, по умолчанию 128 |
-| Темп стрельбы | 0.5…20.0 выстрела в секунду, по умолчанию 10.0 |
-| Высота зависания | 2…120 блоков, по умолчанию 18 |
-| Радиус поражения | 40 блоков сферой (около 35 по земле с высоты 18) |
-| Начальная скорость стрелы | 3.0 блока/тик — полностью натянутый лук |
+| Aircraft under autopilot at once | 24 |
+| Cruise speed | 0.40…2.80 blocks/tick, default 2.60 |
+| Blast strength | 0…16, default 4 |
+| Strike spawn distance | 20…4000 blocks, default 400 |
+| Minimum usable runway | 18 blocks |
+| Glide slope angle | 8° |
+| Departure delay | 0…3600 seconds |
+| Helipad size | 3x3 to 15x15 |
+| Helicopter cruise speed | 0.20…2.00 blocks/tick, default 1.20 (see note) |
+| Helipad approach bearings | 8, checked up to 64 blocks along a 25° glide |
+| Gunships at once | 16 |
+| Gunship magazine | 1…1024, default 128 |
+| Rate of fire | 0.5…20.0 rounds/second, default 10.0 |
+| Hover altitude | 2…120 blocks, default 18 |
+| Engagement radius | 40-block sphere (about 35 blocks on the ground from 18 blocks up) |
+| Arrow muzzle velocity | 3.0 blocks/tick — a fully drawn bow |
+| Maximum airspace deviation | 60° |
 
-**Примечание о скорости вертолёта.** Аргумент принимается до 2.00, но машина упирается в
-собственную тягу около **1.10 блока/тик**: и 1.20, и 1.75 летят одинаково, циклический шаг
-прижат к упору весь участок. Ниже 1.10 значение отрабатывается точно (0.50 → 0.524). То есть
-верхняя часть диапазона сейчас ничего не меняет.
+**Note on helicopter speed.** The argument accepts up to 2.00, but the aircraft runs
+into its own thrust ceiling around **1.10 blocks/tick**: 1.20 and 1.75 both fly the
+same, with the cyclic pinned to its stop the whole leg. Below 1.10 the requested value
+is made good exactly (0.50 → 0.524). So the upper part of the range currently changes
+nothing.
 
-Подробности — в [`26.2/AUTOPILOT.md`](26.2/AUTOPILOT.md); как всё это тестируется на
-безголовом сервере — в [`26.2/TESTING.md`](26.2/TESTING.md).
+Details are in [`26.2/AUTOPILOT.md`](26.2/AUTOPILOT.md); how all of this is tested on a
+headless server is in [`26.2/TESTING.md`](26.2/TESTING.md).

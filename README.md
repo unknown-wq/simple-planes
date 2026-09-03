@@ -16,7 +16,7 @@ to **Minecraft 26.2** (Java 25).
 > **[`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/26.2/dist/simpleplanes-26.2-5.3.7.jar)** —
 > nothing to build, no toolchain needed. Drop it in `mods/` together with Fabric API.
 
-> **Команды:** шпаргалка по всем командам автопилота и инструментам — в
+> **Commands:** a cheat sheet for every autopilot command and tool is in
 > **[`COMMANDS.md`](COMMANDS.md)**.
 
 ---
@@ -200,34 +200,8 @@ Licensed under **LGPL-3.0-or-later**, same as upstream (`1.21.1/LICENSE`, `26.2/
 This port is **not** affiliated with or endorsed by the upstream authors. Please do not send them
 port-specific bug reports.
 
-## Русская версия
-
-**Simple Planes для Fabric на Minecraft 26.2** — неофициальный порт мода на **самолёты и
-вертолёты** для Minecraft. Оригинальный мод существует только для NeoForge и только до версии
-1.21.1; здесь он портирован на загрузчик **Fabric** и на **Minecraft 26.2** (Java 25).
-
-**Скачать готовую сборку:**
-[`dist/simpleplanes-26.2-5.3.7.jar`](https://github.com/unknown-wq/simple-planes/raw/26.2/dist/simpleplanes-26.2-5.3.7.jar)
-— это **уже скомпилированный jar**, собирать ничего не нужно. Положите его вместе с
-[Fabric API](https://modrinth.com/mod/fabric-api) (0.154.2+26.2 или новее) в папку `mods/` профиля
-или сервера Fabric 26.2.
-
-**Мод проверен** — работает и на клиенте, и на выделенном сервере Minecraft 26.2 на Fabric.
-
-**Если что-то не работает —
-[откройте issue](https://github.com/unknown-wq/simple-planes/issues/new)** и приложите версии
-(jar, Minecraft, Fabric loader, Fabric API) и полный лог. Сначала загляните в список сознательных
-вырезов: совместимость с JEI, Iron Chests, Quark и MrCrayfish's Gun Mod удалена, конфиг не
-редактируется, часть визуальных эффектов не отрисовывается — полный список в
-[`26.2/PORT-STATUS.md`](26.2/PORT-STATUS.md). Всё остальное, что ведёт себя не так, — баг, о нём
-стоит написать.
-
-Автор оригинала — **przemykomo / Przemyk**, исходный репозиторий:
-<https://github.com/przemykomo/simple-planes>, лицензия LGPL-3.0-or-later.
-
 ---
 
 <sub>Keywords: Simple Planes Fabric, Simple Planes 26.2, Minecraft 26.2 plane mod, Minecraft 26.2
 helicopter mod, Fabric plane mod, Fabric aircraft mod, simpleplanes-26.2-5.3.7.jar, Simple Planes
-Fabric download, NeoForge to Fabric port, Minecraft 26.2 mods, Minecraft 26.2 Java 25 mod,
-мод на самолёты Minecraft 26.2, Simple Planes Фабрик скачать.</sub>
+Fabric download, NeoForge to Fabric port, Minecraft 26.2 mods, Minecraft 26.2 Java 25 mod.</sub>
