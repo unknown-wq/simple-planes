@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "  c",
+    " g ",
+    "g  "
+  ],
+  "key": {
+    "c": "minecraft:compass",
+    "g": "#c:ingots/gold"
+  },
+  "result": {
+    "id": "simpleplanes:helipad_tool"
+  }
+}

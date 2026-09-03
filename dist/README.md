@@ -1,0 +1,536 @@
+# dist
+
+Compiled build of the Fabric / Minecraft 26.2 port (source in `../26.2/`).
+
+The jar below is a **finished, ready-to-install build** — you do not need to compile anything to
+play, just drop it into `mods/` (see below). The sources it was built from live in `../26.2/`.
+
+| File | `simpleplanes-26.2-5.3.10.jar` |
+|---|---|
+| Minecraft | 26.2 |
+| Loader | Fabric, loader ≥ 0.19.3 |
+| Java | 25 |
+| Requires | Fabric API 0.154.2+26.2 or newer |
+| sha256 | `1c47da2b26e1a7ffab095b35a022e86415bbd784ca5f701d74e5784798cf47c9` |
+
+Install: drop the jar and Fabric API into the `mods/` folder of a Fabric 26.2 profile
+or server.
+
+## Changes in this build
+
+### Autopilots keep out of enemy airspace — sensibly
+
+When a player is aboard an autopilot flight and MineColonies (Fabric port 0.0.55+) is installed,
+the route bends around the territory of every colony where that player is marked hostile, and
+around ownerless hostile territories. Deliberate exceptions keep flying possible: an **empty**
+aircraft flies straight; the territory the flight **takes off from** is ignored; and the territory
+holding the **destination** is ignored, so landing at an airfield behind enemy lines just works. A
+territory too wide to route around is crossed rather than stalling the autopilot, and the take-off
+point survives a server restart. The airspace API now tells guards who is aboard and where the
+flight departs and lands (`FlightAwareAirspaceGuard`); older guards keep working unchanged. Also
+fixed along the way: the "whoever is aboard" pilot lookup never fired during autopilot flight,
+because the controlling-passenger slot is deliberately empty then — it now reads the seats.
+Simple Planes still loads and runs entirely without MineColonies.
+
+### The autopilot can be told whose sky to keep out of
+
+Another mod can now register an `AirspaceGuard` — one method, answering *is this point one this pilot
+should be routed around?* — and the autopilot folds the answer into the same cost comparison that
+already decides between climbing a ridge and going round it. A claim can therefore lose to the
+terrain: this is advice, not a no-fly zone.
+
+Three properties keep it that way. It is asked **only inside the autopilot's own tick**, so a player
+at the controls is never routed by it and never stopped by it. It **cannot say no** — there is no
+reject outcome anywhere in the planner, so nothing can strand an aircraft. And an aircraft that
+starts *inside* claimed airspace picks the heading that leaves soonest rather than refusing to move.
+
+`/airspaceguard status | on | off` reports and toggles it. With nothing registered the status line
+says so, and the whole feature costs one `isEmpty()` on a static field per autopilot tick.
+
+**This mod names no other mod.** With only this jar and Fabric API installed, a fresh server reaches
+`Done (3.899s)` with zero errors, flies a full two-leg autopilot route, and contains no reference to
+any other mod anywhere in the jar.
+
+Measured cost with a guard registered: 18 ns over unclaimed ground, 176 ns for the full chain inside
+a claim, once a second per aircraft — 0.067 % of a tick at the 24-aircraft cap.
+
+### Aircraft are visible from as far as they are shot at
+
+Every airframe was registered with `clientTrackingRange(5)` — **80 blocks**. That is the range at which
+a server tells a client an entity exists at all, so an unmanned aircraft simply did not exist to anyone
+further away than that.
+
+It only ever bit **unmanned** flight. `ChunkMap.TrackedEntity#getEffectiveRange` maximises over the
+entity's passengers, so anything with a player aboard was already tracked at the player type's 32
+chunks — which is why nothing was wrong with this mod until autopilots and unmanned routes were added.
+A scripted aircraft crossing the sky was invisible until it was almost overhead.
+
+Aircraft now track at **10 chunks (160 blocks)**, vanilla's own boat range; parachutes at **8**. The
+parachute is argued separately rather than given the aircraft number for sharing a file: an *occupied*
+canopy was never limited to 80 blocks either, so only empty ones vanished — and at a different distance
+from an identical parachute with a rider still on it.
+
+`updateInterval` stays at **3**. None of these types is on `EntityType#trackDeltas`'s exclusion list, so
+velocity is broadcast alongside position and the client extrapolates between updates; raising the
+interval is exactly what would make a wider radius stutter at distance.
+
+Cost, honestly: the per-player packet rate does not change, only how many players pay it. Doubling the
+radius quadruples the area, so at worst four times the payers — about 400 B/s per player per aircraft
+at full throttle, and roughly 38 kB/s server-wide with all 24 permitted autopilots flying at once in a
+crowd, which is less than sending a single chunk and unreachable in practice. Note also that vanilla
+clamps tracking to the player's view distance, so on a stock server any value of 10 or more behaves
+identically.
+
+### Another mod can veto or weaken a blast, and an owner can switch that off
+
+`api/BlastGuard` is a functional interface: return the blast you were given to abstain, a weaker one to
+downgrade it, or null to suppress it. `api/BlastGuards` is the registry — a chained
+`CopyOnWriteArrayList` with no lifecycle, so a foreign mod may register from its own initialiser in
+either load order, and a guard that throws is logged and skipped rather than taking the explosion with
+it. One call site in `PlaneEntity#explode`, one line in `SimplePlanesMod`.
+
+Nothing here depends on the mod that asked for it. The interface takes and returns vanilla types plus
+this mod's own `Blast`, so a consumer can bind to it reflectively and this mod neither knows nor cares
+who is on the other end. With no guard registered the filter returns immediately, so a player who
+installs nothing else pays nothing.
+
+**`/blastguard [status|on|off]`** is the off switch, game-master gated, no player needed, in the same
+shape as `/autopilot` and `/gunship`. A config was not an option — this mod's config is a frozen set of
+compile-time defaults, which its README lists as a known cut. **Off is the pre-patch behaviour exactly**:
+the filter returns the blast it was handed without running a single guard, so the explosion is the one
+the aircraft ordered, bit for bit. Registrations survive being switched off, so `on` restores the
+previous behaviour with no restart. The setting is stored per server in
+`<world>/data/simpleplanes/blast_guard.dat`, and defaults to on — which costs a planes-only player
+nothing, since with nothing registered the two positions are the same server byte for byte.
+
+### Helicopters have a flight model
+
+`HelicopterEntity` was a plane with the yaw tick deleted and a vertical push bolted on: it inherited
+`LargePlaneEntity`'s drag and lift, i.e. a wing it does not have, its pitch was clamped by a
+hardcoded ±20° ramp, and yaw came out of the strafe input inside the roll tick. It is now a rotor
+disc rigidly mounted to the fuselage, thrusting along the airframe's own up axis — collective sets
+the length of that vector, cyclic sets its direction. No wing, no angle of attack, no stall, no
+take-off speed. `HelicopterEntity` and `LargePlaneEntity` now both extend `LargeAirframeEntity`, so
+`instanceof LargePlaneEntity` no longer matches a helicopter.
+
+Hover falls out of the arithmetic rather than being tuned in: collective is 0.010 b/t² per notch and
+gravity is 0.030, so notch 3 of 5 is exactly zero. Measured drift at notch 3: **0.000 blocks in 400
+ticks**. Drag is anisotropic — a disc edge-on and face-on are different objects — which is what
+decouples the descent rate from the top speed.
+
+| | before | after |
+|---|---|---|
+| server-settable controls | none | 5, synched and persisted |
+| unmanned take-off | impossible (`dy = +0.000` at any collective) | 20 blocks in 170 ticks |
+| collective ladder, b/s | — | −8.6 / −6.2 / −3.5 / **0.00** / +2.7 / +4.8 |
+| top speed | — | 24.0 b/s, 34.9 with a booster |
+| yaw rate | 2°/tick out of the roll control, airspeed-blind | **3.000 °/tick at every airspeed and attitude** |
+| turn radius at cruise | — | 22 blocks on the pedals |
+| zero power | 13.2 b/s | 8.6 b/s, lands undamaged |
+
+`setYRot(getYRot() + x)` does not turn the aircraft by `x`: `PlaneEntity.tick` folds euler deltas
+back as body-frame rotations, so a 3.0°/tick pedal gave 3.309 with the disc 25° nose down — exactly
+`3.0/cos 25°` — and a bank-to-turn term that is symmetric in the source gave +0.469 right against
+−1.030 left. The euler fold is exact while only one axis moves; the asymmetry is generated by a yaw
+applied while pitch *and* roll are non-zero. The yaw input now inverts the Y-X-Z euler-rate
+kinematics.
+
+### Helipads, and helicopter sorties between them
+
+A helipad is not a runway — no heading, no centreline, approach from any bearing — so it has its own
+item, the Helipad Marker: two clicks are two corners of an *area*, where the runway tool's two
+clicks are the two ends of a *line*. Size 3×3 to 15×15, surface flat to within one block, the column
+above plus a 2-block ring clear to 24, and at least one of eight 45° approach sectors clear to 64 on
+a 25° path. **Every column is read** — no sampling step anywhere, because a step of any size hides
+an obstacle thinner than the step. An unloaded column counts *against* a sector: "nobody loaded it"
+is never the cheap way to pass.
+
+```
+/autopilot helipad survey <x y z> <x y z>
+/autopilot helipads [info|show|resurvey|rename|remove] ["pad"]
+/autopilot heliflight  <"pad"> <"pad"> [speed] [delay <seconds>]
+/autopilot heliinbound <x y z> <"pad"> [speed]
+```
+
+Eight sorties of 600–3400 blocks: **8/8 landed, lateral error 0.10 mean, 0.12 worst.** The marked
+shape and the used shape are the same object and the correction is never silent — a 15×15 pad marked
+by clicking two *adjacent* corners reports `marked centre 1000,-59,-7 -> pad centre 1000,-59,0
+(moved 7.0 blocks)`, and the landing report, written by different code, agrees.
+
+Three defects here were invisible to any test that flies one aircraft: a machine claimed its
+destination from lift-off, so two bound for the same pad deadlocked over bare ground and reported
+"the pad is occupied" about empty grass; and holders converged on one orbit point 0.3 blocks apart
+vertically, which for hard-colliding entities destroys both. A fourth was the old lie in new
+clothes — a perfect approach onto a *roof* reported `landed`, because the verdict was
+`miss <= tolerance && onGround && !onWater` with no vertical term at all.
+
+The `speed` argument is honoured below about 1.10 b/t and saturates above it; the aircraft says so
+in its own log line rather than pretending.
+
+### A helicopter gunship
+
+```
+/gunship launch <x y z> [arrows] [rate] [ammunition] [altitude]
+/gunship status
+/gunship stop
+```
+
+Defaults: 128 arrows (two stacks), 10.0 rounds per second, `minecraft:arrow`, station 18 blocks AGL,
+engagement radius 40 blocks slant. Rate is rounds per second rather than a tick interval — it is
+what a person says, it is not quantised, and halving it halves the volume of fire instead of
+doubling it. Ammunition is an item argument, not an enum, so it tab-completes from the registry,
+carries data components (`tipped_arrow[potion_contents={potion:"minecraft:strong_poison"}]` is fired
+as written) and accepts modded arrows; the only test is `instanceof ProjectileItem`.
+
+Hostility is `Enemy` — what vanilla's own defenders test — plus `getTarget() instanceof Player` for
+provoked neutrals. `MobCategory.MONSTER` was rejected because 45 types carry it and one of them is
+`ZOMBIE_HORSE`. Ballistics are closed-form: `p += v; v *= 0.99; v.y -= 0.05` has an exact solution,
+so it is one scalar root-find, and the smaller of the two roots is taken because the flat shot
+arrives sooner and hits harder.
+
+| ground range | 4 | 8 | 16 | 24 | 32 | 38 |
+|---|---|---|---|---|---|---|
+| hits of 24 | 24 | 24 | 24 | 24 | 24 | out of range |
+
+Stationary targets 100%, walking 87–92%, at double speed 40–53% — the same mobs standing still are
+hit every time, so the residual is lead error, not elevation. Rounds are deducted only when an arrow
+actually leaves the aircraft, so a held shot keeps its round and the sortie ends on the round that
+empties the magazine. Four fire-discipline rules: players are never targets, no round is fired whose
+*ballistic* path passes within 2.5 blocks of a player, none through a villager, golem, pet or
+livestock at 0.5, and the arrow's owner is the helicopter so it cannot hit itself.
+
+Counting hits from the arrows themselves was an alibi: an arrow that vanishes while still moving
+"hit something alive" until it lands inside a mob's immunity window, when `onHitEntity` takes its
+`else` branch and *deflects* it — nine rounds at one skeleton reported nine hits and no kills. Hits
+are counted from victims' health deltas. And the clearance check measured distance to a friendly's
+centre *point*: an iron golem parked under the arc ate 15 of 20 rounds while the check reported the
+path clear, because a golem's head is 1.35 above its centre and the arc passed 1.65 above it. The
+arc's segments are now clipped against each friendly's real bounding box.
+
+`Mob#getTarget` is typed `LivingEntity` and `PlaneEntity extends Entity`, so **no vanilla mob can
+target any aircraft in this mod**, manned or not. The gunship's structural loss rate is therefore
+zero; against three deliberately aimed arrows it dies on the third.
+
+### The runway centreline is the middle of the strip
+
+The survey took the two clicked blocks as the thresholds literally, and a player marks a strip by
+clicking what they can stand on — an edge or a corner. Everything keys off the threshold, so the
+lineup, the aim point, the glide slope, the lateral offset and the landing gates all moved to the
+edge with it. Measured on a 13-wide strip clicked on its left edge: the whole take-off roll ran at
+x = -5.50 against a true middle of 0.50, and the aircraft flew a *perfect* approach onto a line the
+survey had put on the runway edge. Ends are centred independently, because the two easiest corners
+to click are usually on opposite sides and a common shift averages them back to a diagonal.
+
+Airfields already on disk are untouched; `/autopilot airfields resurvey <airfield>` is the migration
+path and the browser says when a field wants it.
+
+### Aircraft park, and taxi in after landing
+
+`TAXI_IN`: after the roll-out the aircraft turns off the strip, runs down an apron lane and parks on
+a marked stand. Before this, six arrivals left six aircraft inside eight blocks of runway, two of
+them resting on the roofs of others, each reporting a clean landing. The runway is released when the
+aircraft is clear of it rather than when it finally stops — measured, physically obstructed **for
+ever** before, **165 ticks** after.
+
+Marking a stand is now required for newly surveyed runways; existing airfields are grandfathered.
+
+### The approach is computed at range and then flown
+
+Nothing was decided at range before: a sortie's last waypoint is the centre of the destination
+runway, so the descent began **51 blocks past the threshold** and every arrival flew an unplanned
+circuit — 1578 blocks of track for a 780-block flight. `ArrivalPlan` now decides at
+`intercept + max(100, 2 x turn radius)`, tests the plan against the airframe's real sink rate and
+turn radius, commits, and replans on named triggers with the reason reported.
+
+| arrival | ticks | track |
+|---|---|---|
+| straight in, 2.60 | 1396 -> **889** | 1578 -> **737** |
+| straight in, 0.40 | 3389 -> **1559** | 1477 -> **736** |
+| wall built after the survey | 2018 -> **1353** | 3 go-arounds -> **0** |
+
+`DeparturePlan` fixes an end-selection bug that was backwards: departures were scored on the end's
+own approach funnel, but a departure climbs out over the *opposite* funnel, so a field with a wall
+off one threshold launched aircraft into it.
+
+### Large and cargo aircraft fly
+
+`type <plane|large|cargo|random>` on `route`, `flight` and `inbound`. The large plane went around on
+**every** attempt before this and nobody had noticed, because nothing but the starter plane had ever
+been dispatched. The cargo plane could not terminate at all: its descent braked on distance to a fix
+it could not reach, so it orbited for 24 000 ticks with no landing, no go-around and no report.
+
+### The approach funnel could not see a wall
+
+Obstacles were sampled one column every 10 blocks straight down the centreline. A 20-block wall
+between two stations counted zero, and so did a clump four blocks to the side. Stone behaved exactly
+like bamboo — this was never a vegetation problem. Each station is now a 5 x 5 cell across the
+funnel.
+
+
+### Strike tool settings, and departures that wait their turn
+
+The strike tool carried a blast strength and nothing else. The full set — strength, whether the
+blast breaks blocks, whether it sets fire, and a pinned run-in bearing — is now written onto the
+tool in hand by `/autopilot tool <distance> [bearing] [blast] [blocks] [fire]`, the same arguments
+in the same order as `/autopilot strike` minus the target. They are ordinary data components, so
+`/give` can hand out a preconfigured tool directly:
+
+```mcfunction
+/give @s simpleplanes:plane_strike_tool[simpleplanes:autopilot_strike_distance=400,simpleplanes:autopilot_strike_blast=15.0f,simpleplanes:autopilot_strike_fire=true]
+```
+
+The tool's launch report printed the internal yaw where the command prints a compass bearing —
+180° apart, so it reported the opposite of the direction the aircraft came from. Fixed.
+
+`/autopilot flight <from> <to> [speed] [delay <seconds>]` spawns the aircraft on a marked parking
+spot, holds it there for the ordered delay, and only then asks for the departure runway — taxiing
+out when it is free. This closes a real gap: departures reserved nothing at all, so two sorties out
+of one field taxied onto the same threshold. Existing invocations parse exactly as before.
+
+`COMMANDS.md` at the repository root is a Russian cheat sheet for every command and item gesture.
+
+### Impact detection
+
+**Collisions were never detected on a plane carrying a pilot** — not intermittently, never.
+The check compared horizontal speed before and after the move and required the difference to
+exceed 1.0 blocks/tick, but `Entity.move()` only zeroes the blocked axes of the velocity
+inside `restituteMovementAfterCollisions`, and that call is gated on `canSimulateMovement()`.
+On the server that resolves to `!isClientAuthoritative()`, and `Player.isClientAuthoritative()`
+returns `true` unconditionally, so a ridden plane never has its velocity corrected server-side.
+The difference was therefore always zero and the damage term a constant −5.0 against a
+threshold of 5.0. The threshold was unreachable regardless: terminal speed is 0.763
+blocks/tick, so a head-on hit at full throttle would have produced 2.6.
+
+Vertical impacts had no handling at all. The only path was `causeFallDamage`, which destroys
+the plane solely when roll exceeds 45 degrees — so a nose-first dive into a hillside with
+level wings did nothing, while a wingtip scrape on landing exploded the plane at any speed,
+since `crash()` ignored its damage argument. That asymmetry is why detection felt random.
+
+A first fix measured the impact per axis and still missed: reproduced on a server, an aircraft
+diving into a hillside at 1.35 blocks/tick decelerated to 0.08 and was found **intact** on the
+ground. Its descent component was only 0.29, under the wings-level vertical tolerance, while the
+horizontal test never fired because an aircraft that ends up inside terrain ploughs to a halt
+over several ticks without the engine ever setting `horizontalCollision`.
+
+That scalar measure had two faults of its own, both found on the test rig and fixed in this
+build:
+
+- **It measured only the part of the tick the wall cut off**, and where the obstacle falls
+  within a tick's travel is effectively random — so the reading was a lottery between 0 and the
+  real speed. Measured: a head-on into a vertical wall at 2.99 blocks/tick registered 0.555 and
+  dealt 5.7 damage; the aircraft survived and stayed pinned against the wall. The same dive into
+  the ground read 0.054 on one flight (intact) and 1.438 on another (destroyed). An impact is
+  now charged the **full component of the tick's motion on every axis the world blocked** — the
+  velocity that actually got destroyed, since the collision response zeroes those axes right
+  after. Same wall, same approach, after the fix: impact 2.476, damage 122, aircraft destroyed
+  at the wall. Resting, taxiing and gentle landings stay free by the same measure (a parked
+  airframe shows contact of ~0.09 against a tolerance of 0.6; a two-block drop lands at 0.32).
+- **A "speed dropped too fast" fallback could destroy a ridden aircraft in clean air.** It
+  compared consecutive `getKnownMovement()` samples, but for a player-ridden vehicle that value
+  is per-packet client displacement: `handleClientTickEnd` zeroes it on any server tick where
+  the movement packet did not arrive, and the catch-up packet then carries two ticks of
+  displacement. One late packet at cruise reads as a 0.76 blocks/tick deceleration — 11 damage,
+  instant mid-air destruction, nothing hit. The fallback is deleted; every charge now requires
+  the world to have geometrically blocked the aircraft's motion that tick, and the remaining
+  consumers of `getKnownMovement()` (wing scrapes, ramming) take the min of two adjacent
+  samples so a single packet hiccup cannot inflate them.
+
+Verified server-side without a pilot (autopilot flights with per-tick instrumentation): full
+climb/cruise/dive profiles produce zero impact charges in clean air, and every terrain contact
+charge in the logs matches a real wall, crater or stall pancake. The **player-ridden** packet
+path could not be driven here — no client in this environment — so that half is reasoned
+against the decompiled 26.2 networking code, not measured.
+
+### Flight physics
+
+- Fixed `normalizeQuaternionf` returning a zero quaternion on a zero-length input, which
+  collapsed seat positions, the thrust vector and the landing-angle check — and was written
+  back into the entity.
+- Slabs, paths and farmland stopped a takeoff run dead, because `Entity.maxUpStep()` returns
+  `0.0F` and step-up is gated on it being positive; the `setOnGround(true)` call before the
+  move never did anything. Aircraft now get a step height at taxi speed only, so flying into a
+  slope still collides and still crashes.
+- Ground drag applied for four ticks after liftoff, producing a braking jolt exactly at the
+  ground-to-air transition; it now applies only on real contact.
+- Lift is now quadratic in airspeed rather than saturating at two thirds of takeoff speed, and
+  the elevator is damped below takeoff speed instead of being inert and then fully effective.
+  This changes the shape of the curve near the stall; cruise flight is numerically unchanged.
+- Fewer per-tick allocations and block lookups in the flight hot path — `isOnWater()` alone
+  read the same block state up to five times per tick.
+
+An earlier revision of this changelog claimed the ground roll was broken and that small planes
+could not reach takeoff speed. **That was wrong** — the arithmetic behind it divided the thrust
+by five twice. Simulating the real tick shows the original ground roll reaches takeoff speed in
+38 ticks at full throttle. That change has been reverted and the claim retracted; see issue B2
+in the audit.
+
+### Aircraft that turned lost all their thrust
+
+The largest bug in this build, and the cause of three separate reports: aircraft that "gradually
+lose speed", flights that stall out of a 180-degree turn, and landing descents that fall out of
+the sky.
+
+`getTickPush` builds the engine thrust vector by rotating `(0, 0, push)` out of the body frame
+using `Q_Client`. `Q_Client` is a client-side value: on the server the only thing that writes it
+is `RotationPacket`, sent by the player flying the plane. **An aircraft with nobody aboard
+therefore kept the orientation it was spawned with for its entire life and thrusted in that
+fixed direction for ever**, no matter where its nose was actually pointing.
+
+Straight-line flight looked flawless, which is why it went unnoticed: a strike launched pointing
+at its target accelerates 2.15 → 3.14 blocks/tick without a wobble. Anything that turned fell
+apart. Measured on a 200-block out-and-back, the aircraft came out of the turnback at 0.36
+blocks/tick and stayed pinned there at full throttle, descending, until it reached the ground —
+with the engine pushing backwards. The same turn now holds 0.75 → 0.78 → 0.75.
+
+The thrust vector uses the authoritative rotation when there is no controlling passenger. A plane
+with a pilot is unchanged: its `Q_Client` is refreshed every tick by the client that owns it.
+
+Three envelope protections were added on top, each after watching the aircraft leave controlled
+flight. The commanded pitch is clamped to within 20 degrees of the *current flight path* — the
+flight model zeroes wing lift at 60 degrees of angle of attack, and the altitude controller answers
+the resulting sink by asking for more nose-up, which diverges rather than oscillates. The throttle
+loop regulates *horizontal* speed, because comparing total speed counted the rate of falling as
+progress, so a stalling aircraft read as fast and the controller held the throttle shut. And the
+throttle may not be reduced while the aircraft is turning, which is where it most needs the power.
+
+### Hitting water at speed
+
+Water has no collision shape, so `Entity.move()` is never blocked by it and none of the impact
+detection above could fire: **going into the sea at any speed was free, with or without the
+Floaty Bedding upgrade**. The upgrade made it worse rather than causing it — it did
+`y = max(motion.y, 0)` every tick over water at any speed, deleting the descent outright before
+`move()` ever ran.
+
+Fluid entry is now its own rule, triggered by a boundary the aircraft is measured to have crossed
+this tick — the block at the sample point was not water before the move and is water after it —
+and charged at the velocity the aerodynamics produced, sampled before the upgrade could arrest
+it. No inference from speed history. The floats now arrest at most 0.35 blocks/tick of sink per
+tick, so a gentle water landing is exactly as free as before and a dive goes in.
+
+Measured with Floaty Bedding, wings level, out of 10 HP: free up to 0.70 blocks/tick
+(14 blocks/s), 1 HP at 0.75, 2 at 0.85, 5 at 1.00, destroyed from 1.2. Survivors float on the
+surface, so operating off water — the point of the upgrade — is unaffected.
+
+### Aircraft froze in mid-air far from any player
+
+Autopilot aircraft carried a `TicketType.ENDER_PEARL` chunk ticket of radius 2, renewed from the
+aircraft's own tick. Both halves were wrong. A ticket of radius `r` only makes chunks within
+`r - 2` of the centre tick their entities, so radius 2 is a single chunk — which an aircraft at 3
+blocks/tick leaves in five ticks. And renewing from the aircraft's own tick is circular: once it
+stops ticking it can never renew the ticket that would bring it back. Measured: an 800-block
+strike froze permanently the instant it left the force-loaded region, keeping its velocity and
+position to the decimal.
+
+Tickets are now radius 4, renewed from the server tick over a registry of live aircraft (so a
+frozen one is thawed), with a second ticket placed ahead along the flight path. An 800-block
+strike and a 2000-block airfield-to-airfield sortie both complete with no force-loading at all.
+
+`/autopilot strike` and `/autopilot route` also took their coordinates as *loaded* block
+positions, so they refused any destination outside simulation distance with "That position is
+not loaded" — that is, exactly the flights they exist to fly. `/autopilot survey` still requires
+loaded ground, correctly, because it measures real blocks.
+
+The active-aircraft counter was a `static int` that leaked a slot whenever an aircraft went away
+without running its release path — i.e. on every crash. A live server was seen reporting `19/24
+active, 2 in this dimension`, five launches from refusing everything. It is now recounted from
+the live aircraft.
+
+### Autopilot, routes and scripted sorties
+
+A server-side flight director with strike, route, sortie and runway-survey tools, plus
+`/autopilot strike|route|flight|inbound|survey|airfields|status|stop`. See
+[`../26.2/AUTOPILOT.md`](../26.2/AUTOPILOT.md).
+
+**`/autopilot flight <from> <to>` flies a complete scripted sortie between two surveyed
+airfields**: the aircraft is spawned stationary at a parking spot beside the departure runway,
+taxis to the threshold under its own steering, lines up, takes off along the surveyed runway,
+cruises with terrain clearance, and arrives on the instrument approach — glideslope, centreline,
+flare, rollout. No teleports and no synthetic velocities: the director still only moves throttle,
+pitch, yaw and roll. `/autopilot inbound <x y z> <airfield>` flies the arrival half on its own.
+
+Two ground-handling bugs had to be fixed for a departure to be possible at all, neither of which
+had ever been exercised because routes and strikes are both launched in the air. A parked plane
+rests at +5 degrees, so commanding a level attitude held the elevator permanently nose-down — and
+that is reverse thrust on the ground. The aircraft taxied smoothly *backwards* away from the
+runway, and the take-off roll stuck at 0.13 blocks/tick against a 0.35 rotate speed.
+
+Measured end to end on a dedicated server with no force-loading and no player anywhere near
+either field:
+
+```
+Plane #3 parked at airfield-1 (671, -59, 4), sortie to airfield-2 - 2000 blocks.
+Plane #3 lined up on airfield-1/36, departing.
+Plane #3 landed at airfield-2/36, 2655, -58, -6 (2 blocks down the runway).
+```
+
+Verified on a dedicated 26.2 server. A strike is launched with a booster fitted, the throttle
+open and already at attack speed pointed at the target, rather than accelerating from a
+standstill and sagging towards the ground while it does. It goes in **3-6 blocks from the
+aimpoint** 400 blocks away, and 5 blocks off over 800.
+
+Three things about the attack run changed in this build, all from the same report — the aircraft
+slowed down, hit a tree without breaking, and started down far too early:
+
+- **It no longer loses speed.** The speed ceiling is not a limiter but the point where
+  `tickMotion` fades the thrust out, so raising it moves the balance against the drag curve.
+  Measured over an 800-block run the speed rises monotonically 2.15 → 2.87 on the run-in and
+  3.14 in the dive, and never falls.
+- **The run-in is flown 100 blocks above the ground**, not 35 above the target. This is what
+  actually fixes the aircraft parked in a tree: a glancing hit on a canopy blocks only the small
+  vertical part of the motion, so the impact registers as a gentle landing — which is what it
+  physically is — and the aircraft settles into the branches undamaged. Nothing on the way in
+  reaches 100 blocks up. Belt and braces, a strike aircraft now also detonates wherever it stops,
+  so a run that clips something can no longer leave an intact airframe in the scenery.
+- **The dive starts late and steepens.** It used to begin at a fixed 350 blocks out, which from a
+  35-block run-in is a 6-degree glide starting almost immediately after launch. The run-in height
+  is now held until the target is 32 degrees below the nose — about 180 blocks out — and the
+  terminal phase then aims the nose straight at the target, so the commanded angle is
+  `atan(height / distance)`: near-constant through the dive and steepening towards vertical over
+  the last few blocks. Measured pitch through one run: −20°, −40°, −47°, −52°, −63°, −76°.
+
+The terminal phase commands that elevation angle rather than tracking an altitude because
+tracking an altitude arrives overhead still high and lands the aircraft 50-odd blocks beyond.
+The fuse radius scales with speed and is backed by closest-point-of-approach detection — at 3
+blocks/tick a fixed 3-block sphere can be stepped straight over between two ticks.
+
+The strike tool now reports both ends of the flight, so nothing happens silently:
+
+```
+Strike #248 spawned at 301, 208, 701 (100 above ground), inbound to 300, 80, 300 - 400 blocks, bearing 180.
+Strike #248 hit the target at 300, 80, 294 (6 blocks off).
+```
+
+A runway survey reports length, width, slope, designators, threshold elevations, roughness and
+approach obstacles.
+
+**Route flights now complete, including the landing.** The 180-degree turnback between legs and
+the landing descent used to bleed speed into an unrecovered stall and pancake in; both fly
+cleanly and end on a runway. See "Aircraft that turned lost all their thrust" above.
+Helicopters remain out of scope.
+
+## Changes since the first 26.2 build
+
+- `TempMotionVars` is per-entity instead of a single shared `static`, which was a data race
+  between concurrently ticking planes.
+- `RotationPacket`, `ChangeThrottlePacket` and `DropPayloadPacket` now require the sender to
+  be the controlling passenger, and rotations with non-finite or zero-length components are
+  rejected instead of being written into the entity.
+- Six block lookups used a truncating `(int)` cast instead of a floor and sampled the wrong
+  block at negative coordinates — ground friction, water detection and the parachute ground
+  check were all affected for `x` or `z < 0`.
+- Less quaternion allocation in the tick and render hot paths.
+
+**This build is tested** — it runs on a Minecraft 26.2 Fabric client and on a dedicated
+26.2 server (`Done (…)!`, zero `/ERROR]` lines). Some features were deliberately dropped
+during the port — removed mod compat, a non-editable config, and a few visuals that are not
+rendered; see the "Disabled content" log in `../26.2/PORT-STATUS.md` before reporting one of
+those as a bug. Anything else that misbehaves is a bug worth an issue:
+<https://github.com/unknown-wq/simple-planes/issues/new>
+
+Rebuild with:
+
+```sh
+../gradle/install.sh          # vendored Gradle 9.6.1
+cd ../26.2
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 /opt/gradle-9.6.1/bin/gradle build --no-daemon
+```

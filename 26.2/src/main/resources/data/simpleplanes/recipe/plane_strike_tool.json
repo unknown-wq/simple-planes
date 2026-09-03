@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "  t",
+    " s ",
+    "s  "
+  ],
+  "key": {
+    "t": "minecraft:tnt",
+    "s": "#c:ingots/iron"
+  },
+  "result": {
+    "id": "simpleplanes:plane_strike_tool"
+  }
+}
