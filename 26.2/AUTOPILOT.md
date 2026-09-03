@@ -558,14 +558,12 @@ beyond that it commits to the landing rather than orbiting forever.
 
 ### The centreline is the middle of the strip
 
-The user's report was that the aircraft "always takes off from the exact first point marked with
-right-click and lands on that point or on the opposite one, instead of down the middle of the runway
-end" — *"самолет всегда взлетает из крайней первой точки что отмечена ПКМ и садится туда же или на
-противоположную, а не по середине края"*. That was exactly what the code did: `Airfield.survey` took
-the two clicked blocks as the thresholds, literally, and **every number the aircraft flies hangs off
-the threshold** — the take-off lineup, the parking apron, the touchdown aim point, the glide slope,
-the lateral offset on the approach and the landing gates. Mark an edge and all of them move to the
-edge together.
+An aircraft always took off from the exact first point marked with right-click, and landed on that
+point or on the opposite one, instead of down the middle of the runway end. That was exactly what
+the code did: `Airfield.survey` took the two clicked blocks as the thresholds, literally, and
+**every number the aircraft flies hangs off the threshold** — the take-off lineup, the parking
+apron, the touchdown aim point, the glide slope, the lateral offset on the approach and the landing
+gates. Mark an edge and all of them move to the edge together.
 
 Nobody clicks the middle of a runway end, because there is nothing there to click. You stand on a
 corner, where you can see what you are marking.
@@ -592,7 +590,7 @@ middle of what it finds — then re-derives the heading and does it again, up to
 The obvious alternative was to keep the clicked heading exactly and shift both ends by one common
 amount. It was tried first and it is wrong on the case that matters most: the two corners easiest to
 reach at the two ends of a strip are usually on *opposite* sides, and averaging +6 and −6 gives 0, so
-the centreline stays diagonal — the very arrival being complained about. Measured with the near-left
+the centreline stays diagonal — exactly the crooked approach described above. Measured with the near-left
 and far-right corners of the same 160×13 strip clicked, independent centring returns `0 -57 0` /
 `0 -57 -160` and designators 000/180: the two corner clicks become the true axis. The cost is that
 the survey may report a slightly different heading from the one clicked, which is a correction — the
@@ -606,17 +604,13 @@ parking apron offset and now the approach funnel, so halving it was not cosmetic
 
 #### A painted runway has edges too: the two-rule cross-section
 
-Centring on elevation closed the report for a strip that stands *above* the ground around it. It did
-nothing at all for the other way people build a runway: a strip of concrete, gravel or smooth stone
-**laid flush** with the field it sits in. There the sideways probe walks off the paint and out across
-the field without the height ever changing, so the survey never finds an edge — and the same
-complaint came back, in the same words, for a runway that has no step anywhere on it.
+Centring on elevation fixed a strip that stands *above* the ground around it, but did nothing for a
+runway of concrete, gravel or smooth stone **laid flush** with the field it sits in: there the
+sideways probe walks off the paint without the height ever changing, so the survey never finds an
+edge, and the same symptom returns on ground with no step anywhere on it.
 
-That case was wrong in three places at once, and the third is the one that made it hard to see:
-
-Measured on the rig on the same field, with the same two clicks, before and after — a 25-wide
-smooth-stone strip running `z=20..44` (so the strip spans `20.0` to `45.0` and its middle is `32.5`)
-laid flush on a stone plateau, both ends clicked on the `z=20` edge:
+Measured on the rig, a 25-wide smooth-stone strip `z=20..44` (middle `32.5`) laid flush on a stone
+plateau, both ends clicked on the `z=20` edge:
 
 | | before | after |
 |---|---|---|
@@ -624,89 +618,56 @@ laid flush on a stone plateau, both ends clicked on the `z=20` edge:
 | stored thresholds | `715 101 20` / `885 101 20` | `715 101 32` / `885 101 32` |
 | stored width | 25 — the probe ceiling, not a measurement | 25, measured |
 | the same strip repainted 13 wide | 25 | **13**, thresholds `715 101 26` |
-| whole take-off roll | z = **19.11, 18.83, 18.74** — *off the strip* | z = **29.29, 29.25, 29.36**, converging on 30.2 as it climbs |
+| whole take-off roll | z = **19.11, 18.83, 18.74** — *off the strip* | z = **29.29, 29.25, 29.36**, converging on 30.2 |
 | straight-in touchdown | `landed at airfield-3/09, 752, 101, **21**` — 1 block inside the near edge | `landed at airfield-3/09, 752, 101, **33**` |
-| `airfields info` on the field stored crooked | *silent* | `centreline is 12 blocks off the middle of the strip - run /autopilot airfields resurvey "airfield-3"` |
+| `airfields info` on a field stored crooked | *silent* | `centreline is 12 blocks off the middle of the strip - run /autopilot airfields resurvey "airfield-3"` |
 | `resurvey` on it | — | `the centreline moved 12 blocks onto the middle of the strip` |
 
-The take-off row is the report in one line: the aircraft was not rolling down the edge of the runway,
-it was rolling down the field *beside* it and lifting off from there, while tracking its own
-centreline perfectly. Where the surrounding field does happen to have an edge inside probe range the
-old answer was worse than merely absent — the same strip on a narrower plateau stored `z=24`, having
-found the far edge of the **plateau** and centred the runway on that.
+The take-off row says it plainly: the aircraft was rolling down the field *beside* the runway, not
+the runway, while tracking its own centreline perfectly. Where the surrounding field does have an
+edge inside probe range the old answer was worse than absent — the same strip on a narrower plateau
+found the far edge of the **plateau** instead and centred on that.
 
 **Elevation first, material only where elevation found nothing.** `Airfield.crossSection` walks out
-on height exactly as it always did. Only when that walk is *unbounded on both sides* — when it ran
-to the probe limit each way without meeting an edge, so the terrain has said nothing whatsoever about
-where the strip ends — does it walk out a second time on the **surface block**, stopping at the first
-column whose top block differs from the one under the probed point.
+on height as it always did; only when that walk is *unbounded on both sides* — no edge found either
+way — does it walk out again on the **surface block**, stopping at the first column whose top block
+differs from the one under the probed point. The ordering is the safety argument: a raised strip, a
+plinth, an embankment — anything the elevation rule already reads — never reaches the material walk,
+so no survey that works today can change its answer (verified like-for-like: identical output before
+and after on a raised strip). The two answers are never blended or averaged either — taking the
+smaller of two widths would collapse a strip to nothing on any naturally patchy surface, where grass
+beside dirt is not a runway edge.
 
-The ordering is the whole safety argument, and it is why this is not a rewrite of what a survey
-measures:
+A material answer that is not credible is thrown away, so nothing invents a centreline out of ground
+that has none. Verified on the rig: on uniform ground (a superflat world, or a one-block stone
+plateau) the material walk also runs to its limit both ways and finds nothing, so the survey reports
+the ceiling width and no correction, exactly as before; a patch narrower than 3 blocks — the same
+floor `measureWidth` already applies — is rejected the same way. Cost is bounded: the material walk
+is `2 x (limit + 1)` reads, only where the heightmap already found nothing, and nothing per tick.
+`crossSection` has exactly three callers, all corrected together, which is why they were all wrong
+together: `centreEnd` (the centring), `measureWidth` (the stored width) and `centrelineOffset` (the
+`airfields info` warning).
 
-* A raised strip, a plinth, an embankment, a runway cut into a slope — anything the elevation rule
-  already reads — **never reaches the material walk**, so no survey that works today can change its
-  answer. Verified like-for-like: the same 25-wide raised strip over open air, both ends clicked on
-  the `z=20` edge, gives `centreline moved 12 blocks`, thresholds `1005 101 32` / `1215 101 32`,
-  width 25, designators 09/27, obstacles 0/0, roughness 0.00 — identical to the build before this
-  change on identical geometry.
-* The two are never blended, never averaged and never minimised together. Taking the smaller of the
-  two widths would collapse a strip to a block or two on any naturally patchy surface — grass beside
-  dirt beside coarse dirt is not a runway edge, and a real height edge must always win.
-
-**A material answer that is not credible is thrown away**, and then everything behaves exactly as it
-does today. Two ways it fails, both verified on the rig:
-
-* **Uniform ground.** A superflat world, or a stone plateau of one block: the material walk runs to
-  the limit on both sides as well, so it has found no edges either. A survey clicked at `z=40` on a
-  bare plateau stores thresholds `1420 101 40` / `1580 101 40`, prints no correction and reports the
-  ceiling width, exactly as before.
-* **A patch narrower than 3 blocks**, the same floor `measureWidth` already applies. With dirt laid
-  one block to the left of the clicked line and coarse dirt one block to the right, the material walk
-  returns a width of 1, is rejected, and the survey again stores `1420 101 40` / `1580 101 40` and
-  prints no correction.
-
-So the promise the centring made from the start still holds: **nothing invents a centreline out of
-ground that has none.** What changed is only that paint now counts as ground that has one.
-
-Cost is a bounded handful of block lookups at survey time — the material walk is `2 x (limit + 1)`
-reads, it runs only where the heightmap already came back with nothing, and nothing on this path runs
-per tick. `crossSection` has exactly three callers and they are all corrected together, which is why
-they were all wrong together: `centreEnd` (the centring), `measureWidth` (the stored width) and
-`centrelineOffset` (the `airfields info` warning, and therefore whether a player is ever told to
-re-survey at all).
-
-> **Airfields already on disk are not touched.** `Airfield` persists its two thresholds, and
-> re-centring them on load would silently move every runway in every existing world — this codebase
-> has been bitten by silently reinterpreting persisted data before, and the correction here is up to
-> half a runway width. **Only newly surveyed airfields are centred.** A stored airfield keeps exactly
-> the geometry it was saved with, and there are two ways to bring it up to date, both of which a
-> human has to ask for:
->
-> * re-click both ends with the survey tool, which already replaces an airfield whose thresholds land
->   within 12 blocks of a registered pair, or
-> * **`/autopilot airfields resurvey <airfield>`**, new here, which re-measures the field from its own
->   stored thresholds and keeps its name and its parking spots.
->
-> `/autopilot airfields info` says when a field needs it — `centreline is 6 blocks off the middle of
-> the strip - run /autopilot airfields resurvey "airfield-1" while standing near it` — and says
-> nothing when the runway's chunks are not loaded, because an unloaded strip reads as having no edges
-> and a field nobody is standing near must not be accused of being crooked on no evidence. `resurvey`
-> refuses an unloaded field for the same reason `/autopilot survey` does, refuses while an aircraft
-> holds the runway, and is idempotent: run twice it reports `its centreline was already down the
-> middle of the strip`.
->
-> **This is the migration path for a painted field as well**, and it is the one a player with runways
-> already on disk actually needs, since the material rule only runs when a survey does. Verified on a
-> field stored crooked by the previous build: `airfields info` on `airfield-3` reported `centreline is
-> 8 blocks off the middle of the strip`, `resurvey "airfield-3"` answered `the centreline moved 8
-> blocks onto the middle of the strip`, the stored thresholds moved from `715 101 24` to `715 101 32`,
-> and `airfields info` went quiet. Parking spots and the field's name come through it untouched.
+> **Airfields already on disk are not touched.** Re-centring them on load would silently move every
+> runway in every existing world, so only a fresh survey applies the correction. There are two ways to
+> bring an existing field up to date, both of which a human has to ask for: re-click both ends with
+> the survey tool (which already replaces an airfield whose thresholds land within 12 blocks of a
+> registered pair), or **`/autopilot airfields resurvey <airfield>`**, new here, which re-measures the
+> field from its own stored thresholds and keeps its name and parking spots. `/autopilot airfields
+> info` names the fields that need it — `centreline is 6 blocks off the middle of the strip - run
+> /autopilot airfields resurvey "airfield-1" while standing near it` — and stays silent when the
+> runway's chunks are not loaded, since an unloaded strip reads as having no edges and must not be
+> accused of being crooked on no evidence. `resurvey` refuses an unloaded field or one an aircraft
+> holds, and is idempotent. Verified on a field stored crooked by the previous build:
+> `resurvey "airfield-3"` reported `the centreline moved 8 blocks onto the middle of the strip`,
+> moved the stored thresholds from `715 101 24` to `715 101 32`, and `airfields info` went quiet —
+> with the name and parking spots untouched. This is the same migration path a painted field needs,
+> since the material rule only runs when a survey does.
 
 ### Where on the runway it touches down
 
-The user's complaint was that a 183-block strip was being used from the very edge — "садятся
-буквально на границе, 10-20 блоков используют". They were right, and the cause was that the aim
+A 183-block strip was being used from the very edge — landings touching down and stopping within
+10-20 blocks of the threshold, on a strip nearly ten times that long. The cause was that the aim
 point was fiction. `TOUCHDOWN_AIM_OFFSET` was 12 blocks and **only the corridor raycast ever read
 it**: `RunwayEnd#glideSlopeAltitude` put the bottom of the slope on the *threshold*, and the flare
 fired on height above the *threshold*. So the aircraft was aimed at the threshold, floated 17 blocks
@@ -896,10 +857,10 @@ the next section that fixes it. What did change for a forest is the flare: a can
 approach used to bring AGL to four blocks while the aircraft was still well above the runway, and the
 height-above-threshold term now refuses that.
 
-### What the approach funnel can see, and the bamboo report
+### What the approach funnel can see, and bamboo
 
-The report was that **bamboo is not treated as an obstacle** — the modern bamboo, not sugar cane.
-Most of that does not reproduce, and the half that does is not about bamboo at all.
+**Bamboo is not treated as an obstacle** was the claim — the modern bamboo, not sugar cane. Most of
+that does not reproduce, and the half that does is not about bamboo at all.
 
 **Bamboo is visible to every heightmap the mod uses.** `Blocks.BAMBOO` is registered
 `.forceSolidOn()`, and `BlockBehaviour.BlockStateBase#calculateSolid` returns true on that flag
@@ -1005,8 +966,8 @@ Plane #5 did not land at airfield-1/36: came to rest in the water, at 0, -63, -6
 **The length and the percentage are there because a distance on its own says nothing.** "3 blocks
 down the runway" is a tidy arrival on a short field and an aircraft parked on the very lip of a
 183-block one, and the line read the same either way — which is how the aim point stayed broken
-without anyone reading a report that looked wrong. The user spotted it by eye out of the window; the
-percentage is the same observation, in the output, where it can be asserted on.
+without anyone reading a report that looked wrong. What used to be visible only by eye out of the
+window is now the same observation in the output, where it can be asserted on.
 
 Both paths go through `stop()`, so the runway reservation is released either way — a runway held for
 ever by an aircraft on the sea floor was the second thing the false report hid. `checkGrounded` gained
@@ -1082,11 +1043,9 @@ live half for exactly that reason: the surveyed number already speaks for them.
 
 ### 4d. Deciding the arrival at range, and then flying it
 
-The user's question was blunt: **"почему за 200 блоков нельзя сразу расчитать по какому маршруту
-удастся сесть? … сделать расчёт а потом уже садиться и взлетать"** — why can the whole route to a
-landing not be worked out a couple of hundred blocks out and then simply flown, take-off included.
-
-They were right, and for a worse reason than they knew. Nothing was worked out at range at all.
+The whole route to a landing was never worked out a couple of hundred blocks out and then simply
+flown, take-off included — and for a worse reason than that gap suggests. Nothing was worked out at
+range at all.
 
 **The arrival began overhead.** `AutopilotSpawner#launchInbound` and `#launchSortie` make the flight's
 last waypoint the **centre of the destination runway**, and `tickCruise` only started the arrival once
@@ -1124,7 +1083,7 @@ the starter plane, 0.5 on the large one, **0.2 on the cargo plane**. The same 0.
 Two radii, because the manoeuvre the range has to pay for is the join onto the centreline and its
 worst case is a course reversal, which displaces the aircraft `2r` sideways before it rolls out.
 
-**On the user's 100 blocks.** It is the floor, not the rule, and the arithmetic says why. At cruise
+**Why the floor is 100 blocks.** It is the floor, not the rule, and the arithmetic says why. At cruise
 speed the starter airframe's radius is 59.6 blocks, so two of them are 119 and the floor never binds.
 At approach speed the radius is 11.5 and two are 23 — without a floor the aircraft would be deciding
 its arrival from inside the pattern, so 100 is what stops that. But on the cargo airframe the
@@ -1317,8 +1276,8 @@ go-around is the same failure discovered at the gate, which is the one it does n
 
 ### How long a landing takes, and where the time went
 
-The user's second report was simply **"долго слишком садятся"** — landings take far too long. The
-clock that matters is top of descent to wheels stopped, and almost all of it was being spent flying
+Landings were taking far too long. The clock that matters is top of descent to wheels stopped, and
+almost all of it was being spent flying
 slowly in a straight line.
 
 * **The descent leg was flown at `APPROACH_SPEED` from its first tick** — 0.5 blocks/tick for however
@@ -1941,7 +1900,7 @@ reasoning that 2 was small enough to be safe. It was not.
 Measured on the rig with a **closed one-block-thick stone ring, 20 blocks tall, 9 blocks out from a
 pad**: two of the eight sectors reported clear, and the pad registered. Nine is not a multiple of
 two, so on those two bearings the wall sat exactly between the sample at 8 blocks and the sample at
-10 and was invisible. This is the same defect as the bamboo report, at a fifth of the scale, and it
+10 and was invisible. This is the same defect bamboo exposed, at a fifth of the scale, and it
 does not have a smaller step as its fix: a step small enough for a stone wall is still too big for a
 fence post.
 
@@ -2387,11 +2346,11 @@ is capped at 24.
 
 ### Over it or round it: `RoutePlanner`
 
-Raising the altitude is the right answer for a hill and the wrong one for a mountain. Reported from
-a user's world: a runway at 69 with a summit at **158 immediately off the north threshold** and open
-water at **61** a short way west. The aircraft climbed ~90 blocks to cross the summit and then dived
-back down onto the threshold — buying height exactly where it needed to be low and slow — when a
-small sidestep west was clear the whole way.
+Raising the altitude is the right answer for a hill and the wrong one for a mountain. Case in
+point: a runway at 69 with a summit at **158 immediately off the north threshold** and open water at
+**61** a short way west. The aircraft climbed ~90 blocks to cross the summit and then dived back
+down onto the threshold — buying height exactly where it needed to be low and slow — when a small
+sidestep west was clear the whole way.
 
 `TerrainScanner.avoidanceBias` did have a sidestep, but it was a reflex, not a decision: it only
 fired when the ridge could not be out-climbed **at all**, and it chose its side by comparing two
@@ -2509,45 +2468,8 @@ the autopilot's `moveForward`/`moveStrafing`, and the existing public `setMoveUp
 `/autopilot` (permission level: gamemasters) drives the whole feature from a dedicated server.
 **No subcommand requires a player** — every one takes explicit coordinates, so they all run from the
 server console, a command block or a datapack function. A player is an optional convenience: it
-makes relative coordinates (`~ ~ ~`) work and decides which side an attack run comes in from.
-
-```
-/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]
-                                                 launch an attack run
-/autopilot tool <distance> [bearing] [blast] [blocks] [fire]
-                                                 write those settings onto the held strike tool
-/autopilot route <x y z> <x y z> [speed] [type <airframe>]
-                                                 fly A -> B -> A and land
-/autopilot flight <from> <to> [speed] [delay <seconds>] [type <airframe>]
-                                                 full sortie between two registered airfields;
-                                                 delay is how long it waits on its parking spot
-/autopilot inbound <x y z> <airfield> [speed] [type <airframe>]
-                                                 one-way arrival into a named airfield
-/autopilot survey <x y z> <x y z>                survey a runway between two thresholds
-/autopilot tower [<airfield>]                    runway states: free/occupied, by whom, who is holding
-/autopilot status                                full telemetry for every autopilot aircraft
-/autopilot stop                                  stop every autopilot aircraft in this dimension
-
-/autopilot airfields                             browse, nearest first
-/autopilot airfields info <airfield>             the full survey of one field
-/autopilot airfields show <airfield>             draw it in world with particles
-/autopilot airfields resurvey <airfield>         re-measure it from its own stored thresholds
-/autopilot airfields rename <airfield> <name>    rename it
-/autopilot airfields remove <airfield>           delete it
-/autopilot airfields park <airfield> <x y z>     mark a parking spot
-/autopilot airfields unpark <airfield> <x y z>   remove the marked spot nearest that point
-
-/autopilot helipad survey <x y z> <x y z>        survey a helipad between two opposite corners
-/autopilot heliflight <pad> <pad> [speed] [delay <seconds>]
-                                                 full helicopter sortie between two pads
-/autopilot heliinbound <x y z> <pad> [speed]     one-way arrival onto a named pad
-/autopilot helipads                              browse the pads, nearest first
-/autopilot helipads info <pad>                   the full survey of one pad
-/autopilot helipads show <pad>                   draw it, and its clear approaches, with particles
-/autopilot helipads resurvey <pad>               re-measure it from its own stored centre
-/autopilot helipads rename <pad> <name>          rename it
-/autopilot helipads remove <pad>                 delete it
-```
+makes relative coordinates (`~ ~ ~`) work and decides which side an attack run comes in from. Full
+command syntax is in [`COMMANDS.md`](../COMMANDS.md); this section covers what matters for testing.
 
 `speed` is the cruise speed in blocks per tick, clamped to 0.40-2.80. Omitted, it is
 `CRUISE_SPEED` — see [The default is fast](#the-default-is-fast). The helicopter commands have their
@@ -3002,16 +2924,14 @@ world cannot double-count either.
   survey is not noticed until the machine is in it. `/autopilot helipads info` says when a live
   re-measurement disagrees with the stored one, and `resurvey` stores the new answer, but both need a
   human to ask.
-* **The default cruise is the fastest level flight there is, so it is never quite made good.**
-  Holding altitude at full forward cyclic wants collective 3.31 and the collective is an integer, so
-  the loop dithers 3/4 and the machine settles around **1.10 blocks/tick against the 1.20 it is
-  commanded**. Ask for less and it holds exactly what it was asked for —
-  0.50 flies 0.524, 0.80 flies 0.814. What it does *not* do is refuse a speed it cannot make good:
-  `/autopilot heliflight … 1.75` is inside the argument's range, is accepted, is echoed back in the
-  launch line and then flies 1.10. It now says so once from the air, which is the honest half of the
-  answer; the dishonest half — a launch line quoting a speed nothing will ever fly — is still there,
-  because the ceiling is a property of the loaded airframe (a machine without a booster has a lower
-  one) and the command does not have the entity when it prints.
+* **The default cruise is the fastest level flight there is, so it is never quite made good** —
+  see the collective search above: any command over about 1.10 blocks/tick just holds 1.10 with the
+  stick pinned. What it does *not* do is refuse a speed it cannot make good: `/autopilot heliflight …
+  1.75` is inside the argument's range, is accepted, is echoed back in the launch line and then flies
+  1.10. It now says so once from the air, which is the honest half of the answer; the dishonest half
+  — a launch line quoting a speed nothing will ever fly — is still there, because the ceiling is a
+  property of the loaded airframe (a machine without a booster has a lower one) and the command does
+  not have the entity when it prints.
 * **A helicopter sortie interrupted by a server restart resumes, but nothing wakes it up.** The plan,
   the mode and the pads all come back off the entity NBT and the flight continues correctly the moment
   the aircraft ticks — measured, a sortie stopped 880 blocks out finished on the pad 0.13 blocks from
