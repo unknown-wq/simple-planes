@@ -1,8 +1,7 @@
 # PORT-STATUS — Simple Planes → Fabric / Minecraft 26.2
 
 Live status + **the law** for every agent working in `26.2/`. Read this whole file before
-your first edit. Background reference: `../porting-26.2/PORTING-GUIDE-26.2.md` (§3 breaking
-changes) and `../porting-26.2/PORT-CHEATSHEET.md` (verified fixes for recurring errors).
+your first edit.
 
 ## What this port is
 
@@ -43,10 +42,10 @@ migration in this port. Never write yarn names (`Identifier`, `MinecraftClient`,
    26.2 mods import it). Mojang adopted the name post-unobfuscation. Ground truth in
    `/opt/mc-src` always wins over this document. The other yarn names in rule 5
    (`MinecraftClient`, `World`, `Item.Settings`, `class_1234`) remain forbidden.
-6. **Rule §9 — "не выходит → забиваем".** If a piece resists ~2 honest attempts: keep the
+6. **Rule §9 — "if it won't come together, drop it."** If a piece resists ~2 honest attempts: keep the
    original body in a `/* ... */` block, replace with a compiling stub, mark
    `// TODO(port-26.2): DISABLED — <reason>`, and log it under **Disabled content** below.
-   **Зелёная сборка важнее полноты фич.** Server-side gameplay > client visuals > compat.
+   **A green build matters more than feature completeness.** Server-side gameplay > client visuals > compat.
 7. Java 25, `release = 25`. Mixin `compatibilityLevel` is already `JAVA_25`.
 
 ## Cross-agent contracts (agreed up front — do not deviate)
@@ -85,7 +84,7 @@ system. Do not pull in Team Reborn Energy or the Transfer API unless it is stric
 are deleted; the logic moves into Fabric API callbacks registered from the matching
 entrypoint (`ServerTickEvents`, `UseEntityCallback`, `EntityTrackingEvents`, …).
 
-## Ownership (никаких пересечений)
+## Ownership (no overlaps)
 
 ### Agent A — core, registration, data (43 java files + all of `src/main/resources`)
 `SimplePlanesMod.java`, `setup/**` (11), `blocks/**`, `items/**`, `container/**` +
@@ -135,8 +134,7 @@ dependency.
 **The client is untested** — this container has no display, so nothing visual (renderers,
 models, screens, HUD) has ever been executed. Compile-clean is all that is established there.
 
-Three runtime faults were fixed after the first boot; they are documented with their ground
-truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
+Three runtime faults were fixed after the first boot:
 1. recipe results must be `ItemStackTemplate` — `ItemStack.CODEC` demands bound components,
    which mod items do not have during datapack load (the 4 plane recipes silently vanished);
 2. `#minecraft:non_flammable_wood` is an item tag, so a block tag referencing it fails wholesale;

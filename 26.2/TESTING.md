@@ -341,7 +341,7 @@ sleep 5
 
 Health is an int, default 10. A plane that no longer answers `data get` was destroyed. Measured
 boundary with Floaty Bedding and wings level: free to 0.70 b/t, 1 HP at 0.75, 5 HP at 1.00,
-destroyed from 1.2. See `COLLISION-DIAGNOSIS.md`, section Р3.
+destroyed from 1.2.
 
 Both flights print a terminal line (`hit the target at …`, `flew into terrain at …`, …), which is
 what makes them assertable from a shell.
@@ -1002,8 +1002,8 @@ sleep 4                                            # taxiing, so it holds airfie
 An autopilot plane has **no rider**, so on the server `isClientAuthoritative()` is false and
 `canSimulateMovement()` is true — the server simulates it fully. A plane flown by a *player* is
 client-authoritative: the client runs the physics and the server only receives positions. That
-split is the root cause documented in `COLLISION-DIAGNOSIS.md`, and it is exactly the branch the
-autopilot does **not** exercise. Anything about the ridden case has to be reasoned out against
+split is exactly the branch the autopilot does **not** exercise. Anything about the ridden case
+has to be reasoned out against
 `/opt/mc-src` (`Entity#isLocalInstanceAuthoritative`, `Entity#move`,
 `ServerGamePacketListenerImpl#handleMoveVehicle`) or tested with a real client — see below.
 
