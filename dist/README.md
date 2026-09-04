@@ -5,20 +5,21 @@ Neither needs compiling; drop it and Fabric API into `mods/`.
 
 | | 26.3 | 26.2 |
 |---|---|---|
-| File | `simpleplanes-26.3-5.3.11.jar` | `simpleplanes-26.2-5.3.10.jar` |
-| Minecraft | 26.3-snapshot-10 | 26.2 |
-| Loader | Fabric, loader ≥ 0.19.4 | Fabric, loader ≥ 0.19.3 |
+| File | `simpleplanes-26.3-5.3.12.jar` | `simpleplanes-26.2-5.3.10.jar` |
+| Minecraft | 26.3-pre-2 | 26.2 |
+| Loader | Fabric, loader ≥ 0.19.5 | Fabric, loader ≥ 0.19.3 |
 | Java | 25 | 25 |
-| Requires | Fabric API 0.158.3+26.3 or newer | Fabric API 0.154.2+26.2 or newer |
+| Requires | Fabric API 0.159.4+26.3 or newer | Fabric API 0.154.2+26.2 or newer |
 | Source | `../26.3/` | `../26.2/` |
-| sha256 | `5b4380cc6d11ea236087b929c6943e509cf5652429bb7946bf3acda0f0b9aa84` | `1c47da2b26e1a7ffab095b35a022e86415bbd784ca5f701d74e5784798cf47c9` |
+| sha256 | `9e1c72890458e9c9b6ae6a4a38e6e48fa097bb6bcc98c76b9a8f0e2340196b8a` | `1c47da2b26e1a7ffab095b35a022e86415bbd784ca5f701d74e5784798cf47c9` |
 
-The two jars carry the **same mod version, 5.3.10, and the same features** — 26.3 is a retarget, not
-a release. The changelog below therefore describes both.
+The two jars carry the **same features** — 26.3 is a retarget, not a release, and its version number
+runs ahead only because each retarget gets its own so that no two different jars share one name.
+The changelog below therefore describes both.
 
 ## About the 26.3 build
 
-Minecraft 26.3 is a snapshot, so this build is for a snapshot: it tracks `26.3-snapshot-10`
+Minecraft 26.3 is not out yet, so this build is for a pre-release: it tracks `26.3-pre-2`
 specifically and is not expected to load on the release when there is one.
 
 What it was checked with: a clean build with no errors or warnings, and autopilot sorties flown on a

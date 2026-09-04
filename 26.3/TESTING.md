@@ -26,7 +26,7 @@ claim.**
 cd <checkout>/26.3
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
   flock /tmp/mc-build.lock /opt/gradle-9.6.1/bin/gradle build --no-daemon
-# -> build/libs/simpleplanes-26.3-5.3.11.jar
+# -> build/libs/simpleplanes-26.3-5.3.12.jar
 ```
 
 **Take `/tmp/mc-build.lock` on every Gradle invocation.** Loom may not run twice at once: two
@@ -42,14 +42,15 @@ version changes.
 
 | Source | Path | Contents |
 |---|---|---|
-| Minecraft 26.3-snapshot-10 | **generate it** — see below | 7243 `.java`, deobfuscated, client and server |
-| Minecraft 26.3-snapshot-10 | `/root/.gradle/caches/fabric-loom/26.3-snapshot-10/minecraft-merged.jar` | the bytecode itself; `javap -p` on it settles any question a source tree cannot |
+| Minecraft 26.3-pre-2 | **generate it** — see below | 7243 `.java`, deobfuscated, client and server |
+| Minecraft 26.3-pre-2 | `/root/.gradle/caches/fabric-loom/26.3-pre-2/minecraft-merged.jar` | the bytecode itself; `javap -p` on it settles any question a source tree cannot |
 | Upstream mod (NeoForge 1.21.1) | `<checkout>/1.21.1` | unmodified, for behaviour parity checks |
 | 26.2 behaviour parity | `<checkout>/26.2` | the previous port's own sources — `/opt/mc-src` (26.2 vanilla) is **gone** |
 
-**`/opt/mc-src-26.3` is snapshot-9, not snapshot-10, despite the name.** It has
-`WORLD_VERSION = 5011`; snapshot-10 is 5015. The two genuinely differ — `SurfaceRules` exists in
-one and is deleted in the other, `ChunkStatus.NOISE`/`SURFACE`/`CARVERS` collapsed into `TERRAIN`,
+**`/opt/mc-src-26.3` is snapshot-9, whatever the name suggests.** It has
+`WORLD_VERSION = 5011`; snapshot-10 was 5015, pre-1 5017 and pre-2 is 5018. The trees genuinely
+differ — `SurfaceRules` exists in one and is deleted in the other,
+`ChunkStatus.NOISE`/`SURFACE`/`CARVERS` collapsed into `TERRAIN`,
 and `PoseStack.mulPose(Quaternionfc)` became `PoseStack.rotate(Quaternionfc)`. Reading a signature
 out of that tree and trusting it costs a compile round trip at best and a wrong fix at worst.
 
@@ -58,14 +59,14 @@ Generate the real thing once and grep that instead:
 ```sh
 flock /tmp/mc-build.lock /opt/gradle-9.6.1/bin/gradle -p <checkout>/26.3 genSources --no-daemon
 unzip -q -o <checkout>/26.3/.gradle/loom-cache/minecraftMaven/net/minecraft/\
-minecraft-merged-*/26.3-snapshot-10/minecraft-merged-*-26.3-snapshot-10-sources.jar -d /tmp/mc-src-s10
-grep -n "WORLD_VERSION" /tmp/mc-src-s10/net/minecraft/SharedConstants.java   # -> 5015
+minecraft-merged-*/26.3-pre-2/minecraft-merged-*-26.3-pre-2-sources.jar -d /tmp/mc-src-pre2
+grep -n "WORLD_VERSION" /tmp/mc-src-pre2/net/minecraft/SharedConstants.java   # -> 5018
 ```
 
 It takes about 80 seconds (Vineflower, 7243 classes) and is cached afterwards.
 | Upstream mod (NeoForge 1.21.1) | `/home/user/simple-planes/1.21.1` | unmodified, for behaviour parity checks |
 
-Claims about vanilla behaviour go in a document only after being read in the **snapshot-10**
+Claims about vanilla behaviour go in a document only after being read in the **pre-2**
 sources or bytecode. The physics and collision documents in this directory follow that rule against
 26.2; keep it, and re-read rather than assuming when one of them talks about a class that moved.
 
@@ -78,8 +79,8 @@ Keep it outside the repo — nothing there is committed.
 
 ```
 sp-testserver/
-├── fabric-server-launch.jar     Fabric loader 0.19.5 server launcher for 26.3-pre-1
-├── mods/fabric-api-….jar        Fabric API 0.159.1+26.3
+├── fabric-server-launch.jar     Fabric loader 0.19.5 server launcher for 26.3-pre-2
+├── mods/fabric-api-….jar        Fabric API 0.159.4+26.3
 ├── mods/simpleplanes-….jar      the mod under test — recopy after every build
 ├── start.sh  cmd.sh  stop.sh    control scripts
 ├── console.log                  full server output
@@ -94,7 +95,7 @@ watchdog), and **`pause-when-empty-seconds=0`** — without that last one the se
 ### Run a test
 
 ```sh
-cp <checkout>/26.3/build/libs/simpleplanes-26.3-5.3.11.jar /home/user/sp-testserver/mods/
+cp <checkout>/26.3/build/libs/simpleplanes-26.3-5.3.12.jar /home/user/sp-testserver/mods/
 cd /home/user/sp-testserver
 ./start.sh                                  # blocks until "Done (…)", ~10 s
 ./cmd.sh "autopilot strike 0 -59 0 800 90"
