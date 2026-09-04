@@ -5,7 +5,7 @@ Neither needs compiling; drop it and Fabric API into `mods/`.
 
 | | 26.3 | 26.2 |
 |---|---|---|
-| File | `simpleplanes-26.3-5.3.10.jar` | `simpleplanes-26.2-5.3.10.jar` |
+| File | `simpleplanes-26.3-5.3.11.jar` | `simpleplanes-26.2-5.3.10.jar` |
 | Minecraft | 26.3-snapshot-10 | 26.2 |
 | Loader | Fabric, loader ≥ 0.19.4 | Fabric, loader ≥ 0.19.3 |
 | Java | 25 | 25 |

@@ -26,7 +26,7 @@ claim.**
 cd <checkout>/26.3
 JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
   flock /tmp/mc-build.lock /opt/gradle-9.6.1/bin/gradle build --no-daemon
-# -> build/libs/simpleplanes-26.3-5.3.10.jar
+# -> build/libs/simpleplanes-26.3-5.3.11.jar
 ```
 
 **Take `/tmp/mc-build.lock` on every Gradle invocation.** Loom may not run twice at once: two
@@ -94,7 +94,7 @@ watchdog), and **`pause-when-empty-seconds=0`** — without that last one the se
 ### Run a test
 
 ```sh
-cp <checkout>/26.3/build/libs/simpleplanes-26.3-5.3.10.jar /home/user/sp-testserver/mods/
+cp <checkout>/26.3/build/libs/simpleplanes-26.3-5.3.11.jar /home/user/sp-testserver/mods/
 cd /home/user/sp-testserver
 ./start.sh                                  # blocks until "Done (…)", ~10 s
 ./cmd.sh "autopilot strike 0 -59 0 800 90"
