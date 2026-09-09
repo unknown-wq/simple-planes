@@ -5,6 +5,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import xyz.przemyk.simpleplanes.client.AirfieldMarkers;
 import xyz.przemyk.simpleplanes.client.MovingSound;
 import xyz.przemyk.simpleplanes.entities.CargoPlaneEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
@@ -50,6 +51,9 @@ public class SimplePlanesClientNetworking {
         });
 
         ClientPlayNetworking.registerGlobalReceiver(JukeboxPacket.TYPE, (payload, context) -> MovingSound.playRecord(payload));
+
+        ClientPlayNetworking.registerGlobalReceiver(AirfieldMarkersPacket.TYPE,
+            (payload, context) -> AirfieldMarkers.accept(payload));
     }
 
     public static void sendRotation(org.joml.Quaternionf quaternion) {
