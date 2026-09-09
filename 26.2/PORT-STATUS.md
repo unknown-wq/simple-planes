@@ -79,6 +79,8 @@ entrypoint. Keep exactly those two method names.
 `SimpleContainer`; `IEnergyStorage`/`EnergyStorage` and `FluidStack`/`FluidTank` → plain
 fields/small local classes owned by the upgrade that uses them (Agent B), not a capability
 system. Do not pull in Team Reborn Energy or the Transfer API unless it is strictly cheaper.
+(Since superseded for fluids: the liquid engine's tank is a `fabric-transfer-api-v1`
+`Storage<FluidVariant>` — see "Removed content" for the energy half, which is simply gone.)
 
 **C5 — NeoForge events → Fabric callbacks.** `@EventBusSubscriber`/`@SubscribeEvent` classes
 are deleted; the logic moves into Fabric API callbacks registered from the matching
@@ -248,11 +250,13 @@ Three runtime faults were fixed after the first boot:
   longer abstract, so an engine with nothing to show says so by leaving it alone. The liquid engine
   now has one, which it never did: upstream left it a `//TODO` and the engine flew with no fuel
   indication at all.
-- `upgrades/engines/liquid/LiquidEngineUpgrade` — the NeoForge fluid-handler capability transfer
-  (fill/empty **any** modded fluid container placed in the input slot) is replaced by
-  **vanilla-bucket-only** transfer: a bucket of a fluid listed in `plane_liquid_fuels` fills the tank
-  by 1000 mB, an empty bucket drains 1000 mB. `FluidTank`/`FluidStack` are replaced by the local
-  `LiquidEngineUpgrade.PlaneFluidTank` (contract C4).
+- `upgrades/engines/liquid/LiquidEngineUpgrade` — **restored, through Fabric's transfer API** after
+  a spell as vanilla-bucket-only. `PlaneFluidTank` is now a `SingleVariantStorage<FluidVariant>`, so
+  the input slot fills and empties **any** mod's fluid container again (the lookup answers for
+  vanilla buckets too, which is how the bucket path still works), and a pipe or tank beside a parked
+  aircraft can refuel it — see `LiquidEngineStorage` for why that is a block lookup and not an entity
+  one. The tank counts droplets internally and millibuckets everywhere the player and the save file
+  can see; the on-disk format (`fluid`, `fluid_amount` in mB) is unchanged.
 - `entities/PlaneEntity#getCap` and `upgrades/Upgrade#getCap` — **removed.** NeoForge capabilities
   are gone (C4); other mods can no longer pull items/energy/fluid out of a plane through a capability.
 - `entities/PlaneEntity` position interpolation — the hand-rolled `lerpTo`/`lerpX/Y/Z`/`lerpSteps`

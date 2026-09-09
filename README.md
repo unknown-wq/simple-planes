@@ -66,7 +66,8 @@ please do not send port-specific problems to the upstream authors.
 Everything below comes from the original mod; the port keeps the gameplay intact.
 
 - **Aircraft:** Plane, Large Plane, Cargo Plane, Helicopter, plus a deployable Parachute.
-- **Engines:** Furnace Engine (coal), Liquid Engine (lava and other configured liquid fuels).
+- **Engines:** Furnace Engine (coal), Liquid Engine (lava and other configured liquid fuels, from a
+  bucket, any mod's fluid container, or a pipe).
 - **Upgrades:** Plane Armor, Seats, Shooter, Rocket Booster, Propeller, Folding
   Upgrade, Floaty Bedding, Quick Fix Kit, Chest storage, Payload, Supply Crate, Banner, Jukebox.
 - **Blocks:** Plane Workbench.
@@ -83,8 +84,10 @@ cuts, not bugs** — check this list before reporting one:
 - **The Electric Engine, the Solar Panel and the Charging Station are removed.** The mod has no
   energy system: the charging station's only job was to charge an electric engine, and on Fabric
   nothing could fill the station itself.
-- **NeoForge capabilities do not exist on Fabric:** other mods can no longer pipe items into or out
-  of a plane.
+- **NeoForge capabilities do not exist on Fabric:** other mods can no longer pipe **items** into or
+  out of a plane. Fluids are the exception: the Liquid Engine's tank is a Fabric transfer-API
+  storage, so any mod's fluid container works in its input slot and a pipe or tank next to a parked
+  aircraft can fuel it.
 - Not rendered: camera roll, rotated riding players, banner on the tail, blocks inside the cargo
   bay, and item tinting by build material.
 

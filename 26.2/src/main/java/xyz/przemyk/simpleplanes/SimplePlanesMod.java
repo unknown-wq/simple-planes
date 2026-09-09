@@ -25,6 +25,7 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesRecipes;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesSounds;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
+import xyz.przemyk.simpleplanes.upgrades.engines.liquid.LiquidEngineStorage;
 
 public class SimplePlanesMod implements ModInitializer {
 
@@ -46,6 +47,10 @@ public class SimplePlanesMod implements ModInitializer {
 
         SimplePlanesNetworking.register();
         CommonEventHandler.register();
+
+        // Offers the liquid engine's tank to ordinary fluid handling, so a pipe or a tank beside a
+        // parked aircraft can refuel it. See LiquidEngineStorage for why it is a block lookup.
+        LiquidEngineStorage.register();
 
         // autopilot feature: data components for the tools + the /autopilot debug command, plus the
         // registry whose server-tick heartbeat keeps chunks loaded around aircraft in flight.
