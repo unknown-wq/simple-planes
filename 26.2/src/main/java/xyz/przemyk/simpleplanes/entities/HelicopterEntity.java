@@ -1,5 +1,6 @@
 package xyz.przemyk.simpleplanes.entities;
 
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -8,15 +9,18 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesConfig;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 import xyz.przemyk.simpleplanes.upgrades.UpgradeType;
+import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
 /**
  * The helicopter flight model.
@@ -315,11 +319,48 @@ public class HelicopterEntity extends LargeAirframeEntity {
     @Override
     protected void readAdditionalSaveData(net.minecraft.world.level.storage.ValueInput input) {
         super.readAdditionalSaveData(input);
-        setThrottle(input.getIntOr("throttle", getThrottle()));
+        // Clamped, because this value is thrust: the collective is the one control the airframe
+        // reads straight off the save, and a hand-edited or corrupted tag would otherwise put the
+        // machine on the MAX_SPEED backstop climbing vertically. The ceiling is the boosted one,
+        // which is a legitimate value for an airframe that had a booster fitted.
+        setThrottle(Mth.clamp(input.getIntOr("throttle", getThrottle()), 0, BoosterUpgrade.MAX_THROTTLE));
         setMoveUp(input.getBooleanOr("collective_boost", getCollectiveBoost()));
         setCyclicForward(input.getIntOr("cyclic_forward", getCyclicForward()));
         setCyclicRight(input.getIntOr("cyclic_right", getCyclicRight()));
         setPedal(input.getByteOr("pedal", getPedal()));
+    }
+
+    /** The five control keys {@link #addAdditionalSaveData} writes. */
+    private static final String[] CONTROL_KEYS =
+        {"throttle", "collective_boost", "cyclic_forward", "cyclic_right", "pedal"};
+
+    /**
+     * The item form of a helicopter is a machine on a shelf, and a machine on a shelf has its
+     * controls centred.
+     *
+     * <p>{@link PlaneEntity#getItemStack()} builds the item's payload by calling
+     * {@link #addAdditionalSaveData}, which is also what persists the collective across a save so a
+     * hovering helicopter comes back hovering. Those two want opposite things from the same data:
+     * folding a machine down with the collective at 5 and setting it back up handed the owner an
+     * airframe that climbed away by itself the moment it had power. The world save keeps the
+     * controls; the item does not.
+     *
+     * <p>This also settles the ordering in
+     * {@link PlaneEntity#getDismountLocationForPassenger}, which takes the item on the Folding
+     * upgrade's path before it centres the controls.
+     */
+    @Override
+    public ItemStack getItemStack() {
+        ItemStack itemStack = super.getItemStack();
+        CompoundTag compound = itemStack.get(SimplePlanesComponents.ENTITY_TAG.get());
+        if (compound != null) {
+            CompoundTag parked = compound.copy();
+            for (String key : CONTROL_KEYS) {
+                parked.remove(key);
+            }
+            itemStack.set(SimplePlanesComponents.ENTITY_TAG.get(), parked);
+        }
+        return itemStack;
     }
 
     // ------------------------------------------------------------------

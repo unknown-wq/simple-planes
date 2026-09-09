@@ -1318,9 +1318,15 @@ public class PlaneEntity extends Entity {
 
     // autopilot: releasing the runway reservation and the traffic slot when the aircraft goes away,
     // so a destroyed plane never keeps a runway blocked or an autopilot slot allocated.
+    //
+    // UNLOADED_TO_CHUNK is not the aircraft going away: it is the only removal reason that saves
+    // the entity, and the flight plan is written to that save (addAdditionalSaveData) before the
+    // removal runs, so the same flight comes back when the chunk does. Reporting an outcome there
+    // told the owner the plane was lost while it was still en route, and released a runway
+    // reservation the flight would want again a moment later.
     @Override
     public void remove(RemovalReason reason) {
-        if (autopilot != null && autopilot.isActive()) {
+        if (reason != RemovalReason.UNLOADED_TO_CHUNK && autopilot != null && autopilot.isActive()) {
             autopilot.reportOutcome(this);
             autopilot.stop(this);
         }

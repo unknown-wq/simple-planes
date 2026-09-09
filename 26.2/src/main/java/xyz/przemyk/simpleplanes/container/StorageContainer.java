@@ -15,6 +15,7 @@ import xyz.przemyk.simpleplanes.entities.CargoPlaneEntity;
 import xyz.przemyk.simpleplanes.entities.LargeAirframeEntity;
 import xyz.przemyk.simpleplanes.misc.ChestTypes;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesContainers;
+import xyz.przemyk.simpleplanes.upgrades.LargeUpgrade;
 
 public class StorageContainer extends AbstractContainerMenu implements CycleableContainer {
 
@@ -51,8 +52,18 @@ public class StorageContainer extends AbstractContainerMenu implements Cycleable
         Entity entity = playerIn.getVehicle();
         if (entity instanceof LargeAirframeEntity largePlaneEntity && entity.isAlive()) {
             return largePlaneEntity.hasStorageUpgrade();
-        } else if (entity instanceof CargoPlaneEntity) {
-            return entity.isAlive();
+        } else if (entity instanceof CargoPlaneEntity cargoPlaneEntity && entity.isAlive()) {
+            // A cargo bay carries several chests and this menu shows the cycleableContainerID-th of
+            // them, so "the plane is alive" is not enough on its own: pulling that chest out in the
+            // upgrade screen spills its contents on the ground and used to leave this menu open over
+            // the very same stacks. Counting the way CargoPlaneEntity#openContainer counts.
+            int storages = 0;
+            for (LargeUpgrade upgrade : cargoPlaneEntity.largeUpgrades) {
+                if (upgrade.hasStorage()) {
+                    storages++;
+                }
+            }
+            return storages >= cycleableContainerID;
         }
 
         return false;

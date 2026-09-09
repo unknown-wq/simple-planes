@@ -1,8 +1,7 @@
 # PORT-STATUS — Simple Planes → Fabric / Minecraft 26.2
 
 Live status + **the law** for every agent working in `26.2/`. Read this whole file before
-your first edit. Background reference: `../porting-26.2/PORTING-GUIDE-26.2.md` (§3 breaking
-changes) and `../porting-26.2/PORT-CHEATSHEET.md` (verified fixes for recurring errors).
+your first edit.
 
 ## What this port is
 
@@ -43,10 +42,10 @@ migration in this port. Never write yarn names (`Identifier`, `MinecraftClient`,
    26.2 mods import it). Mojang adopted the name post-unobfuscation. Ground truth in
    `/opt/mc-src` always wins over this document. The other yarn names in rule 5
    (`MinecraftClient`, `World`, `Item.Settings`, `class_1234`) remain forbidden.
-6. **Rule §9 — "не выходит → забиваем".** If a piece resists ~2 honest attempts: keep the
+6. **Rule §9 — "if it won't come together, drop it."** If a piece resists ~2 honest attempts: keep the
    original body in a `/* ... */` block, replace with a compiling stub, mark
    `// TODO(port-26.2): DISABLED — <reason>`, and log it under **Disabled content** below.
-   **Зелёная сборка важнее полноты фич.** Server-side gameplay > client visuals > compat.
+   **A green build matters more than feature completeness.** Server-side gameplay > client visuals > compat.
 7. Java 25, `release = 25`. Mixin `compatibilityLevel` is already `JAVA_25`.
 
 ## Cross-agent contracts (agreed up front — do not deviate)
@@ -85,7 +84,7 @@ system. Do not pull in Team Reborn Energy or the Transfer API unless it is stric
 are deleted; the logic moves into Fabric API callbacks registered from the matching
 entrypoint (`ServerTickEvents`, `UseEntityCallback`, `EntityTrackingEvents`, …).
 
-## Ownership (никаких пересечений)
+## Ownership (no overlaps)
 
 ### Agent A — core, registration, data (43 java files + all of `src/main/resources`)
 `SimplePlanesMod.java`, `setup/**` (11), `blocks/**`, `items/**`, `container/**` +
@@ -135,8 +134,7 @@ dependency.
 **The client is untested** — this container has no display, so nothing visual (renderers,
 models, screens, HUD) has ever been executed. Compile-clean is all that is established there.
 
-Three runtime faults were fixed after the first boot; they are documented with their ground
-truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
+Three runtime faults were fixed after the first boot:
 1. recipe results must be `ItemStackTemplate` — `ItemStack.CODEC` demands bound components,
    which mod items do not have during datapack load (the 4 plane recipes silently vanished);
 2. `#minecraft:non_flammable_wood` is an item tag, so a block tag referencing it fails wholesale;
@@ -155,7 +153,10 @@ truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
   Fabric config library is a follow-up confined to that one file.
 - `items/PlaneArmorItem` (Agent A) — `isEnchantable`/`getEnchantmentValue`/`supportsEnchantment`
   no longer exist on `Item` in 26.2. Enchantment value 9 moved to `Item.Properties#enchantable(9)`
-  at registration; the "always allow Protection" special case is dropped (data-driven now).
+  at registration; the "always allow Protection" special case is data-driven now —
+  `data/minecraft/tags/item/enchantable/armor.json` puts the item in the tag Protection is gated on,
+  which is what makes `ArmorUpgrade`'s protection level anything other than 0. The tag is coarser
+  than the old allowance: it opens every armour enchantment, though only Protection is read.
 - `client/render/PlaneItemColors` item tint (Agent A resources) — item colour providers are gone in
   26.2. `assets/simpleplanes/items/{plane,large_plane,cargo_plane,helicopter}.json` now use a
   constant tint (`0xB28F55`, the old `DEFAULT_COLOR`) instead of sampling the material block texture.
@@ -163,6 +164,11 @@ truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
   and no `block/cloud_*` models exist.
 - `blocks/ChargingStationBlockEntity` (Agent A) — charged any `IEnergyStorage` capability holder
   standing on it; now looks up `ElectricEngineUpgrade` on a `PlaneEntity` directly (contract C4).
+  **The block is inert as shipped.** Its own buffer was filled through the same capability, and
+  nothing on Fabric fills it now, so it holds 0 for ever and charges nothing — while still being
+  craftable and listed in the creative tab. Restoring it needs an energy input (a transfer API, or
+  an in-world source); whether to keep shipping the block meanwhile is a content decision, not a
+  port one. Until then the solar panel is the only way to charge an electric engine.
 
 ### Agent C (client) cuts
 
@@ -201,7 +207,9 @@ truth in `../porting-26.2/NEOFORGE-TO-FABRIC-26.2.md`:
 - `client/gui/PlaneInventoryScreen` — `Upgrade#renderScreen` / `#renderScreenBg` overlays (furnace
   burn bar, energy bar, fluid tank) are not drawn: same `GuiGraphics` removal.
 - `client/gui/StorageScreen` — Iron Chests layout support removed with `compat/**`; the screen is
-  always the vanilla-chest layout sized from `StorageContainer.rowCount`.
+  always the `vanilla_chest.png` layout, sized through `ChestTypes.getXSize/getYSize` (184x168 for
+  the 27-slot chest) and blitted in one piece, because that texture is a finished panel rather than
+  a `generic_54.png`-style sheet.
 - `client/render/UpgradesModels` — `SHULKER_FOLDING` dropped (the folding upgrade's shulker lid).
   `ShulkerModel` moved to `net.minecraft.client.model.monster.shulker` and is now
   `EntityModel<ShulkerRenderState>`, which does not fit the plane render state.

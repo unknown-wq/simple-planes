@@ -314,13 +314,15 @@ public final class HelicopterAutopilot {
         double distance = AutopilotMath.horizontalDistance(position, hover);
 
         double altitude = Math.max(cruiseAltitude, terrainFloor());
-        double speed = distance < RotorcraftConfig.DECELERATION_DISTANCE
-            ? Mth.lerp(distance / RotorcraftConfig.DECELERATION_DISTANCE,
-                RotorcraftConfig.APPROACH_SPEED, cruiseSpeed)
-            : cruiseSpeed;
-        fly(plane, AutopilotMath.headingTo(position, hover), altitude, speed,
+        // Cruise speed right up to the run-in, and there is no deceleration schedule here on
+        // purpose. There used to be one, ramped from cruise down to the approach speed across
+        // DECELERATION_DISTANCE — which is also the distance at which this phase ends, three lines
+        // below, so the ramp was only ever evaluated on the tick that left the phase and never
+        // slowed anything. The braking belongs to the closure law the run-in flies: see station()
+        // and RotorcraftConfig#CLOSURE_BRAKING, which stops the machine well inside the 90 blocks.
+        fly(plane, AutopilotMath.headingTo(position, hover), altitude, cruiseSpeed,
             RotorcraftConfig.CLIMB_RATE, false);
-        checkSpeedShortfall(plane, speed);
+        checkSpeedShortfall(plane, cruiseSpeed);
 
         if (distance <= RotorcraftConfig.DECELERATION_DISTANCE) {
             if (!padAvailable(plane)) {
@@ -548,14 +550,22 @@ public final class HelicopterAutopilot {
             + (overheadTick >= 0 ? (ticks - overheadTick) + " ticks from the run-in" : ticks + " ticks");
         String problem = landingProblem(plane, miss, tolerance);
         reported = true;
+        // Whether the pad is now blocked and whether the landing was a good one are two different
+        // questions, and this used to answer only the first when the second came out clean. An
+        // arrival that came to rest just outside the tolerance — 2.5 blocks off the centre of a pad
+        // whose tolerance is 2 — is still sitting squarely on the pad, and without a record the
+        // entity search goes blind as soon as the chunk unloads and the next arrival lands on top of
+        // it, which is the whole reason StandOccupancy exists. So the pad is remembered whenever the
+        // machine is actually standing on it, over exactly the footprint Helipad#free searches, and
+        // the outcome line below is decided on its own terms.
+        if (destination.covers(position, 1.0) && plane.level() instanceof ServerLevel serverLevel) {
+            StandOccupancy.take(serverLevel, destination.name(), destination.centre(), plane);
+        }
         if (problem == null) {
             AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId() + " landed at "
                 + destination.name() + ", " + where + String.format(" (%.2f blocks from the pad centre "
                 + "%.1f, %.1f, %.1f, tolerance %.1f; ", miss, pad.x, pad.y, pad.z, tolerance)
                 + timings + ").");
-            if (plane.level() instanceof ServerLevel serverLevel) {
-                StandOccupancy.take(serverLevel, destination.name(), destination.centre(), plane);
-            }
         } else {
             AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId()
                 + " did not land on " + destination.name() + ": came to rest " + problem
@@ -969,12 +979,28 @@ public final class HelicopterAutopilot {
             SimplePlanesUpgrades.BOOSTER.get())) ? BoosterUpgrade.MAX_THROTTLE : PlaneEntity.MAX_THROTTLE;
     }
 
-    /** Lowest altitude that clears the terrain the scanner can see, or the plan's when it sees none. */
+    /**
+     * Lowest altitude that clears the terrain the scanner can see, or no constraint at all when it
+     * sees none.
+     *
+     * <p><b>Deliberately not floored at the cruise altitude.</b> It used to be, and that made the
+     * run-in level flight on every single sortie. {@link #cruiseAltitude} comes from
+     * {@link Helipad#cruiseAltitude}, which is the highest ground on the leg — the two pads included
+     * — plus {@link RotorcraftConfig#CRUISE_CLEARANCE}, so it is never below the destination pad's
+     * own elevation plus that same 30 blocks. {@link RotorcraftConfig#DEPARTURE_HEIGHT} is 30 as
+     * well, so {@code max(destination.elevation() + DEPARTURE_HEIGHT, terrainFloor())} could not
+     * come out as anything but the altitude the machine was already cruising at, whatever the
+     * terrain said: the descent phase commanded exactly the same number as the cruise phase and the
+     * whole arrival was flown as a vertical let-down from cruise, which on a leg over high ground is
+     * a hundred blocks of it.
+     *
+     * <p>The cruise floor belongs to the cruise, and {@link #tickTransit} applies it there. Every
+     * other caller wants the terrain and its own pad-relative demand and nothing else.
+     */
     private double terrainFloor() {
         double safe = scanner.safeAltitude();
-        return safe == TerrainScanner.UNKNOWN_HEIGHT ? cruiseAltitude
-            : Math.max(safe - AutopilotConfig.TERRAIN_CLEARANCE + RotorcraftConfig.CRUISE_CLEARANCE,
-                cruiseAltitude);
+        return safe == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
+            : safe - AutopilotConfig.TERRAIN_CLEARANCE + RotorcraftConfig.CRUISE_CLEARANCE;
     }
 
     // ------------------------------------------------------------------ readouts

@@ -19,7 +19,6 @@ import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -47,17 +46,23 @@ public class PlaneItem extends Item {
         CompoundTag entityTag = itemStack.get(SimplePlanesComponents.ENTITY_TAG);
 
         if (entityTag != null) {
-            entityTag.getString("material").ifPresent(material -> {
-                Block block = BuiltInRegistries.BLOCK.getValue(Identifier.parse(material));
-                if (block != null) {
-                    builder.accept(Component.translatable(SimplePlanesMod.MODID + ".material").append(block.getName()));
-                }
-            });
+            // tryParse and getOptional, not parse and getValue: the component is player-supplied
+            // data, and a tooltip that throws on a malformed id takes the screen with it. The block
+            // registry is defaulted, so getValue would also have named an unknown material "Air"
+            // rather than saying nothing.
+            entityTag.getString("material")
+                .map(Identifier::tryParse)
+                .flatMap(BuiltInRegistries.BLOCK::getOptional)
+                .ifPresent(block -> builder.accept(
+                    Component.translatable(SimplePlanesMod.MODID + ".material").append(block.getName())));
 
             CompoundTag upgradesNBT = entityTag.getCompoundOrEmpty("upgrades");
             for (String key : upgradesNBT.keySet()) {
+                Identifier identifier = Identifier.tryParse(key);
+                if (identifier == null) {
+                    continue;
+                }
                 CompoundTag upgradeNbt = upgradesNBT.getCompoundOrEmpty(key);
-                Identifier identifier = Identifier.parse(key);
                 upgradeNbt.getString("desc").ifPresentOrElse(
                     desc -> builder.accept(Component.literal(desc)),
                     () -> builder.accept(Component.translatable("name." + identifier.toString().replace(":", "."))));

@@ -10,26 +10,30 @@ import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Inventory;
-import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.container.StorageContainer;
+import xyz.przemyk.simpleplanes.misc.ChestTypes;
 import xyz.przemyk.simpleplanes.network.CyclePlaneInventoryPacket;
 
 /**
  * Chest-upgrade screen.
  *
- * <p>The Iron Chests compat layer is gone (Agent A deleted {@code compat/**}), so the layout is now
- * always the vanilla chest one, sized from {@link StorageContainer#rowCount}.
+ * <p>The Iron Chests compat layer is gone, so the only layout left is the one the bundled
+ * {@code textures/gui/vanilla_chest.png} is drawn for. That image is a single finished 184x168
+ * panel, not a vanilla {@code generic_54.png}-style sheet, so it is blitted whole and the panel
+ * size comes from {@link ChestTypes} — the same source the container takes its slot positions from.
  */
 @Environment(EnvType.CLIENT)
 public class StorageScreen extends AbstractContainerScreen<StorageContainer> {
 
-    public static final Identifier TEXTURE = Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "textures/gui/vanilla_chest.png");
-
-    private final int rowCount;
+    private final Identifier texture;
+    private final int textureYSize;
 
     public StorageScreen(StorageContainer screenContainer, Inventory inv, Component titleIn) {
-        super(screenContainer, inv, titleIn, 176, 114 + screenContainer.rowCount * 18);
-        this.rowCount = screenContainer.rowCount;
+        super(screenContainer, inv, titleIn,
+            ChestTypes.getXSize(screenContainer.chestType),
+            ChestTypes.getYSize(screenContainer.chestType));
+        this.texture = ChestTypes.getGuiTexture(screenContainer.chestType);
+        this.textureYSize = ChestTypes.getTextureYSize(screenContainer.chestType);
         this.inventoryLabelY = this.imageHeight - 94;
     }
 
@@ -47,7 +51,6 @@ public class StorageScreen extends AbstractContainerScreen<StorageContainer> {
         super.extractBackground(graphics, mouseX, mouseY, a);
         int x = (this.width - this.imageWidth) / 2;
         int y = (this.height - this.imageHeight) / 2;
-        graphics.blit(RenderPipelines.GUI_TEXTURED, TEXTURE, x, y, 0.0F, 0.0F, this.imageWidth, this.rowCount * 18 + 17, 256, 256);
-        graphics.blit(RenderPipelines.GUI_TEXTURED, TEXTURE, x, y + this.rowCount * 18 + 17, 0.0F, 126.0F, this.imageWidth, 96, 256, 256);
+        graphics.blit(RenderPipelines.GUI_TEXTURED, this.texture, x, y, 0.0F, 0.0F, this.imageWidth, this.imageHeight, 256, this.textureYSize);
     }
 }

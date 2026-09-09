@@ -140,6 +140,11 @@ public final class CollectiveHover implements HoverControl {
     public CollectiveHover(HelicopterEntity helicopter) {
         this.helicopter = helicopter;
         this.commandedY = helicopter.getY();
+        // heightAboveGround() falls back on this whenever the column under the aircraft is not
+        // loaded, and it is only given a real value by descendAndLand(). Left at zero it made the
+        // fallback report the absolute Y as an altitude above the ground, which is what
+        // /gunship status printed for a gunship over an unloaded column.
+        this.landingFloor = helicopter.getY();
     }
 
     @Override

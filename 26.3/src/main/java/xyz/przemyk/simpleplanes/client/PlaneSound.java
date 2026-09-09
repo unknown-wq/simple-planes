@@ -43,6 +43,21 @@ public class PlaneSound extends AbstractTickableSoundInstance {
         }
     }
 
+    /**
+     * Drops every remembered loop, called when the client leaves a world.
+     *
+     * <p>{@code SoundEngine.stopAll()} only clears the engine's own collections; it never calls
+     * {@link #stop()} on the instances it drops, so entries left here keep answering
+     * {@link #isStopped()} with false for ever. That both pins the plane (and through it the old
+     * {@code ClientLevel}) in memory and, because entity ids start over in the next world, makes
+     * {@link #isPlaying} claim a fresh plane is already looping and silences its engine.
+     */
+    public static void clear() {
+        synchronized (PLAYING_FOR) {
+            PLAYING_FOR.clear();
+        }
+    }
+
     @Override
     public float getPitch() {
         return (((float) plane.getThrottle()) / BoosterUpgrade.MAX_THROTTLE) * 0.7f + 0.6f;
@@ -50,6 +65,16 @@ public class PlaneSound extends AbstractTickableSoundInstance {
 
     @Override
     public void tick() {
+        // A plane that left the level keeps its last synched throttle for ever, so without this the
+        // loop below never reaches its fade and the sound plays on at the wreck's last position.
+        if (plane.isRemoved()) {
+            stop();
+            synchronized (PLAYING_FOR) {
+                PLAYING_FOR.remove(plane.getId(), this);
+            }
+            return;
+        }
+
         x = plane.getX();
         y = plane.getY();
         z = plane.getZ();

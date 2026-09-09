@@ -107,6 +107,8 @@ public class PlaneAutopilot {
     private int departureHoldTicks;
     /** Set once "waiting for the runway" has been reported, so a long wait says it exactly once. */
     private boolean departureBlockedReported;
+    /** Consecutive ticks the taxi out has spent going nowhere. */
+    private int taxiOutStalledTicks;
     /** Marked stand this arrival is taxiing to, and standing on once it gets there. */
     private Airfield.@Nullable ParkingSpot standTarget;
     /** Legs still to drive on the way to the stand; the last one is the stand itself. */
@@ -195,6 +197,7 @@ public class PlaneAutopilot {
         this.departurePlan = null;
         this.departureHoldTicks = 0;
         this.departureBlockedReported = false;
+        this.taxiOutStalledTicks = 0;
         this.standTarget = null;
         this.taxiInRoute = List.of();
         this.clearOfRunway = false;
@@ -241,6 +244,11 @@ public class PlaneAutopilot {
      * {@link DeparturePlan}. It reproduces the choice {@code AutopilotSpawner} already made when it
      * put the aircraft on its parking spot — the same inputs and the same score — so the aircraft
      * never taxis to the opposite end from the one it was parked beside.
+     *
+     * <p>The score therefore uses {@link DeparturePlan#SCORING_ROTATION_MULTIPLIER} rather than this
+     * aircraft's own rotation multiplier: the spawner picks the parking spot before there is an
+     * aircraft to ask, so a multiplier read from the entity here is one the other half of the pair
+     * cannot see. See that constant for the measurement.
      */
     private static @Nullable DeparturePlan resolveDeparture(PlaneEntity plane, FlightPlan plan) {
         if (plan.departureAirfield() == null || !(plane.level() instanceof ServerLevel serverLevel)) {
@@ -251,7 +259,7 @@ public class PlaneAutopilot {
             return null;
         }
         return DeparturePlan.decide(serverLevel, airfield, plan.currentWaypointGround(),
-            plane.autopilotRotationSpeedMultiplier());
+            DeparturePlan.SCORING_ROTATION_MULTIPLIER);
     }
 
     /**
@@ -809,6 +817,12 @@ public class PlaneAutopilot {
      *
      * <p>Nothing here moves the aircraft: it is throttle, the same nosewheel steering the roll-out
      * uses, and the elevator held at neutral.
+     *
+     * <p><b>Both stages are bounded, and they end differently.</b> The lineup gives up and departs
+     * anyway, because by then the aircraft owns the strip and the only question left is whether it
+     * is straight on it. The run to the threshold gives up and ends the flight, because an aircraft
+     * that cannot reach the threshold is not going to fly and is sitting on a reservation the whole
+     * field is queued behind.
      */
     private void tickTaxi(PlaneEntity plane) {
         if (departureEnd == null) {
@@ -834,6 +848,29 @@ public class PlaneAutopilot {
 
         if (distance > AutopilotConfig.TAXI_LINEUP_RADIUS) {
             cmdHeading = AutopilotMath.headingTo(plane.position(), lineup);
+            // Stuck, or taking implausibly long, on the way to the threshold. The timeout below
+            // covers the lineup and nothing else, because it is only reached once the aircraft is
+            // already at the threshold — so a taxi that never gets there had no bound at all, and
+            // the runway reservation is taken on the way into this mode. One aircraft grinding
+            // against a fence therefore shut the whole field: the departure gate has no timeout by
+            // design, and an arrival that cannot occupy the strip holds instead of landing.
+            //
+            // Ending the flight where it stands is the same answer tickTaxiIn gives to the same
+            // question, and for the same reason: there is nothing to wait for, and stop() gives the
+            // strip back so the rest of the traffic moves again.
+            if (plane.getDeltaMovement().horizontalDistance() < AutopilotConfig.TAXI_IN_STALLED_SPEED) {
+                taxiOutStalledTicks++;
+            } else {
+                taxiOutStalledTicks = 0;
+            }
+            if (taxiOutStalledTicks > AutopilotConfig.TAXI_IN_STALLED_TICKS
+                || modeTicks > AutopilotConfig.TAXI_TIMEOUT) {
+                AutopilotFeedback.report(owner, "Plane #" + plane.getId()
+                    + " gave up taxiing out at " + departureEnd.airfield().name() + "/"
+                    + departureEnd.designator() + ", " + Math.round(distance)
+                    + " blocks short of the threshold; runway released.");
+                stop(plane);
+            }
             return;
         }
 
@@ -1042,8 +1079,10 @@ public class PlaneAutopilot {
         cmdSpeed = AutopilotConfig.STRIKE_SPEED;
         // A strike aircraft carries a booster, which raises the throttle ceiling from 5 to 10. The
         // throttle loop clamps to this, so without it the loop would quietly pull the lever back to
-        // 5 and the run would arrive slow.
-        cmdMaxThrottle = BoosterUpgrade.MAX_THROTTLE;
+        // 5 and the run would arrive slow. Asked of the airframe rather than assumed, as every other
+        // mode does: PlaneEntity#setThrottle does not clamp, so a hard 10 on an aircraft with no
+        // booster would command a notch it does not have.
+        cmdMaxThrottle = maxThrottle(plane);
 
         double distance = AutopilotMath.horizontalDistance(position, target);
 
@@ -1137,10 +1176,13 @@ public class PlaneAutopilot {
      * </ul>
      *
      * <p>The range itself is {@link ArrivalPlan#decisionRange}, which is the fix distance plus two
-     * of the aircraft's own turn radii — 419 blocks for the starter airframe at cruise speed. It is
-     * measured to the <em>threshold</em> rather than to the intercept fix because an arrival from
-     * abeam never passes near the fix at all: it would sail past the decision and end up overhead
-     * again, which is the behaviour being removed.
+     * of the aircraft's own turn radii — 419 blocks for the starter airframe at cruise speed. The
+     * fix distance is {@link ArrivalPlan#standardInterceptDistance}, i.e. the shortest final this
+     * airframe can fly rather than the constant 300; see that method for why the two are not the
+     * same thing on anything heavier than the starter plane. It is measured to the
+     * <em>threshold</em> rather than to the intercept fix because an arrival from abeam never passes
+     * near the fix at all: it would sail past the decision and end up overhead again, which is the
+     * behaviour being removed.
      */
     private boolean arrivalDecisionReached(PlaneEntity plane) {
         if (plan == null || !plan.onFinalLeg() || plan.airfieldName() == null
@@ -1155,8 +1197,9 @@ public class PlaneAutopilot {
             return false;
         }
         RunwayEnd end = landingEnd != null ? landingEnd : airfield.bestEnd(serverLevel, plane.position());
+        ArrivalPlan.Capability me = capability(plane);
         return AutopilotMath.horizontalDistance(plane.position(), end.threshold())
-            <= ArrivalPlan.decisionRange(capability(plane));
+            <= ArrivalPlan.decisionRange(me, ArrivalPlan.standardInterceptDistance(me));
     }
 
     /**
@@ -1636,7 +1679,14 @@ public class PlaneAutopilot {
         if (headingError > AutopilotConfig.GATE_HEADING_ERROR) {
             return String.format("heading %.0f deg off the runway", headingError);
         }
-        double allowedLateral = Math.max(AutopilotConfig.GATE_LATERAL_OFFSET, landingAirfield.width());
+        // Half the width, because that is what "off the centreline" means everywhere else this
+        // number appears — landingProblem judges the aircraft that has stopped against width/2, and
+        // the survey funnel is sampled across width/2 either side. Against the full width the gate
+        // allowed twice the strip: on a 25-wide runway an aircraft 20 blocks off the centreline was
+        // cleared to flare, put its wheels down beside the strip, and was then told by the roll-out
+        // that it had not landed. GATE_LATERAL_OFFSET stays as the floor so a narrow field is still
+        // landable.
+        double allowedLateral = Math.max(AutopilotConfig.GATE_LATERAL_OFFSET, landingAirfield.width() / 2.0);
         if (Math.abs(lateral) > allowedLateral) {
             return String.format("%.0f blocks off the centreline", Math.abs(lateral));
         }
@@ -1761,10 +1811,17 @@ public class PlaneAutopilot {
             // Airfield#arrivalStand. Said out loud rather than passed over in silence, because "the
             // aircraft is sitting on the runway" now has two possible causes and they need telling
             // apart.
+            //
+            // An improvised strip is the second of them, and it gets its own sentence: resolveLanding
+            // invented it for this one flight and never registered it, so neither the survey tool nor
+            // the park subcommand has anything to act on under that name and naming them would be
+            // advice nobody can follow.
             AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " stopped on the runway at "
-                + landingAirfield.name() + ": no marked parking. Mark a stand with the Runway Survey"
-                + " Tool in parking mode, or /autopilot airfields park \""
-                + landingAirfield.name() + "\" <x y z>.");
+                + landingAirfield.name() + ": " + (isRegistered(plane, landingAirfield)
+                    ? "no marked parking. Mark a stand with the Runway Survey Tool in parking mode,"
+                        + " or /autopilot airfields park \"" + landingAirfield.name() + "\" <x y z>."
+                    : "improvised landing ground, so there are no stands to taxi to. Survey a runway"
+                        + " here to give arrivals somewhere to park."));
             return false;
         }
         // Every stand resident before any of them is judged. "Is that stand free" is answered partly
@@ -1793,6 +1850,12 @@ public class PlaneAutopilot {
             + " via " + taxiInRoute.size() + (taxiInRoute.size() == 1 ? " leg." : " legs."));
         setMode(plane, AutopilotMode.TAXI_IN);
         return true;
+    }
+
+    /** Whether this is a surveyed field, as opposed to one {@link #resolveLanding} invented. */
+    private static boolean isRegistered(PlaneEntity plane, Airfield airfield) {
+        return plane.level() instanceof ServerLevel serverLevel
+            && AutopilotSavedData.get(serverLevel).get(airfield.name()) != null;
     }
 
     /**

@@ -2,6 +2,7 @@ package xyz.przemyk.simpleplanes.datapack;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.TagParser;
@@ -22,7 +23,6 @@ import org.slf4j.LoggerFactory;
 import java.io.Reader;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * See {@link PlaneLiquidFuelReloadListener} — same 26.2 reload-listener rewrite, same on-disk
@@ -55,9 +55,9 @@ public class PlanePayloadReloadListener extends SimplePreparableReloadListener<M
         for (Map.Entry<Identifier, JsonElement> entry : map.entrySet()) {
             try {
                 JsonObject jsonObject = GsonHelper.convertToJsonObject(entry.getValue(), "top element");
-                Item item = Objects.requireNonNull(BuiltInRegistries.ITEM.getValue(Identifier.parse(jsonObject.get("item").getAsString())), "missing item");
-                Block renderBlock = Objects.requireNonNull(BuiltInRegistries.BLOCK.getValue(Identifier.parse(jsonObject.get("block").getAsString())), "missing block");
-                EntityType<?> dropSpawnEntity = Objects.requireNonNull(BuiltInRegistries.ENTITY_TYPE.getValue(Identifier.parse(jsonObject.get("entity").getAsString())), "missing entity");
+                Item item = require(BuiltInRegistries.ITEM, jsonObject, "item");
+                Block renderBlock = require(BuiltInRegistries.BLOCK, jsonObject, "block");
+                EntityType<?> dropSpawnEntity = require(BuiltInRegistries.ENTITY_TYPE, jsonObject, "entity");
                 CompoundTag compoundTag;
                 if (jsonObject.has("entity_nbt")) {
                     String tag = GsonHelper.convertToString(jsonObject.get("entity_nbt"), "entity_nbt");
@@ -71,5 +71,19 @@ public class PlanePayloadReloadListener extends SimplePreparableReloadListener<M
                 LOGGER.error("Parsing error loading plane payload {}", entry.getKey(), e);
             }
         }
+    }
+
+    /**
+     * Reads one registry id out of the entry, refusing an id the registry does not know.
+     *
+     * <p>The item, block and entity registries are defaulted: {@code getValue} answers with air or a
+     * pig for an id that is not there rather than with null, so a mistyped payload used to load as a
+     * working entry keyed on air — which then matched an empty hand. {@code getOptional} is the
+     * lookup that actually reports the miss.
+     */
+    private static <T> T require(Registry<T> registry, JsonObject jsonObject, String field) {
+        Identifier id = Identifier.parse(GsonHelper.getAsString(jsonObject, field));
+        return registry.getOptional(id).orElseThrow(
+            () -> new IllegalArgumentException("unknown " + field + " " + id));
     }
 }

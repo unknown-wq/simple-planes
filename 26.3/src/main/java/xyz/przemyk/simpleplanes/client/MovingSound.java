@@ -32,6 +32,7 @@ public class MovingSound extends AbstractTickableSoundInstance {
     public void tick() {
         if (!entity.isAlive()) {
             stop();
+            playingRecords.remove(entity, this);
         } else {
             x = entity.getX();
             y = entity.getY();
@@ -46,6 +47,11 @@ public class MovingSound extends AbstractTickableSoundInstance {
         }
 
         Entity entity = minecraft.level.getEntity(jukeboxPacket.planeEntityID());
+        if (entity == null) {
+            // Nothing to hang the sound on: MovingSound#tick would dereference it every tick.
+            return;
+        }
+
         Item item = BuiltInRegistries.ITEM.getValue(jukeboxPacket.record());
         if (item == null) {
             return;
@@ -68,6 +74,16 @@ public class MovingSound extends AbstractTickableSoundInstance {
 
     public static void play(SoundEvent event, Entity entity) {
         Minecraft.getInstance().getSoundManager().play(new MovingSound(event, entity));
+    }
+
+    /**
+     * Drops every remembered record, called when the client leaves a world.
+     *
+     * <p>The table is keyed by {@link Entity} and is otherwise only ever emptied one entry at a
+     * time, so without this it keeps whole levels' worth of planes alive across a world change.
+     */
+    public static void clear() {
+        playingRecords.clear();
     }
 
     public static void remove(Entity entity) {

@@ -41,8 +41,9 @@ import net.minecraft.world.entity.player.Player;
  * spawn categories. The {@code getTarget()} clause is then added on top to catch <em>provoked
  * neutrals</em>: a wolf pack, an angry bee swarm, an iron golem that has decided a player is a
  * criminal. Those are not {@code Enemy} and are genuinely trying to kill somebody, and the clause
- * only fires when their current target is a player or the gunship itself, so an owned wolf fighting
- * a zombie is left alone. It is deliberately written against a player rather than against the
+ * only fires when their current target is a player, so an owned wolf fighting a zombie is left
+ * alone. It cannot also ask whether they are attacking the gunship, for the reason given above:
+ * {@code Mob#getTarget()} is a {@code LivingEntity} and an aircraft is not one. It is deliberately written against a player rather than against the
  * gunship: mobs cannot target a vehicle, so "is it attacking me" is not a question that has an
  * answer here, and "is it attacking a person" is.
  *
@@ -62,8 +63,7 @@ public final class HostileTargets {
     private HostileTargets() {}
 
     /**
-     * @param gunship the aircraft doing the shooting, so a mob that has decided to attack <em>it</em>
-     *                counts as hostile
+     * @param gunship the aircraft doing the shooting, which is never its own target
      */
     public static boolean isHostile(Entity candidate, Entity gunship) {
         if (candidate instanceof Player || !candidate.isAlive() || candidate == gunship) {

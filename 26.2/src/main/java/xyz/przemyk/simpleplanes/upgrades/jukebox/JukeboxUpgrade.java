@@ -1,5 +1,6 @@
 package xyz.przemyk.simpleplanes.upgrades.jukebox;
 
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.server.level.ServerLevel;
@@ -38,19 +39,23 @@ public class JukeboxUpgrade extends LargeUpgrade {
     public void onItemRightClick(Player player, InteractionHand hand) {
         if (!planeEntity.level().isClientSide()) {
             ItemStack itemStack = player.getItemInHand(hand);
-            if (!itemStack.is(record.getItem())) {
-                ItemStack oldRecord = record;
-                record = itemStack.copy();
-                if (!player.isCreative()) {
-                    itemStack.shrink(1);
-                }
-                if (!oldRecord.isEmpty()) {
-                    player.addItem(oldRecord);
-                }
-                player.awardStat(Stats.PLAY_RECORD);
-                SimplePlanesNetworking.sendToPlayersTrackingEntity(planeEntity,
-                    new JukeboxPacket(BuiltInRegistries.ITEM.getKey(itemStack.getItem()), planeEntity.getId()));
+            // Only a playable disc goes in, and only one of it. Taking whatever was in hand meant
+            // a stack of anything could be swapped in, stored whole, and handed straight back on
+            // the next swap while the hand kept all but one of it.
+            if (!itemStack.has(DataComponents.JUKEBOX_PLAYABLE) || itemStack.is(record.getItem())) {
+                return;
             }
+            ItemStack oldRecord = record;
+            record = itemStack.copyWithCount(1);
+            if (!player.isCreative()) {
+                itemStack.shrink(1);
+            }
+            if (!oldRecord.isEmpty()) {
+                player.addItem(oldRecord);
+            }
+            player.awardStat(Stats.PLAY_RECORD);
+            SimplePlanesNetworking.sendToPlayersTrackingEntity(planeEntity,
+                new JukeboxPacket(BuiltInRegistries.ITEM.getKey(record.getItem()), planeEntity.getId()));
         }
     }
 
