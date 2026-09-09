@@ -97,8 +97,9 @@ public final class AirfieldReport {
      * {@link Airfield#parkingSpotProblem}, which is the whole of the judgement
      * {@code /autopilot airfields park} and the survey tool apply to a square a player picks. Nothing
      * is stored that a player could not have marked at that spot themselves, and nothing is accepted
-     * on weaker evidence than theirs: the four tests are the four ways the ground handling gets
-     * stuck, and passing them is what "marked" has always meant in this code. What a human click
+     * on weaker evidence than theirs: those tests are the ways the ground handling gets stuck plus
+     * the two the strip itself is held to — no fluid over the square, and clear air above it — and
+     * passing them is what "marked" has always meant in this code. What a human click
      * carries that this does not is a <em>preference</em> — the hangar they want the aircraft next
      * to — which is why the report says the stand was derived and where, and why removing it is one
      * gesture.
@@ -197,22 +198,25 @@ public final class AirfieldReport {
         return "airfield-" + index;
     }
 
-    /** Everything the survey measured, which is the point of the tool. */
-    public static void report(AutopilotOutput output, Level level, Airfield airfield) {
-        report(output, level, airfield, null);
-    }
-
     /**
-     * As {@link #report(AutopilotOutput, Level, Airfield)}, saying so when the survey supplied the
-     * stand itself.
+     * Everything the survey measured about a registered airfield, which is the point of the tool.
      *
-     * @param derivedStand the stand {@link #deriveStand} just worked out, or null when every stand
-     *                     on this airfield was marked by hand — which is the case for a re-survey
-     *                     and for every caller outside {@code surveyAndRegister}
+     * <p><b>The surface answer is supplied by the caller rather than measured here</b>, and there is
+     * deliberately no overload that measures it. {@link Airfield#surfaceProblem(Level)} is the
+     * expensive question in this file — up to 325 heightmap lookups and some two thousand block
+     * reads, on the server thread — and every caller that prints a report has already had to ask it
+     * to decide whether there is an airfield to report at all. {@code resurvey} asked it and then
+     * called a convenience overload that asked it again: one command, two full scans of the strip.
+     *
+     * @param derivedStand   the stand {@link #deriveStand} just worked out, or null when every stand
+     *                       on this airfield was marked by hand — which is the case for a re-survey
+     *                       and for every caller outside {@code surveyAndRegister}
+     * @param surfaceProblem what {@link Airfield#surfaceProblem(Level)} told the caller about this
+     *                       strip, and null when it told them nothing
      */
     public static void report(AutopilotOutput output, Level level, Airfield airfield,
-                              @Nullable BlockPos derivedStand) {
-        report(output, level, airfield, derivedStand, airfield.surfaceProblem(level), true);
+                              @Nullable BlockPos derivedStand, @Nullable String surfaceProblem) {
+        report(output, level, airfield, derivedStand, surfaceProblem, true);
     }
 
     /**
@@ -276,7 +280,7 @@ public final class AirfieldReport {
         }
         if (derivedStand != null) {
             // Said out loud, and said as a derivation rather than as a decision. The square passed
-            // the same four tests a stand marked by hand passes, so it is a stand and not a guess —
+            // the same tests a stand marked by hand passes, so it is a stand and not a guess —
             // but it is a stand the player did not choose, and the one thing the tests cannot check
             // is whether it is where they wanted it. So the coordinate is printed, and so is the way
             // to move it.

@@ -667,9 +667,13 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      *
      * <p>Marked spots are validated when they are marked rather than when they are used, so the
      * player who put one in the wrong place is told immediately instead of finding out three
-     * minutes into a sortie. The four tests are exactly the four ways the ground handling gets
-     * stuck: nothing there to stand on, a step up or down onto the strip, a ditch on the way, and a
-     * spot so far from the runway that the straight-line taxi is a journey of its own.
+     * minutes into a sortie. Four of the tests are the four ways the ground handling gets stuck:
+     * nothing there to stand on, a step up or down onto the strip, a ditch on the way, and a spot so
+     * far from the runway that the straight-line taxi is a journey of its own.
+     *
+     * <p>The other two are the ones the strip's own surface rule makes and this list used to be
+     * exempt from — standing fluid over the square, and something in the air above it. See
+     * {@link #standColumnProblem}.
      */
     public static @Nullable String parkingSpotProblem(Level level, Airfield airfield, BlockPos spot) {
         Vec3 probe = new Vec3(spot.getX() + 0.5, 0, spot.getZ() + 0.5);
@@ -685,6 +689,10 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         int surface = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
         if (surface == TerrainScanner.UNKNOWN_HEIGHT) {
             return "no ground there (the chunk is not loaded, or there is nothing to stand on)";
+        }
+        String column = standColumnProblem(level, probe, surface);
+        if (column != null) {
+            return column;
         }
         if (Math.abs(surface - nearest.y) > AutopilotConfig.PARKING_MAX_ELEVATION_DIFFERENCE) {
             return String.format("%.0f blocks off the runway elevation; an aircraft cannot taxi up or"
@@ -714,12 +722,73 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
+     * Why an aircraft cannot stand on this column, or null when it can. The two questions
+     * {@link #surfaceProblem(Level, Vec3, Vec3, int)} asks about every column of the strip, asked
+     * about one square of apron: is the block it would rest on fluid, and is there anything over it.
+     *
+     * <p><b>Fluid.</b> {@link TerrainScanner#surfaceHeight} is the MOTION_BLOCKING heightmap, which
+     * counts a fluid as ground and so reports a waterline as though it were a surface — and every
+     * other test on a stand then agrees that it is one. A flooded ditch beside the runway is level
+     * with the strip because the water is, and the taxi to it is rollable because a pond is flat, so
+     * the stand was stored, a departure was spawned on the surface of the water and an arrival taxied
+     * into it. The strip itself has refused fluid ever since the surface rule arrived
+     * ({@code permittedCover}); the apron beside it is now held to the same rule.
+     *
+     * <p><b>Headroom.</b> {@link AutopilotConfig#RUNWAY_CLEAR_HEIGHT} blocks of the same permitted
+     * cover the strip demands, so a square under a low roof or inside a shed is refused instead of
+     * being marked and then spawned into. This matters more than it did: the survey now derives a
+     * stand unprompted on every fresh field, where before a human had to pick one and could see what
+     * was over it. A hangar tall enough to hold an aircraft passes, exactly as a runway with a canopy
+     * well above it does.
+     *
+     * <p><b>Four block reads, and no second heightmap.</b> The obvious way to ask about the fluid is
+     * {@link TerrainScanner#isLandable}, which compares MOTION_BLOCKING with OCEAN_FLOOR and costs no
+     * block lookup at all. It cannot be used here: OCEAN_FLOOR carries {@code Usage.LIVE_WORLD} and is
+     * never sent to a client, and a client chunk holds it unprimed, so on the logical client it
+     * answers "unknown" for every column in the world. {@link #parkingSpotProblem} is exactly the
+     * function the survey tool's preview runs on the client, every tick, to decide whether the square
+     * under the player's crosshair is shaded green — and answering it off that heightmap would shade
+     * every square in the world red. The block under the surface, and the blocks above it, read the
+     * same on both sides.
+     *
+     * @param surface the column's surface as {@link TerrainScanner#surfaceHeight} reports it: the
+     *                first free block, so the block that would be stood on is one below
+     */
+    private static @Nullable String standColumnProblem(Level level, Vec3 probe, int surface) {
+        int x = (int) Math.floor(probe.x);
+        int z = (int) Math.floor(probe.z);
+        BlockPos ground = new BlockPos(x, surface - 1, z);
+        BlockState under = level.getBlockState(ground);
+        if (!under.getFluidState().isEmpty()) {
+            return "it stands on " + blockName(under) + " at " + ground.toShortString()
+                + "; an aircraft parks on ground, not on a waterline";
+        }
+        for (int y = surface; y < surface + AutopilotConfig.RUNWAY_CLEAR_HEIGHT; y++) {
+            BlockPos pos = new BlockPos(x, y, z);
+            BlockState state = level.getBlockState(pos);
+            if (!permittedCover(state)) {
+                return blockName(state) + " is over it at " + pos.toShortString()
+                    + "; a stand needs " + AutopilotConfig.RUNWAY_CLEAR_HEIGHT
+                    + " blocks of clear air above it, as the runway does";
+            }
+        }
+        return null;
+    }
+
+    /**
      * The block a stand on this column is stored as: the surface block itself, exactly as a
      * threshold is stored.
      *
      * <p>One place, because more than one thing produces a stand now. A click on the side of a
      * block, a click on its top and a square the survey worked out for itself all have to come out
      * as the same stored position, or the same square would read as two different stands.
+     *
+     * <p>Deliberately still the clearance surface, which is the convention a threshold is stored in
+     * and the one every elevation on this airfield is compared against. On a column with water over
+     * it that block is the water itself — which is why a column with water over it is no longer a
+     * stand at all: {@link #standColumnProblem} refuses it before anything is stored. Reading a
+     * second heightmap here instead would fix the water case by storing a stand under the water and
+     * leave stands and thresholds measured off different surfaces everywhere else.
      *
      * <p>Only meaningful on a column whose chunk is loaded; ask
      * {@link #parkingSpotProblem} first, which refuses an unknown column before anything else.
@@ -756,14 +825,26 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
-     * The surface at {@code probe} as a parking position, or null when it is unknown or not level
-     * with the runway. {@code TerrainScanner.surfaceHeight} reports the first free block, which is
-     * the same convention {@link #pointA()} uses for a threshold, so the two are directly comparable.
+     * The surface at {@code probe} as a parking position, or null when it is unknown, under fluid,
+     * or not level with the runway. {@code TerrainScanner.surfaceHeight} reports the first free
+     * block, which is the same convention {@link #pointA()} uses for a threshold, so the two are
+     * directly comparable.
      */
     private static @Nullable Vec3 groundedIfLevelWith(Level level, Vec3 probe, double runwayElevation) {
         int surface = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
         if (surface == TerrainScanner.UNKNOWN_HEIGHT
             || Math.abs(surface - runwayElevation) > AutopilotConfig.PARKING_MAX_ELEVATION_DIFFERENCE) {
+            return null;
+        }
+        // Ground, not a waterline. This is every parking position the code ever produces — the
+        // derived aprons, the square an arrival taxis to, and each sample of the taxi path itself —
+        // and the heightmap answers "level with the runway" with a yes for the surface of a pond,
+        // which is how an aircraft came to be spawned on water beside a lake and taxied through a
+        // flooded ditch on the way to the threshold. One block read, for the reason
+        // standColumnProblem gives for reading blocks rather than consulting OCEAN_FLOOR: this runs
+        // on the client too, and that heightmap is not there.
+        if (!level.getBlockState(BlockPos.containing(probe.x, surface - 1, probe.z))
+            .getFluidState().isEmpty()) {
             return null;
         }
         return new Vec3(probe.x, surface, probe.z);
