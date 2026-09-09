@@ -515,8 +515,7 @@ public final class AirfieldBrowser {
         List<BlockPos> spots = new ArrayList<>(airfield.parkingSpots());
         // The surface block, exactly as a threshold is stored, so a click on the side of a block and
         // a click on top of it produce the same spot.
-        int surface = TerrainScanner.surfaceHeight(level, spot.getX() + 0.5, spot.getZ() + 0.5);
-        BlockPos stored = new BlockPos(spot.getX(), surface - 1, spot.getZ());
+        BlockPos stored = Airfield.standBlock(level, spot.getX(), spot.getZ());
         spots.add(stored);
         data.put(airfield.withParkingSpots(spots));
         output.component(AutopilotText.tr("manage.parked",

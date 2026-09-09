@@ -7,6 +7,8 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
+
 /**
  * Surveying a runway and printing what was measured. Lives here rather than on the survey item so
  * the item and {@code /autopilot survey} produce identical output and neither needs a player.
@@ -40,14 +42,67 @@ public final class AirfieldReport {
             ? surveyed.withName(uniqueName(data))
             : surveyed.withName(existing.name()).withParkingSpots(existing.parkingSpots())
                 .withRequiredStands(existing.requiresStands());
+        BlockPos derived = deriveStand(level, airfield, existing == null);
+        if (derived != null) {
+            airfield = airfield.withParkingSpots(List.of(derived));
+        }
         data.put(airfield);
         if (existing != null) {
             output.line("Re-surveyed " + airfield.name() + ", replacing the previous measurement.");
         }
         reportCentring(output, first, second, airfield);
-        report(output, level, airfield);
+        report(output, level, airfield, derived);
         highlight(level, airfield);
         return airfield;
+    }
+
+    /**
+     * A stand for a runway that has just been surveyed and has none, or null when the ground beside
+     * neither threshold will do.
+     *
+     * <p>The candidate squares are the ones {@link Airfield#parkingPosition} already works out for a
+     * departure — beside the threshold, clear of the strip — and each is then put through
+     * {@link Airfield#parkingSpotProblem}, which is the whole of the judgement
+     * {@code /autopilot airfields park} and the survey tool apply to a square a player picks. Nothing
+     * is stored that a player could not have marked at that spot themselves, and nothing is accepted
+     * on weaker evidence than theirs: the four tests are the four ways the ground handling gets
+     * stuck, and passing them is what "marked" has always meant in this code. What a human click
+     * carries that this does not is a <em>preference</em> — the hangar they want the aircraft next
+     * to — which is why the report says the stand was derived and where, and why removing it is one
+     * gesture.
+     *
+     * <p>Three cases are deliberately left alone.
+     * <ul>
+     *   <li><b>A re-survey.</b> {@code surveyAndRegister} already carries a registered field's
+     *       stands and its grandfathering across, and a field from before the stand rule is entitled
+     *       to have no stand. Deriving one there would put a stand on a working world's runway that
+     *       nobody asked for.</li>
+     *   <li><b>A field that is not held to the stand rule, or already has a stand.</b> Both are
+     *       {@link Airfield#standsMissing()}; there is nothing missing to supply.</li>
+     *   <li><b>A strip too short to land on.</b> It is refused for its length whatever is marked
+     *       beside it, so clearing its "not finished" line would only make the report agree with
+     *       itself less.</li>
+     * </ul>
+     *
+     * <p>The on-strip fallback is skipped as well. It is the last resort for a departure, which has
+     * to start somewhere and is about to roll away; stored as a stand it would send every arrival
+     * onto the landing area and leave it there.
+     */
+    private static @Nullable BlockPos deriveStand(ServerLevel level, Airfield airfield, boolean fresh) {
+        if (!fresh || !airfield.standsMissing() || !AirfieldBrowser.isUsable(airfield)) {
+            return null;
+        }
+        for (RunwayEnd end : airfield.ends()) {
+            Airfield.ParkingSpot candidate = Airfield.parkingPosition(level, end);
+            if (candidate.onRunway()) {
+                continue;
+            }
+            BlockPos square = BlockPos.containing(candidate.position());
+            if (Airfield.parkingSpotProblem(level, airfield, square) == null) {
+                return Airfield.standBlock(level, square.getX(), square.getZ());
+            }
+        }
+        return null;
     }
 
     /**
@@ -112,6 +167,19 @@ public final class AirfieldReport {
 
     /** Everything the survey measured, which is the point of the tool. */
     public static void report(AutopilotOutput output, Level level, Airfield airfield) {
+        report(output, level, airfield, null);
+    }
+
+    /**
+     * As {@link #report(AutopilotOutput, Level, Airfield)}, saying so when the survey supplied the
+     * stand itself.
+     *
+     * @param derivedStand the stand {@link #deriveStand} just worked out, or null when every stand
+     *                     on this airfield was marked by hand — which is the case for a re-survey
+     *                     and for every caller outside {@code surveyAndRegister}
+     */
+    public static void report(AutopilotOutput output, Level level, Airfield airfield,
+                              @Nullable BlockPos derivedStand) {
         RunwayEnd endA = airfield.endA();
         RunwayEnd endB = airfield.endB();
         // The counts the survey stored, which are the ones bestEnd will use for the rest of this
@@ -135,7 +203,19 @@ public final class AirfieldReport {
             + ", " + endB.designator() + " -> " + obstaclesB
             + " (of " + (AutopilotConfig.SURVEY_APPROACH_LENGTH / AutopilotConfig.SURVEY_APPROACH_STEP) + " samples)");
         output.line("  preferred landing direction: " + best.designator());
-        if (!airfield.parkingSpots().isEmpty()) {
+        if (derivedStand != null) {
+            // Said out loud, and said as a derivation rather than as a decision. The square passed
+            // the same four tests a stand marked by hand passes, so it is a stand and not a guess —
+            // but it is a stand the player did not choose, and the one thing the tests cannot check
+            // is whether it is where they wanted it. So the coordinate is printed, and so is the way
+            // to move it.
+            output.success("  stand derived at " + derivedStand.toShortString()
+                + ": level ground beside a threshold, checked exactly as a stand you mark yourself"
+                + " is checked. " + airfield.name() + " is ready to fly from.");
+            output.line("  Somewhere else would suit you better? Sneak + right-click that stand with"
+                + " the Runway Survey Tool in parking mode to drop it, then right-click where you"
+                + " want it — or /autopilot airfields unpark \"" + airfield.name() + "\" <x y z>.");
+        } else if (!airfield.parkingSpots().isEmpty()) {
             output.line("  marked parking spots: " + airfield.parkingSpots().size());
         } else if (airfield.standsMissing()) {
             // The survey is not the end of the job any more, so it does not print as though it were.

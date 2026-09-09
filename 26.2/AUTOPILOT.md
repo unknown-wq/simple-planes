@@ -1527,12 +1527,14 @@ Four things follow from the flag, and none of them touches a grandfathered field
 
 * **The survey says the job is not done**, in the report, with what is missing spelled out:
   `NOT FINISHED: no parking marked … Next: mark a stand beside the runway with the Runway Survey
-  Tool in parking mode, or: /autopilot airfields park "airfield-3" <x y z>`.
-* **The tool puts itself into parking mode** after such a survey, and says so on the line after the
-  report. The report names the mode but not the gesture that reaches it, because the tool is already
-  in that mode by the time the player reads it — telling them to sneak + right-click the air there
-  would be telling them to toggle straight back out. Re-surveying a field that already has stands
-  leaves the mode alone.
+  Tool in parking mode, or: /autopilot airfields park "airfield-3" <x y z>`. It says this when the
+  survey could not find a stand for itself — see below.
+* **The tool puts itself into parking mode** after a survey that leaves the field unfinished, and
+  says so on the line after the report. The report names the mode but not the gesture that reaches
+  it, because the tool is already in that mode by the time the player reads it — telling them to
+  sneak + right-click the air there would be telling them to toggle straight back out. A survey that
+  derived its own stand, one that re-surveys a field that already has stands, and a grandfathered
+  field all leave the mode alone.
 * **The browser marks it `NO PARKING`**, in red, in the same column and the same tone as `TOO SHORT`,
   and `airfields info` prints the whole instruction.
 * **Sorties are refused at the command**, at both ends — `flight` checks the departure and the
@@ -1541,6 +1543,44 @@ Four things follow from the flag, and none of them touches a grandfathered field
   arrives at by stopping on the landing area, which is the exact defect this feature exists to
   remove, so completing the flight and leaving the mess behind is not an outcome worth having. It
   costs nothing to obey — the refusal names the one command that fixes it.
+
+**The survey marks the first stand itself when the ground allows it.** A fresh survey of a usable
+strip asks `Airfield.parkingPosition` for the square a departure from each threshold would use —
+beside the strip, a little way back from the threshold — and puts it through
+`Airfield.parkingSpotProblem`, the same four tests `/autopilot airfields park` holds a player's own
+click to: ground to stand on, no step up or down onto the strip, a line to the threshold that rolls
+the whole way, and clearance from any other stand. If one of the two passes, it is stored as an
+ordinary marked stand and the report says so and where:
+
+```
+  stand derived at 672, -61, -6: level ground beside a threshold, checked exactly as a stand you
+  mark yourself is checked. airfield-3 is ready to fly from.
+  Somewhere else would suit you better? Sneak + right-click that stand with the Runway Survey Tool
+  in parking mode to drop it, then right-click where you want it — or /autopilot airfields unpark
+  "airfield-3" <x y z>.
+```
+
+If neither passes, nothing is stored and the report prints the `NOT FINISHED` block above, exactly
+as it did.
+
+This is not the derived apron the stand rule was written against, and the distinction is the whole
+of the argument. That apron was worked out at the moment of use and acted on unexamined — the
+javadoc of `Airfield.arrivalStand` calls it "a guess at a square nobody looked at, reached by a taxi
+nobody validated", and that objection still holds against it. `parkingSpotProblem` *is* the looking:
+it is not a weaker check applied to a machine's suggestion, it is the identical check, and `park`
+accepts a player's click on no other evidence. A stored stand also gains the thing a square derived
+on the spot never had — an identity a taxiing aircraft claims, so a second arrival picks another
+square rather than driving into the first.
+
+What the survey cannot supply is the part of a click that is not a measurement: where the player
+would *like* their aircraft to sit, next to their hangar or out of the way of their build. So the
+stand is announced with its coordinate rather than left to be found, and one gesture moves it.
+Nothing derives a stand on a **re-survey** (a registered field keeps its own stands, and a
+grandfathered one is entitled to have none), on a field that already has one, or on a strip too
+short to land on — that field is refused for its length whatever is beside it. The on-strip
+last-resort candidate is skipped too: it is where a departure starts when nothing beside the strip
+is level, and storing it as a stand would send every arrival onto the landing area and leave it
+there.
 
 **Re-surveying never changes the grandfathering.** A fresh survey sets the flag; a survey that
 replaces a registered airfield keeps whatever that airfield had, alongside its name and its spots.

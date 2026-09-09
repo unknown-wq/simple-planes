@@ -360,13 +360,31 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * The stand an arriving aircraft should taxi to, or null when it should stay where it stopped.
      *
      * <p>Deliberately a different question from {@link #parkingPosition}, and not because of the
-     * geometry. A departure is asking "where do I start", and the derived apron is a perfectly good
-     * answer when nothing is marked; an arrival is asking "is it worth leaving the runway for", and
-     * there the derived apron is not an answer at all — it is a guess at a square nobody looked at,
-     * reached by a taxi nobody validated, and an aircraft that gets it wrong is stuck off the side
-     * of the field instead of merely being in the way on the strip. So only a <em>marked</em> stand
-     * will do, and an aircraft that has nowhere marked to go simply stops where it landed, exactly
-     * as it always did.
+     * geometry. A departure is asking "where do I start", and an apron worked out on the spot is a
+     * perfectly good answer when nothing is marked; an arrival is asking "is it worth leaving the
+     * runway for", and there an apron worked out on the spot is not an answer at all — it is a guess
+     * at a square nobody looked at, reached by a taxi nobody validated, and an aircraft that gets it
+     * wrong is stuck off the side of the field instead of merely being in the way on the strip. So
+     * only a <em>marked</em> stand will do, and an aircraft that has nowhere marked to go simply
+     * stops where it landed, exactly as it always did.
+     *
+     * <p><b>"Marked" is a test, not a provenance, and one of those stands may have come from the
+     * survey rather than from a click.</b> The objection above is to a square produced at the moment
+     * it is used and acted on unexamined — it is not an objection to the geometry, which is the same
+     * geometry {@code AirfieldReport} now runs once at survey time and then puts through
+     * {@link #parkingSpotProblem} before storing anything. That is the whole of the judgement
+     * {@code park} holds a player's own click to, and refuses it for failing: ground to stand on, no
+     * step up or down onto the strip, a line to the threshold that is rollable the whole way, and
+     * clearance from the other stands. A square that passes them has been looked at in the only way
+     * this code has ever looked at one, and the taxi has been validated by the same walk that
+     * validates a player's. A stored stand also gains the thing a square derived on the spot can
+     * never have — an identity a taxiing aircraft can claim, so a second arrival picks another
+     * square instead of driving into the first; see {@link ParkingSpot#marked()}.
+     *
+     * <p>What the survey cannot supply is the part of a click that is not a measurement: where the
+     * player would <em>like</em> their aircraft to sit. So a derived stand is reported with its
+     * coordinate rather than left to be discovered, and it is removed with the same one gesture that
+     * removes any other stand.
      *
      * <p>Nearest first, measured from where the aircraft actually came to rest rather than from a
      * threshold: on a 183-block strip the two ends are 183 blocks apart and the aircraft is
@@ -689,6 +707,21 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
                 + AutopilotConfig.MAX_PARKING_SPOTS + " parking spots";
         }
         return null;
+    }
+
+    /**
+     * The block a stand on this column is stored as: the surface block itself, exactly as a
+     * threshold is stored.
+     *
+     * <p>One place, because more than one thing produces a stand now. A click on the side of a
+     * block, a click on its top and a square the survey worked out for itself all have to come out
+     * as the same stored position, or the same square would read as two different stands.
+     *
+     * <p>Only meaningful on a column whose chunk is loaded; ask
+     * {@link #parkingSpotProblem} first, which refuses an unknown column before anything else.
+     */
+    public static BlockPos standBlock(Level level, int x, int z) {
+        return new BlockPos(x, TerrainScanner.surfaceHeight(level, x + 0.5, z + 0.5) - 1, z);
     }
 
     /**
