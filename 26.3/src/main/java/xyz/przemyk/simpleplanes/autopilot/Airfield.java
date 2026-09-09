@@ -336,8 +336,23 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             return new ParkingSpot(straightBack, AutopilotMath.headingTo(straightBack, threshold), false, null);
         }
 
-        // Nothing off the strip qualifies. Park on the strip, facing down it.
-        Vec3 onRunway = AutopilotMath.pointAlong(threshold, heading, AutopilotConfig.PARKING_ON_RUNWAY_OFFSET);
+        // Nothing off the strip qualifies. Park on the strip, facing down it — stepping further
+        // along it for each square that is taken, which is the check every candidate above it
+        // already makes and the last resort was the one place that did not. The offset is fixed, so
+        // without the walk every departure from this end is placed on the same block and the second
+        // aircraft is spawned inside the first: the failure the derived aprons were given their own
+        // occupancy test for, on the one candidate that cannot fall through to anything else.
+        // Bounded by the take-off run that has to be left behind the new position, so the aircraft
+        // is never moved so far down the strip that it cannot get off it; past that the threshold
+        // square is returned, which is what this always returned.
+        double along = AutopilotConfig.PARKING_ON_RUNWAY_OFFSET;
+        Vec3 onRunway = AutopilotMath.pointAlong(threshold, heading, along);
+        while (!standFree(level, onRunway, null, null)
+            && along + AutopilotConfig.PARKING_SPOT_CLEARANCE
+                + AutopilotConfig.TAKEOFF_LENGTH_NEEDED <= departure.length()) {
+            along += AutopilotConfig.PARKING_SPOT_CLEARANCE;
+            onRunway = AutopilotMath.pointAlong(threshold, heading, along);
+        }
         return new ParkingSpot(onRunway, heading, true, null);
     }
 
@@ -586,8 +601,17 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      */
     public static boolean standFree(Level level, Vec3 position, @Nullable BlockPos marked,
                                     @Nullable PlaneEntity asker) {
-        AABB box = AABB.ofSize(position, AutopilotConfig.PARKING_SPOT_CLEARANCE * 2,
-            6.0, AutopilotConfig.PARKING_SPOT_CLEARANCE * 2);
+        // One clearance across, not two. AABB#ofSize takes the full extent, so the box used to reach
+        // a whole PARKING_SPOT_CLEARANCE to either side of the square — and that is exactly the
+        // smallest gap parkingSpotProblem lets a player leave between two stands. An aircraft is up
+        // to 3 blocks wide, so a machine standing on the next stand at the minimum legal separation
+        // had its hull inside this box and both squares read as occupied: the pair of stands could
+        // never be used at once, an arrival skipped the free one and stopped on the runway, and a
+        // departure fell through to the derived apron. Half the extent keeps the test on the square
+        // itself, still catches anything actually parked on it, and leaves a block of daylight
+        // against an aircraft on the neighbouring stand.
+        AABB box = AABB.ofSize(position, AutopilotConfig.PARKING_SPOT_CLEARANCE,
+            6.0, AutopilotConfig.PARKING_SPOT_CLEARANCE);
         if (!level.getEntities(EntityTypeTest.forClass(PlaneEntity.class), box,
             plane -> plane != asker).isEmpty()) {
             return false;
@@ -649,8 +673,14 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             return "the ground between it and the threshold is not level all the way";
         }
         for (BlockPos existing : airfield.parkingSpots()) {
-            if (existing.distSqr(spot) < AutopilotConfig.PARKING_SPOT_CLEARANCE
-                * AutopilotConfig.PARKING_SPOT_CLEARANCE) {
+            // Horizontally, and about the column rather than the block that was named. A stand is
+            // stored on the surface of its column, so naming a block a few above an existing stand
+            // is the same square — and BlockPos#distSqr is three-dimensional, so the height
+            // difference alone carried it past this clearance and marked a second stand on the exact
+            // coordinates of the first.
+            if (AutopilotMath.horizontalDistance(probe,
+                new Vec3(existing.getX() + 0.5, 0, existing.getZ() + 0.5))
+                < AutopilotConfig.PARKING_SPOT_CLEARANCE) {
                 return "there is already a parking spot at " + existing.toShortString();
             }
         }
