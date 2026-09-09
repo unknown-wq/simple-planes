@@ -1,6 +1,6 @@
-# PORT-STATUS — Simple Planes → Fabric / Minecraft 26.3-pre-2
+# PORT-STATUS — Simple Planes → Fabric / Minecraft 26.3-pre-3
 
-`26.3/` is a copy of `26.2/` converted to **Minecraft 26.3-pre-2 / Fabric loader 0.19.5 /
+`26.3/` is a copy of `26.2/` converted to **Minecraft 26.3-pre-3 / Fabric loader 0.19.5 /
 Fabric API 0.159.4+26.3 / Loom 1.17.19 / Java 25**. `26.2/` is untouched and remains the 26.2
 build. The heavy lifting — NeoForge → Fabric, and the 1.21.1 → 26.2 render-state and
 `ValueInput`/`ValueOutput` rewrites — was done in the 26.2 port and carries over unchanged; this
@@ -202,8 +202,23 @@ entries still resolve. The one API removal in this pre-release, `LootContext#get
 (now `getOptional`), is not named anywhere in Simple Planes.
 
 `pack.mcmeta` still covers it, but only just: the window is 88-120 and pre-2's data pack format is
-120 exactly. The next format bump will need `max_format` raised with it.
+120 exactly. The next format bump will need `max_format` raised with it. (It came in pre-3; see
+below.)
 
 Re-run headless on a `26.3-pre-2` dedicated server alongside MineColonies 0.0.81: clean boot,
 `simpleplanes 5.3.12` in the mod list, MineColonies' aircraft integration detected, no ERROR or
 exception in the log, clean shutdown.
+
+## 26.3-pre-2 → 26.3-pre-3
+
+The third pre-release moved the module to `26.3-pre-3` (world version 5019, resource pack 97 /
+data pack 121) and to Fabric API **0.160.2+26.3**. The loader is unchanged at 0.19.5.
+
+**One resource change, no source change.** The data pack format bump the pre-2 note predicted
+arrived: 120 became 121, one past this pack's `max_format`, so `pack.mcmeta` now declares 88-121.
+Everything else compiles and builds untouched, and all four access widener entries still resolve.
+
+The two API changes pre-3 does carry are both absent from this mod. `Util.OS` lost its URI and file
+openers (`openUri` moved to `com.mojang.blaze3d.Blaze3D`, and it takes a `URI` now), and
+`ConfirmLinkScreen` takes a `URI` rather than a `String` — Simple Planes opens no links. Nothing was
+removed at class level between pre-2 and pre-3: four classes were added and none deleted.

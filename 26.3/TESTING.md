@@ -42,13 +42,13 @@ version changes.
 
 | Source | Path | Contents |
 |---|---|---|
-| Minecraft 26.3-pre-2 | **generate it** — see below | 7243 `.java`, deobfuscated, client and server |
-| Minecraft 26.3-pre-2 | `/root/.gradle/caches/fabric-loom/26.3-pre-2/minecraft-merged.jar` | the bytecode itself; `javap -p` on it settles any question a source tree cannot |
+| Minecraft 26.3-pre-3 | **generate it** — see below | 7243 `.java`, deobfuscated, client and server |
+| Minecraft 26.3-pre-3 | `/root/.gradle/caches/fabric-loom/26.3-pre-3/minecraft-merged.jar` | the bytecode itself; `javap -p` on it settles any question a source tree cannot |
 | Upstream mod (NeoForge 1.21.1) | `<checkout>/1.21.1` | unmodified, for behaviour parity checks |
 | 26.2 behaviour parity | `<checkout>/26.2` | the previous port's own sources — `/opt/mc-src` (26.2 vanilla) is **gone** |
 
 **`/opt/mc-src-26.3` is snapshot-9, whatever the name suggests.** It has
-`WORLD_VERSION = 5011`; snapshot-10 was 5015, pre-1 5017 and pre-2 is 5018. The trees genuinely
+`WORLD_VERSION = 5011`; snapshot-10 was 5015, pre-1 5017, pre-2 5018 and pre-3 is 5019. The trees genuinely
 differ — `SurfaceRules` exists in one and is deleted in the other,
 `ChunkStatus.NOISE`/`SURFACE`/`CARVERS` collapsed into `TERRAIN`,
 and `PoseStack.mulPose(Quaternionfc)` became `PoseStack.rotate(Quaternionfc)`. Reading a signature
@@ -59,14 +59,14 @@ Generate the real thing once and grep that instead:
 ```sh
 flock /tmp/mc-build.lock /opt/gradle-9.6.1/bin/gradle -p <checkout>/26.3 genSources --no-daemon
 unzip -q -o <checkout>/26.3/.gradle/loom-cache/minecraftMaven/net/minecraft/\
-minecraft-merged-*/26.3-pre-2/minecraft-merged-*-26.3-pre-2-sources.jar -d /tmp/mc-src-pre2
-grep -n "WORLD_VERSION" /tmp/mc-src-pre2/net/minecraft/SharedConstants.java   # -> 5018
+minecraft-merged-*/26.3-pre-3/minecraft-merged-*-26.3-pre-3-sources.jar -d /tmp/mc-src-pre3
+grep -n "WORLD_VERSION" /tmp/mc-src-pre3/net/minecraft/SharedConstants.java   # -> 5019
 ```
 
 It takes about 80 seconds (Vineflower, 7243 classes) and is cached afterwards.
 | Upstream mod (NeoForge 1.21.1) | `/home/user/simple-planes/1.21.1` | unmodified, for behaviour parity checks |
 
-Claims about vanilla behaviour go in a document only after being read in the **pre-2**
+Claims about vanilla behaviour go in a document only after being read in the **pre-3**
 sources or bytecode. The physics and collision documents in this directory follow that rule against
 26.2; keep it, and re-read rather than assuming when one of them talks about a class that moved.
 
@@ -79,8 +79,8 @@ Keep it outside the repo — nothing there is committed.
 
 ```
 sp-testserver/
-├── fabric-server-launch.jar     Fabric loader 0.19.5 server launcher for 26.3-pre-2
-├── mods/fabric-api-….jar        Fabric API 0.159.4+26.3
+├── fabric-server-launch.jar     Fabric loader 0.19.5 server launcher for 26.3-pre-3
+├── mods/fabric-api-….jar        Fabric API 0.160.2+26.3
 ├── mods/simpleplanes-….jar      the mod under test — recopy after every build
 ├── start.sh  cmd.sh  stop.sh    control scripts
 ├── console.log                  full server output
