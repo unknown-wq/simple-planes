@@ -12,8 +12,6 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
-import xyz.przemyk.simpleplanes.blocks.ChargingStationBlock;
-import xyz.przemyk.simpleplanes.blocks.ChargingStationBlockEntity;
 import xyz.przemyk.simpleplanes.blocks.PlaneWorkbenchBlock;
 import xyz.przemyk.simpleplanes.blocks.PlaneWorkbenchBlockEntity;
 
@@ -46,11 +44,7 @@ public class SimplePlanesBlocks {
 
     public static final Supplier<PlaneWorkbenchBlock> PLANE_WORKBENCH_BLOCK =
         registerBlock("plane_workbench", PlaneWorkbenchBlock::new, BlockBehaviour.Properties.ofFullCopy(Blocks.CRAFTING_TABLE));
-    public static final Supplier<ChargingStationBlock> CHARGING_STATION_BLOCK =
-        registerBlock("charging_station", ChargingStationBlock::new, BlockBehaviour.Properties.ofFullCopy(Blocks.COBBLESTONE));
 
     public static final Supplier<BlockEntityType<PlaneWorkbenchBlockEntity>> PLANE_WORKBENCH_TILE =
         registerTile("plane_workbench", PlaneWorkbenchBlockEntity::new, PLANE_WORKBENCH_BLOCK);
-    public static final Supplier<BlockEntityType<ChargingStationBlockEntity>> CHARGING_STATION_TILE =
-        registerTile("charging_station", ChargingStationBlockEntity::new, CHARGING_STATION_BLOCK);
 }

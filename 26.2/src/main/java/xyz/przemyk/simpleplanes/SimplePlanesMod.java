@@ -25,6 +25,7 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesRecipes;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesSounds;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
+import xyz.przemyk.simpleplanes.upgrades.engines.liquid.LiquidEngineStorage;
 
 public class SimplePlanesMod implements ModInitializer {
 
@@ -46,6 +47,10 @@ public class SimplePlanesMod implements ModInitializer {
 
         SimplePlanesNetworking.register();
         CommonEventHandler.register();
+
+        // Offers the liquid engine's tank to ordinary fluid handling, so a pipe or a tank beside a
+        // parked aircraft can refuel it. See LiquidEngineStorage for why it is a block lookup.
+        LiquidEngineStorage.register();
 
         // autopilot feature: data components for the tools + the /autopilot debug command, plus the
         // registry whose server-tick heartbeat keeps chunks loaded around aircraft in flight.
@@ -85,12 +90,10 @@ public class SimplePlanesMod implements ModInitializer {
         SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.BOOSTER.get(), SimplePlanesUpgrades.BOOSTER.get());
         SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.HEALING.get(), SimplePlanesUpgrades.HEALING.get());
         SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.ARMOR.get(), SimplePlanesUpgrades.ARMOR.get());
-        SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.SOLAR_PANEL.get(), SimplePlanesUpgrades.SOLAR_PANEL.get());
         SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.FOLDING.get(), SimplePlanesUpgrades.FOLDING.get());
         SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.SEATS.get(), SimplePlanesUpgrades.SEATS.get());
         SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.SHOOTER.get(), SimplePlanesUpgrades.SHOOTER.get());
         SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.FURNACE_ENGINE.get(), SimplePlanesUpgrades.FURNACE_ENGINE.get());
-        SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.ELECTRIC_ENGINE.get(), SimplePlanesUpgrades.ELECTRIC_ENGINE.get());
         SimplePlanesUpgrades.registerUpgradeItem(SimplePlanesItems.LIQUID_ENGINE.get(), SimplePlanesUpgrades.LIQUID_ENGINE.get());
 
         SimplePlanesUpgrades.registerUpgradeItem(Items.BANNER.pick(DyeColor.WHITE), SimplePlanesUpgrades.BANNER.get());

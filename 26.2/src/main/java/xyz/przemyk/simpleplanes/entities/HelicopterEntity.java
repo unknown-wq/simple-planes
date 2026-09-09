@@ -18,8 +18,6 @@ import xyz.przemyk.simpleplanes.misc.MathUtil;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesConfig;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
-import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
-import xyz.przemyk.simpleplanes.upgrades.UpgradeType;
 import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
 /**
@@ -737,14 +735,6 @@ public class HelicopterEntity extends LargeAirframeEntity {
     @Override
     protected Item getItem() {
         return SimplePlanesItems.HELICOPTER_ITEM.get();
-    }
-
-    @Override
-    public boolean canAddUpgrade(UpgradeType upgradeType) {
-        if (upgradeType == SimplePlanesUpgrades.SOLAR_PANEL.get()) {
-            return false;
-        }
-        return super.canAddUpgrade(upgradeType);
     }
 
     @Override

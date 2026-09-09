@@ -1,7 +1,5 @@
 {
     "block.simpleplanes.plane_workbench": "Banco da Lavoro Aeronautico",
-    "block.simpleplanes.charging_station": "Stazione di Ricarica",
-    "item.simpleplanes.electric_engine": "Motore Elettrico",
     "item.simpleplanes.furnace_engine": "Motore a Fornace",
     "item.simpleplanes.armor": "Armatura per Aereo",
     "item.simpleplanes.propeller": "Elica",
@@ -13,11 +11,9 @@
     "item.simpleplanes.supply_crate": "Cassa di Risorse",
     "item.simpleplanes.seats": "Miglioria Sedie",
 
-    "block.simpleplanes.charger_block": "Stazione di Ricarica FE",
     "block.simpleplanes.fueling_block": "Stazione per il rifornimento",
 
     "name.simpleplanes.furnace_engine": "Motore a Fornace",
-    "name.simpleplanes.electric_engine": "Motore Elettrico",
     "name.simpleplanes.propeller": "Elica",
     "name.simpleplanes.sprayer": "Spruzzino",
     "name.simpleplanes.booster": "Booster a Razzo",
@@ -53,7 +49,6 @@
     "text.autoconfig.simpleplanes.category.default": "misc",
     "text.autoconfig.simpleplanes.category.coal": "carbone",
     "text.autoconfig.simpleplanes.category.mana": "mana",
-    "text.autoconfig.simpleplanes.category.energy": "energia",
     "text.autoconfig.simpleplanes.category.lava": "lava",
     "text.autoconfig.simpleplanes.option.TURN_THRESHOLD": "Limite di Virata",
     "text.autoconfig.simpleplanes.option.TURN_THRESHOLD.@Tooltip": "Per i joystick, una soglia per il movimento del joystick dell'aereo",
@@ -74,13 +69,11 @@
     "simpleplanes.material": "Materiale - ",
 
     "simpleplanes.furnace_engine_container": "Motore a Fornace",
-    "simpleplanes.electric_engine_container": "Motore Elettrico",
     "simpleplanes.remove_upgrades": "Rimuovi migliorie:",
     "simpleplanes:booster": "Booster",
     "simpleplanes:floaty_bedding": "Cuscino Gonfiabile",
     "simpleplanes:shooter": "Sparatore",
     "simpleplanes:furnace_engine": "Motore a Fornace",
-    "simpleplanes:electric_engine": "Motore Elettrico",
     "simpleplanes:tnt": "TNT",
     "simpleplanes:banner": "Stendardo",
     "simpleplanes:chest": "Cassa",
@@ -92,7 +85,6 @@
     "entity.simpleplanes.plane": "Aereo",
     "entity.simpleplanes.large_plane": "Aereo Grande",
     "entity.simpleplanes.helicopter": "Elicottero",
-    "entity.simpleplanes.parachute": "Paracadute",
+    "entity.simpleplanes.parachute": "Paracadute"
 
-    "simpleplanes.gui.energy": "Energia: %s FE"
 }

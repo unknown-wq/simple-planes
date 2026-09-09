@@ -233,7 +233,7 @@ sleep 8
 ./cmd.sh "autopilot survey 2654 -60 -9 2654 -60 -192"
 ./cmd.sh "autopilot airfields"
 
-./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 6'    # a field is not usable without a stand
+./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 6'    # a second stand, beside the derived one
 ./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 -8'
 ./cmd.sh 'autopilot airfields park "airfield-2" 2672 -60 6'
 ./cmd.sh 'autopilot airfields park "airfield-2" 2672 -60 -8'
@@ -242,9 +242,15 @@ sleep 8
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
 ```
 
-The four `park` calls are not optional any more: a runway surveyed by this build refuses sorties
-until at least one stand is marked beside it, and the sortie now ends on a stand rather than on the
-strip. See the marked-parking and taxi-in recipes below.
+A runway surveyed by this build refuses sorties until at least one stand is marked beside it, and
+the sortie now ends on a stand rather than on the strip. On flat ground the survey supplies that
+first stand itself and says `stand derived at …`, so a sortie will fly with no `park` call at all —
+check the survey output for that line before assuming a failure is about parking. The four calls
+are kept because the taxi-in and marked-parking recipes below want **two** stands per field, and
+because they are what exercises the marking path; if a survey has already derived a stand within
+`PARKING_SPOT_CLEARANCE` of one of these coordinates, that call is refused with `there is already a
+parking spot at …`, which is correct and not a failure of the recipe. See the marked-parking and
+taxi-in recipes below.
 
 Airfields persist in `SavedData`, so the survey only has to be done once per world. A 2000-block
 sortie takes about **two minutes** of wall clock at the 2.60 default (it was nearer four at the old

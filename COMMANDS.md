@@ -287,6 +287,85 @@ Airfield names go in quotes. Tab completion works.
 
 ---
 
+## Shuttles
+
+A shuttle is one aircraft flying between two airfields **for ever**: depart A, land B,
+taxi to a stand, wait, depart B, land A, taxi in, wait, and round again. It survives a
+restart. It is the only thing in the mod that launches a flight nobody typed a command
+for.
+
+```
+/autopilot shuttle add  <"airfield"> <"airfield"> <seconds> [type <aircraft>]
+/autopilot shuttle list
+/autopilot shuttle stop [id]
+```
+
+```mcfunction
+# a plane between two fields, one minute standing at each end
+/autopilot shuttle add "airfield-1" "airfield-2" 60
+
+# a cargo plane, five minutes on the ground each turnaround
+/autopilot shuttle add "airfield-1" "airfield-2" 300 type cargo
+
+/autopilot shuttle list
+/autopilot shuttle stop 1
+```
+
+`<seconds>` is the **turnaround**: how long the aircraft stands on its stand before it
+leaves again, not how long a leg takes. Range **10…3600**; the bounds are on the
+argument itself, so a mistyped `0` or `604800` is refused as you type it rather than
+three hours into an unattended run. It is counted in ticks of a running world, so a
+world that is shut down or lagging does not advance it.
+
+The first departure is immediate.
+
+**One airframe, reused.** The whole point is that the same plane goes back and forth.
+The first departure builds an aircraft; every departure after that flies *that* aircraft,
+picked up off the stand it parked on. If the aircraft cannot be found or used, the
+shuttle says so and retries — it never builds a replacement.
+
+**While a shuttle is waiting it keeps its aircraft's chunk loaded.** That is what makes
+it work with nobody nearby: a parked aircraft in an unloaded chunk cannot be re-tasked.
+Nine chunks per waiting shuttle, dropped the moment it departs, pauses or is stopped.
+At most 4 shuttles per dimension, for that reason.
+
+`/autopilot shuttle list` shows, per shuttle: both fields, the turnaround, how many legs
+have been flown, which aircraft, where it is in the cycle, when the next departure is
+due, and the last thing that went wrong.
+
+```
+2/4 shuttles in this dimension.
+  shuttle 1: airfield-1 <-> airfield-2, 60s turnaround, 7 legs flown, plane #214
+    waiting at airfield-1, next departure to airfield-2 in 0:41
+  shuttle 2: airfield-3 <-> airfield-4, 120s turnaround, 2 legs flown, plane #88
+    PAUSED - /autopilot shuttle stop 2 to remove it
+    last problem: airfield "airfield-4" no longer exists (removed, or renamed under it)
+```
+
+**When something goes wrong** the shuttle either *defers* the departure (tries again in
+30 seconds, up to three times) or *pauses* for good. A paused shuttle stays in the list
+with its reason until you stop it; nothing is retried in silence.
+
+| What happened | What the shuttle does |
+|---|---|
+| the destination had no free stand, so the aircraft stopped on the runway | counts as arrived; the next departure lifts it off the runway; the reason is on the listing |
+| an airfield is renamed or removed under it | pauses within a second, naming the field |
+| the aircraft is destroyed in flight | pauses, "its aircraft was lost in flight" |
+| the aircraft is flown away, or ends a leg at neither field | pauses, giving the coordinates it is at |
+| its aircraft is busy on another `/autopilot flight`, or somebody is sitting in it | defers |
+| all 24 autopilot slots are in use | defers |
+| the aircraft cannot be found at all (a cold field just after a restart) | waits 5 seconds for the chunk to load, then defers |
+
+`stop` removes the schedule and drops the chunk hold. **The aircraft is left standing
+where it is** — it is not deleted, because it may be carrying cargo.
+
+Both airfields must be in the dimension the command is run in, and they must be two
+different fields. Both are checked for a usable runway and at least one marked stand
+before the shuttle is created, because a shuttle that cannot park is an aircraft left on
+a runway every turnaround rather than only once.
+
+---
+
 ## Airfields
 
 ```
@@ -556,8 +635,14 @@ The setting is server-wide (not per dimension) and stored in the world, in
 /autopilot tower              # a board of every runway: free / occupied / who is holding
 /autopilot tower <"airfield"> # the same for one runway
 /autopilot status             # every aircraft under autopilot: mode, altitude, speed, heading
+/autopilot status <id>        # just the one aircraft, by the number the reports print
 /autopilot stop               # take everything currently flying off autopilot
+/autopilot stop <id>          # take just the one aircraft off autopilot
 ```
+
+`<id>` is the plain number every message prints after the `#` — `Plane #4231 going around`,
+the `#4231` at the head of a status line, `reserved by #7`. Not an entity selector: type the
+number you can see. It is only unique inside one dimension, which is the one you are in.
 
 The board shows the rule that actually governs right now: there is no queue — a runway
 goes to whoever asks for it first. Departure ordering is not built yet.
@@ -617,6 +702,8 @@ sleep and the aircraft freeze in mid-air.
 | Engagement radius | 40-block sphere (about 35 blocks on the ground from 18 blocks up) |
 | Arrow muzzle velocity | 3.0 blocks/tick — a fully drawn bow |
 | Maximum airspace deviation | 60° |
+| Shuttles per dimension | 4 |
+| Shuttle turnaround | 10…3600 seconds |
 
 **Note on helicopter speed.** The argument accepts up to 2.00, but the aircraft runs
 into its own thrust ceiling around **1.10 blocks/tick**: 1.20 and 1.75 both fly the

@@ -3,8 +3,12 @@ package xyz.przemyk.simpleplanes.autopilot;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.SnowLayerBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
@@ -360,13 +364,31 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * The stand an arriving aircraft should taxi to, or null when it should stay where it stopped.
      *
      * <p>Deliberately a different question from {@link #parkingPosition}, and not because of the
-     * geometry. A departure is asking "where do I start", and the derived apron is a perfectly good
-     * answer when nothing is marked; an arrival is asking "is it worth leaving the runway for", and
-     * there the derived apron is not an answer at all — it is a guess at a square nobody looked at,
-     * reached by a taxi nobody validated, and an aircraft that gets it wrong is stuck off the side
-     * of the field instead of merely being in the way on the strip. So only a <em>marked</em> stand
-     * will do, and an aircraft that has nowhere marked to go simply stops where it landed, exactly
-     * as it always did.
+     * geometry. A departure is asking "where do I start", and an apron worked out on the spot is a
+     * perfectly good answer when nothing is marked; an arrival is asking "is it worth leaving the
+     * runway for", and there an apron worked out on the spot is not an answer at all — it is a guess
+     * at a square nobody looked at, reached by a taxi nobody validated, and an aircraft that gets it
+     * wrong is stuck off the side of the field instead of merely being in the way on the strip. So
+     * only a <em>marked</em> stand will do, and an aircraft that has nowhere marked to go simply
+     * stops where it landed, exactly as it always did.
+     *
+     * <p><b>"Marked" is a test, not a provenance, and one of those stands may have come from the
+     * survey rather than from a click.</b> The objection above is to a square produced at the moment
+     * it is used and acted on unexamined — it is not an objection to the geometry, which is the same
+     * geometry {@code AirfieldReport} now runs once at survey time and then puts through
+     * {@link #parkingSpotProblem} before storing anything. That is the whole of the judgement
+     * {@code park} holds a player's own click to, and refuses it for failing: ground to stand on, no
+     * step up or down onto the strip, a line to the threshold that is rollable the whole way, and
+     * clearance from the other stands. A square that passes them has been looked at in the only way
+     * this code has ever looked at one, and the taxi has been validated by the same walk that
+     * validates a player's. A stored stand also gains the thing a square derived on the spot can
+     * never have — an identity a taxiing aircraft can claim, so a second arrival picks another
+     * square instead of driving into the first; see {@link ParkingSpot#marked()}.
+     *
+     * <p>What the survey cannot supply is the part of a click that is not a measurement: where the
+     * player would <em>like</em> their aircraft to sit. So a derived stand is reported with its
+     * coordinate rather than left to be discovered, and it is removed with the same one gesture that
+     * removes any other stand.
      *
      * <p>Nearest first, measured from where the aircraft actually came to rest rather than from a
      * threshold: on a 183-block strip the two ends are 183 blocks apart and the aircraft is
@@ -692,6 +714,21 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
+     * The block a stand on this column is stored as: the surface block itself, exactly as a
+     * threshold is stored.
+     *
+     * <p>One place, because more than one thing produces a stand now. A click on the side of a
+     * block, a click on its top and a square the survey worked out for itself all have to come out
+     * as the same stored position, or the same square would read as two different stands.
+     *
+     * <p>Only meaningful on a column whose chunk is loaded; ask
+     * {@link #parkingSpotProblem} first, which refuses an unknown column before anything else.
+     */
+    public static BlockPos standBlock(Level level, int x, int z) {
+        return new BlockPos(x, TerrainScanner.surfaceHeight(level, x + 0.5, z + 0.5) - 1, z);
+    }
+
+    /**
      * True when this spot sits on the surveyed strip itself. Not a reason to refuse it — parking on
      * the runway is what the fallback does when nothing beside it is level — but worth saying out
      * loud, because an aircraft waiting there is an aircraft standing on the landing area.
@@ -882,16 +919,32 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
 
     /**
      * Standard deviation of the surface height along the centreline — a simple "is this actually
-     * flat enough to land on" number. Reported by the survey tool, not used for guidance.
+     * flat enough to land on" number.
+     *
+     * <p>Reported by the survey tool and, since the survey started refusing strips it cannot land
+     * on, also enforced: see {@link AutopilotConfig#RUNWAY_MAX_ROUGHNESS} and
+     * {@link #surfaceProblem(Level, Vec3, Vec3, int)}. It is the whole-strip half of that judgement
+     * and the weaker half — it measures the centreline only, and about the mean rather than about
+     * the runway's own line, so a smooth ramp scores as rough. What catches a lump, and catches one
+     * out at the edge of the strip where this never looks, is the per-column rule beside it.
      */
     public double roughness(Level level) {
-        int samples = Math.max(2, (int) (length() / 4));
+        return roughness(level, pointA(), pointB());
+    }
+
+    /**
+     * As {@link #roughness(Level)}, for a strip that has not been registered — or surveyed — yet.
+     * The ends are in {@link #pointA()}'s convention.
+     */
+    public static double roughness(Level level, Vec3 endA, Vec3 endB) {
+        double length = AutopilotMath.horizontalDistance(endA, endB);
+        int samples = Math.max(2, (int) (length / 4));
         samples = Math.min(samples, 64);
-        double heading = AutopilotMath.headingTo(pointA(), pointB());
-        double step = length() / samples;
+        double heading = AutopilotMath.headingTo(endA, endB);
+        double step = length / samples;
         List<Integer> heights = new ArrayList<>(samples + 1);
         for (int i = 0; i <= samples; i++) {
-            Vec3 probe = AutopilotMath.pointAlong(pointA(), heading, step * i);
+            Vec3 probe = AutopilotMath.pointAlong(endA, heading, step * i);
             int height = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
             if (height != TerrainScanner.UNKNOWN_HEIGHT) {
                 heights.add(height);
@@ -911,6 +964,241 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             variance += d * d;
         }
         return Math.sqrt(variance / heights.size());
+    }
+
+    // ------------------------------------------------------------------ the surface of the strip
+
+    /**
+     * Why this runway's surface will not do, or null when it will. See
+     * {@link #surfaceProblem(Level, Vec3, Vec3, int)}, which this is the registered-airfield form of.
+     */
+    public @Nullable String surfaceProblem(Level level) {
+        return surfaceProblem(level, pointA(), pointB(), width());
+    }
+
+    /**
+     * Why the strip between two ends will not do as a runway surface, or null when nothing is wrong
+     * with it. The same shape as {@link #parkingSpotProblem}: one human-readable sentence naming a
+     * block coordinate the player can walk to, or null.
+     *
+     * <p><b>Deliberately not a method on a registered airfield.</b> It takes the two ends and a
+     * width, so a selection that has not been surveyed — let alone registered — can be judged before
+     * the player commits to it, and so the survey, the browser and an in-world preview all apply one
+     * rule rather than three that drift apart.
+     *
+     * <h2>The rule</h2>
+     * Every probed column of the strip must have its surface within
+     * {@link AutopilotConfig#RUNWAY_MAX_SURFACE_STEP} of the straight line between the two ends, and
+     * carry nothing above that surface, for {@link AutopilotConfig#RUNWAY_CLEAR_HEIGHT} blocks, but
+     * <em>air, snow or grass</em>.
+     *
+     * <h2>What "air, snow or grass" admits, exactly</h2>
+     * The test is {@link #permittedCover} and it is written in properties and tags rather than as a
+     * list of blocks, so a modded plant that declares itself a plant is treated as one. In order:
+     * <ul>
+     *   <li><b>Air</b> — {@code isAir()}, so cave air and void air count too.</li>
+     *   <li><b>No fluid</b> — anything with a fluid state, including a waterlogged block, is refused
+     *       before any other test. Water and lava standing on a strip are the one kind of "cover" an
+     *       aircraft does not roll through, and the heightmaps cannot see the difference (see
+     *       {@link TerrainScanner#isLandable}).</li>
+     *   <li><b>Snow</b> — a snow <em>layer</em> of fewer than {@code SnowLayerBlock.HEIGHT_IMPASSABLE}
+     *       layers, which is vanilla's own line between snow a walking mob paths straight through and
+     *       a drift it has to climb. So a dusting up to four layers deep is runway; five or more is a
+     *       drift and is refused, and so is a full {@code snow_block} standing on the strip. A runway
+     *       <em>built</em> of snow blocks is fine — those are the surface, not cover. Powder snow is
+     *       refused wherever it appears: it is a hole with a lid.</li>
+     *   <li><b>Grass</b> — {@link net.minecraft.tags.BlockTags#REPLACEABLE_BY_TREES} minus
+     *       {@link net.minecraft.tags.BlockTags#LEAVES}. That tag is vanilla's own answer to "what is
+     *       a plant a growing tree pushes through", which is the same question as "what will an
+     *       undercarriage mow down": short and tall grass, ferns and large ferns, dry grass, bushes,
+     *       dead bushes, leaf litter, vines, glow lichen, and every flower — the small ones through
+     *       {@code #small_flowers} and the two-block sunflower, lilac, rose bush, peony and pitcher
+     *       plant by name. Leaves are cut back out of it because a canopy hanging over a strip is a
+     *       tree, and a tree is the thing this rule exists to catch.</li>
+     * </ul>
+     *
+     * <p>So, and these are the cases worth knowing before you meet them: <b>tall grass and flowers
+     * pass. Crops, saplings, wool carpets, cobwebs, torches, signs and rails do not</b> — they are
+     * not in that tag, and a sapling in particular is a tree that has not happened yet. <b>Slabs,
+     * stairs, fences, fence gates, walls and chests do not</b>, by a second test: a column whose
+     * surface sits above the runway line is only accepted when the block it sits on is a full block
+     * of collision, i.e. genuinely a piece of ground one block higher rather than a thing standing on
+     * the ground. That second test is what separates a fence post from a bump, which no measurement
+     * of height alone can do.
+     *
+     * <h2>What it lets through, knowingly</h2>
+     * A single <em>full</em> block — a stone block, a chiselled block, a piece of wool — placed flush
+     * on an otherwise level strip reads as a one-block rise in the ground, because that is physically
+     * what it is, and {@link AutopilotConfig#RUNWAY_MAX_SURFACE_STEP} tolerates one block so that the
+     * width measurement and this rule agree about which columns are the runway. Two of them stacked,
+     * or anything that is not a full cube, is refused.
+     *
+     * <h2>Unloaded ground is an obstacle</h2>
+     * A column whose chunk is not resident is refused by name, never skipped. The whole file is
+     * emphatic about this — see {@link TerrainScanner#UNKNOWN_HEIGHT} and
+     * {@link TerrainScanner#isLandable} — and it matters more here than anywhere: "the server has not
+     * looked at that ground" must never come out as "that ground is clear".
+     *
+     * <h2>Cost</h2>
+     * {@code length / 4} along-track stations capped at 64 — the sampling {@link #roughness} already
+     * uses — plus one, times {@link AutopilotConfig#RUNWAY_SURFACE_LATERAL_SAMPLES} columns across
+     * the width: at most 325 columns. Each column costs one heightmap lookup, which is O(1) and does
+     * not load a chunk, plus block reads within a band only
+     * {@code RUNWAY_CLEAR_HEIGHT + RUNWAY_MAX_SURFACE_STEP + 1} = 5 blocks tall, no block of which is
+     * read twice — six per column is the ceiling and four is the worst any column shape actually
+     * reaches. So a worst-case survey is 325 heightmap lookups and under 2000 block reads, whatever
+     * the runway is made of and however tall the trees on it are: the walk is bounded by the band,
+     * not by the terrain. Bounded on purpose — this runs on the server thread, and a 160-block field
+     * must not turn into tens of thousands of lookups.
+     *
+     * @param endA  one end of the strip, as {@link #pointA()} gives it — the centre of the top face
+     *              of the threshold block, so {@code y} is the first free block above the surface
+     * @param endB  the other end, in the same convention
+     * @param width the strip's measured width in blocks; values below 1 are treated as 1
+     */
+    public static @Nullable String surfaceProblem(Level level, Vec3 endA, Vec3 endB, int width) {
+        double length = AutopilotMath.horizontalDistance(endA, endB);
+        if (length < 1.0) {
+            return "both ends are on the same block, so there is no strip to check";
+        }
+        double heading = AutopilotMath.headingTo(endA, endB);
+        int stations = Math.min(64, Math.max(2, (int) (length / 4)));
+        double step = length / stations;
+        double halfWidth = Math.max(1, width) / 2.0;
+        for (int station = 0; station <= stations; station++) {
+            double along = step * station;
+            Vec3 centre = AutopilotMath.pointAlong(endA, heading, along);
+            double elevation = endA.y + (endB.y - endA.y) * (along / length);
+            for (int sample = 0; sample < AutopilotConfig.RUNWAY_SURFACE_LATERAL_SAMPLES; sample++) {
+                Vec3 probe = AutopilotMath.pointAlong(centre, heading + 90.0,
+                    lateralOffset(sample, halfWidth));
+                String problem = columnProblem(level, probe, elevation);
+                if (problem != null) {
+                    return problem;
+                }
+            }
+        }
+        // Last, and only because it is the one complaint with no coordinate attached to it. Anything
+        // local enough to point at has already been pointed at above.
+        double roughness = roughness(level, endA, endB);
+        if (roughness > AutopilotConfig.RUNWAY_MAX_ROUGHNESS) {
+            return String.format("the surface varies by %.2f blocks along the centreline, and %.2f is"
+                + " as uneven as a runway may be; level it, or mark a strip that does not climb so"
+                + " far end to end", roughness, AutopilotConfig.RUNWAY_MAX_ROUGHNESS);
+        }
+        return null;
+    }
+
+    /**
+     * Where the {@code index}th lateral probe of a station goes, in blocks right of the centreline.
+     *
+     * <p>Centre first and then alternating outwards, so that when several things are wrong the one
+     * that is reported is the one nearest the middle of the runway — which is the one an aircraft
+     * meets first and the one a player looking for it will find soonest.
+     */
+    private static double lateralOffset(int index, double halfWidth) {
+        if (index == 0) {
+            return 0;
+        }
+        int rings = Math.max(1, AutopilotConfig.RUNWAY_SURFACE_LATERAL_SAMPLES / 2);
+        int ring = (index + 1) / 2;
+        double magnitude = halfWidth * ring / rings;
+        return index % 2 == 1 ? -magnitude : magnitude;
+    }
+
+    /**
+     * What is wrong with one column of the strip, or null. {@code elevation} is the runway's own
+     * surface at this point along the centreline, in {@link #pointA()}'s convention: the first free
+     * block above the ground, so the runway surface block itself is one below it.
+     */
+    private static @Nullable String columnProblem(Level level, Vec3 probe, double elevation) {
+        int x = (int) Math.floor(probe.x);
+        int z = (int) Math.floor(probe.z);
+        int runway = (int) Math.round(elevation);
+        int ground = TerrainScanner.landableSurfaceHeight(level, probe.x, probe.z);
+        if (ground == TerrainScanner.UNKNOWN_HEIGHT) {
+            return "the ground at " + x + ", " + z + " is not loaded, so nothing there has been"
+                + " looked at; stand on the runway, or force-load it, and survey again";
+        }
+        int ceiling = runway + AutopilotConfig.RUNWAY_CLEAR_HEIGHT;
+        int lowest = runway - AutopilotConfig.RUNWAY_MAX_SURFACE_STEP;
+
+        // The heightmap's idea of the ground is the top of the highest block that blocks motion,
+        // which is one block too high wherever something the aircraft would drive straight through
+        // is sitting on the runway: a four-layer snow drift blocks motion, tall grass does not, and
+        // both are permitted cover. So walk down through whatever is permitted to find the surface
+        // the wheels would actually run on. Bounded by the band itself, so this is at most
+        // RUNWAY_CLEAR_HEIGHT + RUNWAY_MAX_SURFACE_STEP + 1 block reads however tall the column is.
+        int surface = ground;
+        if (ground <= ceiling) {
+            while (surface > lowest
+                && permittedCover(level.getBlockState(new BlockPos(x, surface - 1, z)))) {
+                surface--;
+            }
+        }
+
+        if (surface > runway + AutopilotConfig.RUNWAY_MAX_SURFACE_STEP) {
+            BlockPos top = new BlockPos(x, surface - 1, z);
+            return blockName(level.getBlockState(top)) + " stands " + (surface - runway)
+                + (surface - runway == 1 ? " block" : " blocks") + " above the runway at "
+                + top.toShortString();
+        }
+        if (surface < lowest) {
+            return "the ground drops " + (runway - surface)
+                + " blocks below the runway at " + x + " " + surface + " " + z
+                + "; the strip has a hole in it";
+        }
+        // A column inside the step tolerance but topped by something that is not a full block of
+        // collision is a thing standing on the runway, not a runway one block higher. This is the
+        // only test that tells a fence post from a bump, and it is why fences, walls, gates, slabs,
+        // stairs and chests are refused while a raised patch of ground is not.
+        if (surface > runway) {
+            BlockPos top = new BlockPos(x, surface - 1, z);
+            BlockState state = level.getBlockState(top);
+            if (!state.isCollisionShapeFullBlock(level, top)) {
+                return blockName(state) + " stands on the runway at " + top.toShortString()
+                    + "; a runway carries nothing but air, snow or grass";
+            }
+        }
+        for (int y = Math.max(ground, surface); y < ceiling; y++) {
+            BlockPos pos = new BlockPos(x, y, z);
+            BlockState state = level.getBlockState(pos);
+            if (!permittedCover(state)) {
+                return blockName(state) + " is on the runway at " + pos.toShortString()
+                    + "; a runway carries nothing but air, snow or grass, for "
+                    + AutopilotConfig.RUNWAY_CLEAR_HEIGHT + " blocks above its surface";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether a block standing over the strip is cover an aircraft rolls through rather than an
+     * obstacle it hits. The exact admissions and refusals are listed on
+     * {@link #surfaceProblem(Level, Vec3, Vec3, int)}, which is where a player-facing rule belongs.
+     */
+    private static boolean permittedCover(BlockState state) {
+        if (state.isAir()) {
+            return true;
+        }
+        // Before anything else, and including waterlogged blocks: a flooded runway is not a runway,
+        // and it is invisible to every heightmap this file otherwise reads.
+        if (!state.getFluidState().isEmpty()) {
+            return false;
+        }
+        if (state.is(Blocks.SNOW)) {
+            // Vanilla's own threshold, from SnowLayerBlock#isPathfindable: below it a walking mob
+            // paths straight through the snow, at or above it the snow is something to be climbed.
+            // Borrowing the number rather than inventing one means a drift that stops a cow also
+            // stops an aeroplane, which is the answer a player will already expect.
+            return state.getValue(SnowLayerBlock.LAYERS) < SnowLayerBlock.HEIGHT_IMPASSABLE;
+        }
+        return state.is(BlockTags.REPLACEABLE_BY_TREES) && !state.is(BlockTags.LEAVES);
+    }
+
+    /** A block's name as a player sees it in their inventory, for a message they have to act on. */
+    private static String blockName(BlockState state) {
+        return state.getBlock().getName().getString();
     }
 
     /**
