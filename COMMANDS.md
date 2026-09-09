@@ -556,8 +556,14 @@ The setting is server-wide (not per dimension) and stored in the world, in
 /autopilot tower              # a board of every runway: free / occupied / who is holding
 /autopilot tower <"airfield"> # the same for one runway
 /autopilot status             # every aircraft under autopilot: mode, altitude, speed, heading
+/autopilot status <id>        # just the one aircraft, by the number the reports print
 /autopilot stop               # take everything currently flying off autopilot
+/autopilot stop <id>          # take just the one aircraft off autopilot
 ```
+
+`<id>` is the plain number every message prints after the `#` — `Plane #4231 going around`,
+the `#4231` at the head of a status line, `reserved by #7`. Not an entity selector: type the
+number you can see. It is only unique inside one dimension, which is the one you are in.
 
 The board shows the rule that actually governs right now: there is no queue — a runway
 goes to whoever asks for it first. Departure ordering is not built yet.
