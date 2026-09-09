@@ -23,6 +23,13 @@ import xyz.przemyk.simpleplanes.upgrades.shooter.ShooterUpgrade;
  * <p>The payload is empty on purpose: everything the server needs — who fired, from which aircraft,
  * in which direction — it already knows from the sender and the plane it is riding. Nothing the
  * client says about the shot is trusted.
+ *
+ * <p><b>Including how often it arrives.</b> An empty payload is free to send, and a client that has
+ * been modified to send one every tick is not doing anything the protocol forbids. The two guards
+ * below say who may shoot, not how fast; the rate is limited on the other side of them, by
+ * {@link ShooterUpgrade}, which is where the cost being limited — a spawned projectile, or a
+ * structure search — actually is, and which therefore also covers any future caller of
+ * {@code use()}.
  */
 public record ShootPacket() implements CustomPacketPayload {
 
