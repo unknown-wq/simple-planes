@@ -1011,6 +1011,112 @@ public final class AutopilotConfig {
     /** Speed under which an aircraft on a strike run is considered to have hit something. */
     public static final double STRIKE_STALLED_SPEED = 0.35;
 
+    /*
+     * ---- scheduled shuttles ----
+     *
+     * A shuttle is one aircraft flying between two airfields for ever with a turnaround wait at each
+     * end. Everything below bounds it. See AutopilotDispatcher for the reasoning behind each number; what
+     * they have in common is that a shuttle runs unattended for hours, so every one of them exists
+     * to stop a fault repeating in silence rather than to tune anything.
+     */
+    /**
+     * Hard cap on scheduled shuttles per dimension.
+     *
+     * <p>Four, and it is a tighter cap than {@link #MAX_ACTIVE_AUTOPILOTS} for a reason that is not
+     * tick cost. A waiting shuttle keeps a chunk ticket alive over its parked aircraft for the whole
+     * turnaround — see {@link #SHUTTLE_HOLD_RADIUS} — so N shuttles is N small permanently resident
+     * areas for as long as they run, and that is a cost a server owner is entitled to be able to
+     * predict. Four shuttles is at most eight such areas (each shuttle holds one end at a time) and,
+     * with both legs of all four in the air at once, sixteen of the twenty-four autopilot slots.
+     */
+    public static final int MAX_SHUTTLES = 4;
+    /**
+     * Shortest and longest turnaround {@code /autopilot shuttle add … <seconds>} accepts.
+     *
+     * <p>Seconds, and bounded at both ends by the argument type itself so the refusal arrives while
+     * the player is still typing. Zero is excluded rather than clamped: the wait <em>is</em> the
+     * feature, and a shuttle that departs in the same tick it finishes taxiing in would relaunch
+     * before {@code PlaneAutopilot#finishTaxiIn} has finished writing the stand booking. Ten seconds
+     * is short enough to watch a full cycle on a test rig and long enough that the arrival is
+     * complete. The ceiling is {@link #MAX_DEPARTURE_DELAY_SECONDS}, the same hour a single sortie's
+     * departure delay is bounded by, for the same reason — a turnaround nobody can observe inside
+     * one session is indistinguishable from a shuttle that has stopped working.
+     */
+    public static final int MIN_SHUTTLE_DELAY_SECONDS = 10;
+    public static final int MAX_SHUTTLE_DELAY_SECONDS = MAX_DEPARTURE_DELAY_SECONDS;
+    /**
+     * Ticks between runs of the shuttle state machine.
+     *
+     * <p>One second. The check is a comparison of a stored game-time stamp against the clock, not a
+     * scan of anything: no airfield is walked, no entity search is run, and a dimension with no
+     * shuttles in it costs one map lookup and an {@code isEmpty}.
+     */
+    public static final int SHUTTLE_CHECK_INTERVAL = 20;
+    /**
+     * Ticks between renewals of a waiting shuttle's chunk ticket.
+     *
+     * <p>The same {@link #CHUNK_TICKET_INTERVAL} a flight's own bubble is renewed at, and for the
+     * same arithmetic: {@code TicketType.ENDER_PEARL} expires 40 ticks after it is placed, so the
+     * renewal has to be comfortably inside that or the hold blinks out between renewals.
+     */
+    public static final int SHUTTLE_HOLD_INTERVAL = CHUNK_TICKET_INTERVAL;
+    /**
+     * Radius of the chunk ticket a waiting shuttle keeps over its parked aircraft.
+     *
+     * <p>Three, not {@link #CHUNK_TICKET_RADIUS}. A ticket of radius {@code r} entity-ticks the
+     * chunks within {@code r - 2} of the centre (see {@code PlaneAutopilot#keepChunksLoaded} for
+     * why the radius is not the bubble), so three ticks the stand's chunk and its eight neighbours —
+     * enough that an aircraft parked against a chunk boundary is still resolvable, and no more. A
+     * parked aircraft does not move, so there is nothing to lead and nothing to outrun.
+     */
+    public static final int SHUTTLE_HOLD_RADIUS = 3;
+    /**
+     * How long past a due departure a shuttle goes on looking for its airframe before it gives up on
+     * that departure, in ticks.
+     *
+     * <p>Five seconds, and it is a window rather than a retry count because what it is waiting for
+     * is a chunk load: chunks hand back blocks synchronously and entities a tick or more later, which
+     * is the same asynchrony {@code StandOccupancy.EMPTY_CONFIRM_TICKS} exists for. The normal case
+     * never uses it — a waiting shuttle has been holding a ticket over its own aircraft, so the
+     * airframe is already in the level — and the case it does cover is the first departure after a
+     * restart, where nothing has held anything and the field starts cold.
+     */
+    public static final int SHUTTLE_WAKE_TICKS = 100;
+    /** How long a shuttle waits before retrying a departure it could not fly, in ticks. */
+    public static final int SHUTTLE_RETRY_TICKS = 600;
+    /**
+     * Consecutive deferred departures before a shuttle stops trying and pauses.
+     *
+     * <p>The point of the whole feature is unattended operation, and the failure mode a thing that
+     * runs unattended must not have is retrying for ever without saying anything. Three attempts
+     * over {@value #SHUTTLE_RETRY_TICKS}-tick intervals is a minute and a half of trying, after
+     * which the shuttle pauses, keeps its record, and shows the reason in
+     * {@code /autopilot shuttle list} until somebody deals with it.
+     */
+    public static final int SHUTTLE_MAX_MISSES = 3;
+    /**
+     * How long an in-flight shuttle aircraft may be unresolvable before it is declared lost, in
+     * ticks.
+     *
+     * <p>Ten seconds. A flying autopilot aircraft carries its own chunk ticket and is renewed from
+     * {@code AutopilotRegistry} on the level tick, so it is resolvable on essentially every tick of
+     * its flight; not being able to find it means it is gone rather than merely far away. The delay
+     * is there for the one tick either side of a dimension-crossing or a chunk handover, not as a
+     * search.
+     */
+    public static final int SHUTTLE_LOST_TICKS = 200;
+    /**
+     * How far from a field's centre an aircraft may be and still count as "at" it, in blocks, over
+     * and above half the runway length.
+     *
+     * <p>Used for exactly one decision: whether the airframe a shuttle is about to re-task is
+     * actually standing at the field it is supposed to depart from. Generous, because a stand may
+     * be a long way off the centreline and an arrival that stopped short of one is further still;
+     * it only has to be tight enough that an aircraft a player has flown somewhere else is not
+     * teleported back onto a departure spot.
+     */
+    public static final double SHUTTLE_AT_FIELD_MARGIN = 96.0;
+
     // ---- waypoints ----
     public static final double WAYPOINT_ARRIVAL_RADIUS = 30.0;
 }
