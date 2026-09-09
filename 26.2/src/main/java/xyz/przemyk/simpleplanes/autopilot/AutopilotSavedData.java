@@ -11,13 +11,16 @@ import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * Per-dimension persistent store of surveyed airfields, helipads and stand bookings. Written to
+ * Per-dimension persistent store of surveyed airfields, helipads, stand bookings and scheduled
+ * shuttles. Written to
  * {@code <world>/<dimension>/data/simpleplanes/airfields.dat} by vanilla's
  * {@link net.minecraft.world.level.storage.SavedDataStorage}, so airfields survive a restart.
  *
@@ -39,7 +42,13 @@ public class AutopilotSavedData extends SavedData {
         // Optional with an empty default, so a world saved before this field existed loads unchanged
         // and a world with nothing parked writes no key at all.
         StandOccupancy.Booking.CODEC.listOf().optionalFieldOf("stands", List.<StandOccupancy.Booking>of())
-            .forGetter(AutopilotSavedData::standList)
+            .forGetter(AutopilotSavedData::standList),
+        // Scheduled shuttles. Optional with an empty default for the same reason as the two above:
+        // a world saved before shuttles existed loads unchanged, and a world with none writes no
+        // key. Per-dimension like everything else here, which is what makes a shuttle between two
+        // dimensions unrepresentable rather than merely refused - see Shuttle.
+        Shuttle.CODEC.listOf().optionalFieldOf("shuttles", List.<Shuttle>of())
+            .forGetter(AutopilotSavedData::shuttleList)
     ).apply(instance, AutopilotSavedData::new));
 
     public static final SavedDataType<AutopilotSavedData> TYPE = new SavedDataType<>(
@@ -68,6 +77,15 @@ public class AutopilotSavedData extends SavedData {
      */
     private final Map<StandOccupancy.Stand, StandOccupancy.Held> stands = new LinkedHashMap<>();
 
+    /**
+     * Scheduled shuttles, keyed by their small per-dimension id.
+     *
+     * <p>Insertion-ordered so the listing and the file both read in the order they were created.
+     * Reached only through {@link AutopilotDispatcher}, which owns every rule about how a shuttle
+     * changes; the accessors below are as dumb as the stand ones.
+     */
+    private final Map<Integer, Shuttle> shuttles = new LinkedHashMap<>();
+
     public AutopilotSavedData() {
     }
 
@@ -81,6 +99,14 @@ public class AutopilotSavedData extends SavedData {
 
     public AutopilotSavedData(List<Airfield> airfields, List<Helipad> helipads,
                               List<StandOccupancy.Booking> stands) {
+        this(airfields, helipads, stands, List.of());
+    }
+
+    public AutopilotSavedData(List<Airfield> airfields, List<Helipad> helipads,
+                              List<StandOccupancy.Booking> stands, List<Shuttle> shuttles) {
+        for (Shuttle shuttle : shuttles) {
+            this.shuttles.put(shuttle.id(), shuttle);
+        }
         for (Airfield airfield : airfields) {
             this.airfields.put(airfield.name(), airfield);
         }
@@ -220,6 +246,57 @@ public class AutopilotSavedData extends SavedData {
         if (stands.keySet().removeIf(stand -> stand.airfield().equals(airfield))) {
             setDirty();
         }
+    }
+
+    // ------------------------------------------------------------------ shuttles
+
+    /** Every shuttle, in creation order. A copy: callers walk it while the service rewrites it. */
+    public List<Shuttle> shuttleList() {
+        return new ArrayList<>(shuttles.values());
+    }
+
+    /**
+     * The live collection, for the per-tick reads that only look.
+     *
+     * <p>Unmodifiable and not copied, because the chunk-ticket renewal runs several times a second
+     * and allocating a list to find out that there is nothing to do is the one cost this feature
+     * pays whether or not anybody is using it.
+     */
+    public Collection<Shuttle> shuttles() {
+        return Collections.unmodifiableCollection(shuttles.values());
+    }
+
+    public boolean hasShuttles() {
+        return !shuttles.isEmpty();
+    }
+
+    public @Nullable Shuttle shuttle(int id) {
+        return shuttles.get(id);
+    }
+
+    /** Writes a shuttle back, creating it if it is new. */
+    public void putShuttle(Shuttle shuttle) {
+        Shuttle previous = shuttles.put(shuttle.id(), shuttle);
+        if (!shuttle.equals(previous)) {
+            setDirty();
+        }
+    }
+
+    public boolean removeShuttle(int id) {
+        boolean removed = shuttles.remove(id) != null;
+        if (removed) {
+            setDirty();
+        }
+        return removed;
+    }
+
+    /** The lowest id not in use, so a stopped shuttle's number is available again. */
+    public int nextShuttleId() {
+        int id = 1;
+        while (shuttles.containsKey(id)) {
+            id++;
+        }
+        return id;
     }
 
     /** Nearest airfield to a point, or null if none is within {@code maxDistance}. */

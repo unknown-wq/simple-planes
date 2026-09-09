@@ -17,6 +17,7 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
 import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Creates and tasks autopilot aircraft.
@@ -232,6 +233,29 @@ public final class AutopilotSpawner {
     public static @Nullable PlaneEntity launchSortie(ServerLevel level, Airfield departure, Airfield destination,
                                                      @Nullable Player owner, double cruiseSpeed, Blast blast,
                                                      int departureDelayTicks, AircraftType type) {
+        return launchSortie(level, departure, destination, owner, cruiseSpeed, blast, departureDelayTicks,
+            type, null);
+    }
+
+    /**
+     * {@link #launchSortie} flown by one <em>named</em> airframe, for a caller that owns an aircraft
+     * and must not be given a different one.
+     *
+     * <p>With {@code airframe} non-null this becomes all-or-nothing: the aircraft with that UUID is
+     * re-tasked, or nothing is launched and the method returns null. It never falls through to
+     * building a new one. That is the entire point of the parameter — a {@link Shuttle} that could
+     * quietly get a fresh aircraft whenever its own could not be found is a machine for filling a
+     * world with derelict planes, which is the defect {@link AircraftReuse} was written to slow
+     * down. Everything else about the sortie is identical, including the geometry, so a shuttle leg
+     * and a {@code /autopilot flight} leg fly the same way.
+     *
+     * @param airframe the only aircraft that may fly this sortie, or null for the ordinary
+     *                 opportunistic reuse-or-build behaviour
+     */
+    public static @Nullable PlaneEntity launchSortie(ServerLevel level, Airfield departure, Airfield destination,
+                                                     @Nullable Player owner, double cruiseSpeed, Blast blast,
+                                                     int departureDelayTicks, AircraftType type,
+                                                     @Nullable UUID airframe) {
         // The runway is usually nowhere near a player, so its chunks have to exist before anything
         // can be measured on them or spawned into them. Both thresholds, not just the centre: a
         // 183-block runway spans a dozen chunks, and the parking spot sits beyond one of its ends —
@@ -257,7 +281,7 @@ public final class AutopilotSpawner {
         // whenever one can be seen from here — see AircraftReuse for why "can be seen" is the whole
         // rule and what happens on the field that cannot be.
         Departing departing = departing(level, departure.name(), departure.parkingSpots(),
-            type, spawn, parking.heading(), owner);
+            type, spawn, parking.heading(), owner, airframe);
         if (departing == null) {
             return null;
         }
@@ -355,7 +379,7 @@ public final class AutopilotSpawner {
         // or nothing. Reuse here never moves anything: the machine is claimed off the square it is
         // already standing on and set down again facing the new destination.
         Departing departing = departing(level, departure.name(), List.of(departure.centre()),
-            AircraftType.HELICOPTER, spawn, heading, owner);
+            AircraftType.HELICOPTER, spawn, heading, owner, null);
         if (departing == null) {
             return null;
         }
@@ -572,12 +596,18 @@ public final class AutopilotSpawner {
      * command's own success line — that line is what the recipes in {@code TESTING.md} read the
      * aircraft's number off, and its shape is left exactly as it was.
      *
+     * <p>With {@code airframe} non-null the fresh branch is unreachable by construction: the claim is
+     * made against that one aircraft and a failure returns null rather than falling through. See the
+     * {@link #launchSortie} overload that takes it for why that is not an optimisation.
+     *
      * @return the airframe, and whether it was claimed rather than created
      */
     private static @Nullable Departing departing(ServerLevel level, String field, List<BlockPos> stands,
                                                  AircraftType type, Vec3 spawn, double heading,
-                                                 @Nullable Player owner) {
-        AircraftReuse.Claimed claimed = AircraftReuse.claim(level, field, stands, type, spawn);
+                                                 @Nullable Player owner, @Nullable UUID airframe) {
+        AircraftReuse.Claimed claimed = airframe == null
+            ? AircraftReuse.claim(level, field, stands, type, spawn)
+            : AircraftReuse.claim(level, field, stands, airframe, type, spawn);
         if (claimed != null) {
             PlaneEntity plane = claimed.plane();
             AircraftReuse.scrub(plane);
@@ -592,6 +622,11 @@ public final class AutopilotSpawner {
                     + " taken from stand " + claimed.stand().toShortString() + " at " + field
                     + " and re-tasked; no new airframe built.");
             return new Departing(plane, true);
+        }
+        if (airframe != null) {
+            // A named airframe and it could not be claimed. Nothing else will do, so nothing is
+            // launched; the caller reports why and tries again rather than getting a second aircraft.
+            return null;
         }
         PlaneEntity fresh = create(level, spawn.x, spawn.y, spawn.z, heading, type);
         return fresh == null ? null : new Departing(fresh, false);

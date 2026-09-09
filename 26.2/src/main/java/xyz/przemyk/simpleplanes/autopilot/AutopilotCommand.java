@@ -49,6 +49,9 @@ import java.util.List;
  * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
  * /autopilot airfields [info|show|resurvey|remove|rename|park|unpark] …
  * /autopilot tower [&lt;airfield&gt;]
+ * /autopilot shuttle add &lt;fromAirfield&gt; &lt;toAirfield&gt; &lt;seconds&gt; [type &lt;airframe&gt;]
+ * /autopilot shuttle list
+ * /autopilot shuttle stop [id]
  * /autopilot status [aircraft]
  * /autopilot stop [aircraft]
  * </pre>
@@ -274,6 +277,40 @@ public final class AutopilotCommand {
                 .then(Commands.argument("airfield", StringArgumentType.string())
                     .suggests(AIRFIELD_SUGGESTIONS)
                     .executes(AutopilotCommand::towerOne)));
+
+            // shuttle add <a> <b> <seconds> [type <airframe>] / list / stop [id]
+            //
+            // The three verbs a scheduled thing needs and no more: make one, see what exists, take
+            // one away. `list` and `stop` are shaped after `/autopilot status` and `/autopilot
+            // stop` -- the same optional-id-means-all-of-them rule, so the vocabulary a player has
+            // already learnt for aircraft transfers to shuttles unchanged.
+            //
+            // The delay is in SECONDS and is positional rather than a `delay` keyword branch. It is
+            // a required argument of a brand new subcommand, so there is no existing invocation to
+            // keep parsing and nothing to be ambiguous with; the keyword form on `flight` exists
+            // only because that command already had two positional arguments before the delay was
+            // thought of. Seconds because that is what a person says, and because the argument type
+            // carries the bounds -- Brigadier refuses "0" and "604800" while the player is still
+            // typing, with the limit in the error, which is a better place to find out than three
+            // hours into an unattended run.
+            root.then(Commands.literal("shuttle")
+                .then(Commands.literal("add")
+                    .then(Commands.argument("from", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .then(Commands.argument("to", StringArgumentType.string())
+                            .suggests(AIRFIELD_SUGGESTIONS)
+                            .then(Commands.argument("seconds", IntegerArgumentType.integer(
+                                    AutopilotConfig.MIN_SHUTTLE_DELAY_SECONDS,
+                                    AutopilotConfig.MAX_SHUTTLE_DELAY_SECONDS))
+                                .executes(AutopilotCommand::shuttleAdd)
+                                .then(aircraftTypeArgument(AutopilotCommand::shuttleAdd))))))
+                .then(Commands.literal("list")
+                    .executes(AutopilotCommand::shuttleList))
+                .then(Commands.literal("stop")
+                    .executes(context -> shuttleStop(context, null))
+                    .then(Commands.argument("shuttle", IntegerArgumentType.integer(1))
+                        .executes(context -> shuttleStop(context,
+                            IntegerArgumentType.getInteger(context, "shuttle"))))));
 
             // status [aircraft] / stop [aircraft]
             //
@@ -1114,6 +1151,73 @@ public final class AutopilotCommand {
 
     private static Component notFlying(PlaneEntity plane) {
         return Component.literal("#" + plane.getId() + " is not flying an autopilot flight.");
+    }
+
+    // ------------------------------------------------------------------ shuttles
+
+    /**
+     * {@code /autopilot shuttle add <a> <b> <seconds> [type <airframe>]} — a scheduled service that
+     * flies one aircraft between two fields for ever.
+     *
+     * <p>Every refusal is made here rather than discovered hours later on a field nobody is
+     * watching, which is the whole difference between this and {@code /autopilot flight}: a sortie
+     * that cannot park is one aircraft on a runway, a shuttle that cannot park is one aircraft on a
+     * runway every turnaround for ever. {@link AutopilotDispatcher#create} owns the list of them so
+     * that the reasons live next to the machinery that would otherwise trip over them.
+     *
+     * <p>The first departure is immediate. A shuttle that did nothing visible until one turnaround
+     * had elapsed would be indistinguishable from one that had failed to start.
+     */
+    private static int shuttleAdd(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        if (refusedRotorcraft(context, "/autopilot heliflight")) {
+            return 0;
+        }
+        String fromName = StringArgumentType.getString(context, "from");
+        String toName = StringArgumentType.getString(context, "to");
+        int seconds = IntegerArgumentType.getInteger(context, "seconds");
+        String refusal = AutopilotDispatcher.create(level, fromName, toName, seconds,
+            aircraftType(context), source.getPlayer());
+        if (refusal != null) {
+            source.sendFailure(Component.literal(refusal));
+            return 0;
+        }
+        int id = AutopilotDispatcher.lastCreated(level);
+        source.sendSuccess(() -> Component.literal("Shuttle " + id + ": " + fromName + " <-> "
+            + toName + ", " + seconds + "s turnaround at each end, first departure now."
+            + " /autopilot shuttle list shows it."), true);
+        return 1;
+    }
+
+    private static int shuttleList(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        List<String> lines = AutopilotDispatcher.describe(source.getLevel());
+        for (String line : lines) {
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+        return lines.size();
+    }
+
+    /**
+     * {@code /autopilot shuttle stop [id]} — removes one shuttle, or every one in this dimension.
+     *
+     * <p>The same all-or-one shape as {@code /autopilot stop}, and the same restraint: the aircraft
+     * is left standing wherever it is. Deleting it would destroy whatever it was carrying.
+     */
+    private static int shuttleStop(CommandContext<CommandSourceStack> context, @Nullable Integer id) {
+        CommandSourceStack source = context.getSource();
+        int stopped = AutopilotDispatcher.stop(source.getLevel(), id);
+        if (stopped == 0) {
+            source.sendFailure(Component.literal(id == null
+                ? "No shuttles in this dimension."
+                : "No shuttle " + id + " in this dimension. /autopilot shuttle list shows the ids."));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("Stopped " + stopped
+            + (stopped == 1 ? " shuttle. Its aircraft is left where it stands."
+                : " shuttles. Their aircraft are left where they stand.")), true);
+        return stopped;
     }
 
     private static List<? extends PlaneEntity> activePlanes(ServerLevel level) {

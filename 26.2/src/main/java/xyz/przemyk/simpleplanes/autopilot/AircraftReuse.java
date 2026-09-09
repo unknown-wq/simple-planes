@@ -71,9 +71,15 @@ import java.util.UUID;
  * considered and rejected. It would make {@code /autopilot flight} stop returning the aircraft it
  * launched, and that line ("Plane #1 parked at airfield-1 …") is the identifier every recipe in
  * {@code TESTING.md} reads before it polls anything; it would also introduce a window in which a
- * server shutdown loses a sortie silently, with nothing durable to recover it from and no dispatcher
- * in this mod to own such a queue. Trading a guaranteed contract for an opportunistic one is the
- * wrong way round.
+ * server shutdown loses a sortie silently, with nothing durable to recover it from. Trading a
+ * guaranteed contract for an opportunistic one is the wrong way round.
+ *
+ * <p>That argument used to end "and no dispatcher in this mod to own such a queue", and that half of
+ * it is no longer true: {@link AutopilotDispatcher} is exactly such a queue, durable and serviced
+ * from the level tick. It does not change the conclusion here. A command's launch is synchronous and
+ * has to hand back an aircraft in the same tick, so it still cannot wait for one; a scheduled
+ * departure has no such caller and can, which is why the named-airframe {@code claim} below is the
+ * dispatcher's and {@code /autopilot flight} still uses the opportunistic one.
  *
  * <h2>What a claimed airframe brings with it</h2>
  * {@link #scrub} makes it indistinguishable from a fresh spawn wherever that is possible, because
@@ -144,6 +150,59 @@ public final class AircraftReuse {
         }
         StandOccupancy.release(level, field, bestStand);
         return new Claimed(best, bestStand);
+    }
+
+    /**
+     * The one named airframe, claimed off wherever it is standing, or null when it cannot be seen or
+     * used right now.
+     *
+     * <p>The difference from {@link #claim} above is what supplies the provenance, and it matters
+     * enough to spell out. That method will only take an aircraft {@link StandOccupancy} has a
+     * booking for, because a booking is the only evidence available that this mod flew the thing
+     * onto that square itself. A {@link Shuttle} does not need that evidence: it recorded the UUID
+     * of the airframe it dispatched, in its own persisted record, at the moment it dispatched it.
+     * That is a stronger claim of ownership than a booking, not a weaker one — it names the aircraft
+     * directly rather than inferring it from a square — so this method matches on the UUID and
+     * releases the booking only as tidying-up.
+     *
+     * <p>It follows that this one is <b>not</b> restricted to aircraft standing on a marked stand.
+     * That is deliberate and it is the fix for a real failure: an arrival that finds no free stand
+     * stops on the runway with no booking written, and if a shuttle could not pick its own aircraft
+     * up from there, one busy field would strand it for good. The aircraft is still required to be
+     * at the field — see {@code AutopilotDispatcher} — so this cannot reach across the map.
+     *
+     * <p>The other half of {@link #claim}'s argument does not apply either. That one is opportunistic
+     * because it may be looking at a field nobody has been near, where the entities are not
+     * deserialised and the airframe simply is not there to be found. A waiting shuttle has been
+     * holding a chunk ticket over its own parked aircraft for the whole turnaround, so in the normal
+     * case the airframe <em>is</em> in the level in the tick this is called. The cold case that
+     * remains is the first departure after a restart, and the caller covers it by waiting rather
+     * than by building an aircraft.
+     *
+     * @param airframe the aircraft the caller already owns; nothing else is ever considered
+     */
+    public static @Nullable Claimed claim(ServerLevel level, String field, List<BlockPos> stands,
+                                          UUID airframe, AircraftType wanted, Vec3 spawn) {
+        if (!(level.getEntity(airframe) instanceof PlaneEntity plane) || !claimable(plane, wanted)) {
+            return null;
+        }
+        // Same check as above and for the same reason: moving an airframe into another airframe is
+        // the one outcome this must not produce. The candidate itself is excluded, which covers the
+        // case where it is already standing on the square it is about to depart from.
+        if (!Airfield.standFree(level, spawn, null, plane)) {
+            return null;
+        }
+        // Whichever stand it was booked onto, if any. There may be none - an aircraft that stopped
+        // on the runway never wrote one - and that is not a failure here, only nothing to release.
+        BlockPos held = plane.blockPosition();
+        for (BlockPos stand : stands) {
+            if (airframe.equals(StandOccupancy.heldBy(level, field, stand))) {
+                StandOccupancy.release(level, field, stand);
+                held = stand;
+                break;
+            }
+        }
+        return new Claimed(plane, held);
     }
 
     /** Whether this parked aircraft may be re-tasked as {@code wanted}. */

@@ -49,6 +49,11 @@ public final class AutopilotRegistry {
 
     public static void init() {
         ServerTickEvents.END_LEVEL_TICK.register(AutopilotRegistry::onLevelTick);
+        // The dispatcher's heartbeat starts here rather than from SimplePlanesMod so that all of the
+        // autopilot's per-tick work has one entry point, and because the two are the same mechanism
+        // seen from opposite ends: this class renews the chunk ticket of an aircraft that is flying,
+        // and the dispatcher renews the ticket of one that is waiting to.
+        AutopilotDispatcher.init();
     }
 
     /** Server-side only: a single-player client shares this JVM and must not add to the count. */
