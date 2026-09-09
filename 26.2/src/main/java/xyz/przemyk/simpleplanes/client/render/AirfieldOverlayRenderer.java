@@ -4,7 +4,6 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.core.BlockPos;
@@ -37,8 +36,20 @@ import java.util.List;
  * helicopter pad, drawn inside the wider violet outline of the clearance the survey required around
  * it.
  *
+ * <p>A stand the server could not see into is drawn <b>grey</b>, and that is a third answer rather
+ * than a hedge: fields are sent much further than entities are loaded, so on a distant field nobody
+ * knows what is parked. Grey says so. See {@code AirfieldMarkersPacket.Runway#unknownStands}.
+ *
  * <p>The <b>green, amber and red</b> shapes on top of all that are the selection the tool in hand
  * would mark if it were clicked now; see {@link ToolPreview}.
+ *
+ * <h2>What is built when</h2>
+ * The registered fields change at most once a second and only when something about them actually
+ * changed, so their geometry is built when the payload changes and kept — not rebuilt per frame,
+ * which is how it was and which spent two lists, a {@code Vec3[4]} per runway, per stand and two per
+ * pad on every frame to arrive at the same vertices as the frame before. The tool preview is cached
+ * on the same principle a tick at a time; see {@link ToolPreview}. What remains per frame is the
+ * camera-relative pose and the two submissions, which have to be.
  */
 @Environment(EnvType.CLIENT)
 public final class AirfieldOverlayRenderer {
@@ -54,6 +65,9 @@ public final class AirfieldOverlayRenderer {
     private static final int FREE_STAND_LINE = 0xCC20D0FF;
     private static final int TAKEN_STAND_FILL = 0x33FF6A20;
     private static final int TAKEN_STAND_LINE = 0xCCFF6A20;
+    /** A stand out where the server cannot see what is standing on it: neither free nor taken. */
+    private static final int UNKNOWN_STAND_FILL = 0x2C98A0A8;
+    private static final int UNKNOWN_STAND_LINE = 0xA098A0A8;
     private static final int PAD_FILL = 0x33C080FF;
     private static final int PAD_LINE = 0xCCC080FF;
     private static final int PAD_CLEARANCE_LINE = 0x70C080FF;
@@ -61,31 +75,54 @@ public final class AirfieldOverlayRenderer {
     /** Half the side of the square drawn on a marked stand: about the footprint of an aircraft. */
     private static final double STAND_HALF_SIZE = 1.5;
 
+    /** The registered fields as vertices, and the payload they were built from. */
+    private static List<GroundOverlay.Patch> fields = List.of();
+    private static int builtGeneration = -1;
+
     public static void register() {
         LevelRenderEvents.COLLECT_SUBMITS.register(context -> {
             ToolPreview.Preview preview = ToolPreview.current();
-            List<GroundOverlay.Patch> patches = new ArrayList<>(preview.patches());
-            List<GroundOverlay.Post> posts = new ArrayList<>(preview.posts());
-            collectKnownFields(patches);
-            if (patches.isEmpty() && posts.isEmpty()) {
+            List<GroundOverlay.Patch> knownFields = knownFields();
+            if (knownFields.isEmpty() && preview.isEmpty()) {
                 return;
             }
+            List<GroundOverlay.Patch> previewPatches = preview.patches();
+            List<GroundOverlay.Post> previewPosts = preview.posts();
             Vec3 camera = context.levelState().cameraRenderState.pos;
             PoseStack pose = new PoseStack();
             pose.translate(-camera.x, -camera.y, -camera.z);
             SubmitNodeCollector collector = context.submitNodeCollector();
-            collector.submitCustomGeometry(pose, RenderTypes.debugQuads(),
-                (p, out) -> GroundOverlay.fill(p, out, patches));
-            collector.submitCustomGeometry(pose, RenderTypes.lines(),
-                (p, out) -> GroundOverlay.lines(p, out, patches, posts));
+            // Two lists handed to each batch rather than one concatenated list, because
+            // concatenating them is a copy of everything on screen, per frame, to save a loop.
+            collector.submitCustomGeometry(pose, RenderTypes.debugQuads(), (p, out) -> {
+                GroundOverlay.fill(p, out, knownFields);
+                GroundOverlay.fill(p, out, previewPatches);
+            });
+            collector.submitCustomGeometry(pose, RenderTypes.lines(), (p, out) -> {
+                GroundOverlay.lines(p, out, knownFields, List.of());
+                GroundOverlay.lines(p, out, previewPatches, previewPosts);
+            });
         });
     }
 
-    /** The fields the server has told this client about. */
-    private static void collectKnownFields(List<GroundOverlay.Patch> patches) {
-        if (Minecraft.getInstance().level == null) {
-            return;
+    /**
+     * The fields the server has told this client about, built once per payload.
+     *
+     * <p>Render thread only, which is what makes the plain fields behind it safe: the counter is
+     * read from {@code AirfieldMarkers} before the lists, so a payload that lands mid-build is
+     * picked up on the next frame rather than half-drawn on this one.
+     */
+    private static List<GroundOverlay.Patch> knownFields() {
+        int generation = AirfieldMarkers.generation();
+        if (generation != builtGeneration) {
+            fields = buildKnownFields();
+            builtGeneration = generation;
         }
+        return fields;
+    }
+
+    private static List<GroundOverlay.Patch> buildKnownFields() {
+        List<GroundOverlay.Patch> patches = new ArrayList<>();
         for (AirfieldMarkersPacket.Runway runway : AirfieldMarkers.runways()) {
             boolean usable = runway.usable();
             patches.add(new GroundOverlay.Patch(
@@ -96,11 +133,9 @@ public final class AirfieldOverlayRenderer {
             List<BlockPos> stands = runway.stands();
             for (int i = 0; i < stands.size(); i++) {
                 Vec3 stand = surface(stands.get(i));
-                boolean taken = runway.standOccupied(i);
                 patches.add(new GroundOverlay.Patch(
                     GroundOverlay.square(stand.x, stand.z, stand.y, STAND_HALF_SIZE),
-                    taken ? TAKEN_STAND_FILL : FREE_STAND_FILL,
-                    taken ? TAKEN_STAND_LINE : FREE_STAND_LINE));
+                    standFill(runway, i), standLine(runway, i)));
             }
         }
         for (AirfieldMarkersPacket.Pad pad : AirfieldMarkers.pads()) {
@@ -113,6 +148,25 @@ public final class AirfieldOverlayRenderer {
                     pad.radius() + RotorcraftConfig.PAD_CLEARANCE_MARGIN + 0.5),
                 0, PAD_CLEARANCE_LINE));
         }
+        return List.copyOf(patches);
+    }
+
+    /**
+     * Unknown before taken: the two are never both set, and if a later sender ever let them be, the
+     * honest answer is the one to show.
+     */
+    private static int standFill(AirfieldMarkersPacket.Runway runway, int index) {
+        if (runway.standUnknown(index)) {
+            return UNKNOWN_STAND_FILL;
+        }
+        return runway.standOccupied(index) ? TAKEN_STAND_FILL : FREE_STAND_FILL;
+    }
+
+    private static int standLine(AirfieldMarkersPacket.Runway runway, int index) {
+        if (runway.standUnknown(index)) {
+            return UNKNOWN_STAND_LINE;
+        }
+        return runway.standOccupied(index) ? TAKEN_STAND_LINE : FREE_STAND_LINE;
     }
 
     /**
