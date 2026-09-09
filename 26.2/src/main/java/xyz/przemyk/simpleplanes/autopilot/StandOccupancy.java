@@ -1,7 +1,9 @@
 package xyz.przemyk.simpleplanes.autopilot;
 
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.ResourceKey;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
@@ -10,8 +12,6 @@ import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -49,24 +49,81 @@ import java.util.UUID;
  * <p>Self-healing, and it has to be, or an aircraft a player flies away leaves its stand blocked for
  * the rest of the session: the first look at a loaded, empty square forgets the record.
  *
- * <p>Runtime-only, like {@link RunwayOccupancy} and for a weaker version of the same reason. A
- * restart forgets every record, after which the plain entity search is back in charge and is right
- * whenever the chunk happens to be loaded. That is a real hole and it is the cheap side of the trade:
- * the alternative is persisting an occupancy that nothing can validate on load.
+ * <h2>Why it is persisted now, when it deliberately was not</h2>
+ * This class used to be runtime-only, and said so, on the grounds that "the alternative is
+ * persisting an occupancy that nothing can validate on load". That objection is about what a record
+ * <em>says</em>, and it is answered by changing that rather than by overruling it.
  *
- * <p>All access is from the server thread, so a plain map is fine.
+ * <p>A booking has always named its aircraft by {@link UUID} — the entity itself is removed when its
+ * chunk unloads, so a reference was never an option — and a UUID is precisely the part of a parked
+ * aircraft that survives being on disk and can still be checked afterwards. Everything
+ * {@link #isTaken} already does <em>is</em> that validation: resolve the UUID through
+ * {@code ServerLevel#getEntity}, believe where the aircraft actually is rather than where it was
+ * left, and where it cannot be resolved at all, ask {@code areEntitiesLoaded} and give the answer
+ * {@link #EMPTY_CONFIRM_TICKS} to settle. So a booking read back from disk needs no load-time
+ * validation pass of its own and does not get one: it is put into the same store the live ones live
+ * in, is read by the same method, is trusted no further, and heals on exactly the same rule. What
+ * persistence changes is a booking's lifetime, not its authority.
+ *
+ * <p>Restarting used to void every booking while leaving every aircraft on disk, which is the
+ * dangerous half of the trade rather than the cheap one: the stand read free, the parked aircraft
+ * was in an unloaded chunk, and the next sortie out of that field was spawned inside it. The
+ * self-healing rule that made a stale in-memory record survivable makes a stale stored one
+ * survivable in exactly the same way and for exactly as long.
+ *
+ * <p>The cost that remains, stated plainly: a booking whose square is never loaded again is never
+ * looked at, so it is never healed. A stand whose aircraft is deleted out from under the game — a
+ * chunk removed on disk, a world edit, another mod culling entities — stays booked until something
+ * loads that square, and if nothing ever does, forever. That costs one stand of eight on one field,
+ * against an aircraft spawned inside another, and it is the same side of the same trade the rest of
+ * this feature already takes. Renaming or removing the field clears it outright; see {@link #forget}.
+ *
+ * <p>{@link RunwayOccupancy} stays runtime-only and should: a runway reservation is held by an
+ * aircraft that is <em>flying</em>, and a restart genuinely does void it.
+ *
+ * <p>Stored in {@link AutopilotSavedData}, which is per-dimension, so the dimension is implicit in
+ * which file a booking is in — and a booking can no longer outlive the world it was made in, which
+ * a static map shared by every world loaded into one JVM could.
+ *
+ * <p>All access is from the server thread, so a plain map behind it is fine.
  */
 public final class StandOccupancy {
 
-    private record Key(ResourceKey<Level> dimension, String airfield, BlockPos spot) {}
+    /**
+     * Which square of which field a booking is about.
+     *
+     * <p>No dimension: {@link AutopilotSavedData} is per-dimension already. Helipads share this
+     * namespace with airfields deliberately — a pad is named {@code helipad-N} and a runway
+     * {@code airfield-N}, so the two cannot collide, and {@link Helipad#free} gets the same
+     * treatment as a stand for free.
+     */
+    public record Stand(String airfield, BlockPos spot) {}
 
     /**
      * By UUID rather than by reference — the entity itself is removed when its chunk unloads — plus
      * the game time the square first read empty while its chunk claimed to be loaded, or 0.
+     *
+     * <p>The stamp is not written to disk: see {@link AutopilotSavedData#stampStand}.
      */
-    private record Held(UUID aircraft, long emptySince) {}
+    public record Held(UUID aircraft, long emptySince) {}
 
-    private static final Map<Key, Held> STANDS = new HashMap<>();
+    /** One booking in the form it is saved in: the stand, and the aircraft that is on it. */
+    public record Booking(String airfield, BlockPos spot, UUID aircraft) {
+
+        public static final Codec<Booking> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+            Codec.STRING.fieldOf("airfield").forGetter(Booking::airfield),
+            BlockPos.CODEC.fieldOf("spot").forGetter(Booking::spot),
+            // As a string rather than UUIDUtil.CODEC's int array: this file is read by people
+            // debugging a field that will not accept arrivals, and "which aircraft" is the whole
+            // question. A UUID in the same form the /data and /execute output shows is worth four
+            // bytes a record.
+            UUIDUtil.STRING_CODEC.fieldOf("aircraft").forGetter(Booking::aircraft)
+        ).apply(instance, Booking::new));
+
+        public Stand stand() {
+            return new Stand(airfield, spot);
+        }
+    }
 
     /**
      * How long a stand must go on reading empty before the record is thrown away, in ticks.
@@ -88,22 +145,47 @@ public final class StandOccupancy {
 
     /** Records that this aircraft has parked on the stand and is expected to stay there. */
     public static void take(Level level, String airfield, BlockPos spot, PlaneEntity plane) {
-        STANDS.put(new Key(level.dimension(), airfield, spot), new Held(plane.getUUID(), 0));
+        if (level instanceof ServerLevel serverLevel) {
+            AutopilotSavedData.get(serverLevel).bookStand(new Stand(airfield, spot), plane.getUUID());
+        }
+    }
+
+    /**
+     * The aircraft booked onto this stand, or null when the stand has no booking.
+     *
+     * <p>The raw record, with none of {@link #isTaken}'s validation applied: a caller that wants to
+     * know <em>who</em> must still decide for itself what to do about an answer it cannot resolve.
+     */
+    public static @Nullable UUID heldBy(Level level, String airfield, BlockPos spot) {
+        if (!(level instanceof ServerLevel serverLevel)) {
+            return null;
+        }
+        Held held = AutopilotSavedData.get(serverLevel).stand(new Stand(airfield, spot));
+        return held == null ? null : held.aircraft();
     }
 
     /**
      * Whether something is standing on this stand.
      *
+     * <p>This is also where a booking read back from disk is validated, because it is the only
+     * reader: a restored record goes through the resolve / locate / confirm-empty sequence below
+     * exactly as one made this session does.
+     *
      * @param asker excluded, so an aircraft can ask about the stand it already owns
      */
     public static boolean isTaken(Level level, String airfield, BlockPos spot, @Nullable PlaneEntity asker) {
-        Key key = new Key(level.dimension(), airfield, spot);
-        Held held = STANDS.get(key);
-        if (held == null || (asker != null && held.aircraft().equals(asker.getUUID()))) {
+        // No store on a client level and there never was one worth reading: the bookings live in the
+        // server's saved data. "No record" is the answer, and it is the same one a client got before
+        // this was persisted, on every setup except a single-player world whose client happened to
+        // share a JVM with its own server.
+        if (!(level instanceof ServerLevel serverLevel)) {
             return false;
         }
-        if (!(level instanceof ServerLevel serverLevel)) {
-            return true;
+        AutopilotSavedData data = AutopilotSavedData.get(serverLevel);
+        Stand stand = new Stand(airfield, spot);
+        Held held = data.stand(stand);
+        if (held == null || (asker != null && held.aircraft().equals(asker.getUUID()))) {
+            return false;
         }
         Entity entity = serverLevel.getEntity(held.aircraft());
         if (entity instanceof PlaneEntity plane && plane.isAlive() && !plane.isRemoved()) {
@@ -112,10 +194,10 @@ public final class StandOccupancy {
             if (AutopilotMath.horizontalDistance(plane.position(),
                 new Vec3(spot.getX() + 0.5, plane.getY(), spot.getZ() + 0.5))
                 <= AutopilotConfig.PARKING_SPOT_CLEARANCE) {
-                STANDS.put(key, new Held(held.aircraft(), 0));
+                data.stampStand(stand, 0);
                 return true;
             }
-            STANDS.remove(key);
+            data.releaseStand(stand);
             return false;
         }
         // Not in the level. Either it is standing there in a chunk nobody has loaded, or it is gone,
@@ -126,19 +208,34 @@ public final class StandOccupancy {
         }
         long now = serverLevel.getGameTime();
         if (held.emptySince() == 0) {
-            STANDS.put(key, new Held(held.aircraft(), now));
+            data.stampStand(stand, now);
             return true;
         }
         if (now - held.emptySince() < EMPTY_CONFIRM_TICKS) {
             return true;
         }
-        STANDS.remove(key);
+        data.releaseStand(stand);
         return false;
+    }
+
+    /**
+     * Drops one stand's booking outright, for an aircraft that is knowingly leaving it.
+     *
+     * <p>The self-healing rule in {@link #isTaken} would get there on its own — the aircraft is
+     * loaded and is about to be somewhere else, so the next look at the square releases it — but a
+     * departure knows the answer now, and saying so is cheaper and clearer than waiting to be
+     * noticed.
+     */
+    public static void release(Level level, String airfield, BlockPos spot) {
+        if (level instanceof ServerLevel serverLevel) {
+            AutopilotSavedData.get(serverLevel).releaseStand(new Stand(airfield, spot));
+        }
     }
 
     /** Forgets every record for an airfield, so removing or renaming one leaves nothing behind. */
     public static void forget(Level level, String airfield) {
-        STANDS.keySet().removeIf(key -> key.dimension().equals(level.dimension())
-            && key.airfield().equals(airfield));
+        if (level instanceof ServerLevel serverLevel) {
+            AutopilotSavedData.get(serverLevel).forgetStands(airfield);
+        }
     }
 }

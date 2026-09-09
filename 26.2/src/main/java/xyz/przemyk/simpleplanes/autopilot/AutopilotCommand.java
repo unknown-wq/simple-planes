@@ -20,6 +20,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.phys.Vec3;
@@ -48,8 +49,8 @@ import java.util.List;
  * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
  * /autopilot airfields [info|show|resurvey|remove|rename|park|unpark] …
  * /autopilot tower [&lt;airfield&gt;]
- * /autopilot status
- * /autopilot stop
+ * /autopilot status [aircraft]
+ * /autopilot stop [aircraft]
  * </pre>
  *
  * <p><b>Positions may be unloaded.</b> Everything except {@code survey} takes its coordinates with
@@ -274,8 +275,28 @@ public final class AutopilotCommand {
                     .suggests(AIRFIELD_SUGGESTIONS)
                     .executes(AutopilotCommand::towerOne)));
 
-            root.then(Commands.literal("status").executes(AutopilotCommand::status));
-            root.then(Commands.literal("stop").executes(AutopilotCommand::stop));
+            // status [aircraft] / stop [aircraft]
+            //
+            // The optional argument is the aircraft's entity id as a plain integer, and it is
+            // deliberately not EntityArgument. Every line this feature prints names an aircraft by
+            // that id and by nothing else — "Plane #4231 going around", the status readout, the
+            // tower board, "reserved by #7" — and an entity selector cannot express one: vanilla's
+            // selector grammar takes @e with filters, a player name or a UUID, none of which a
+            // player has in front of them. Requiring @e[type=simpleplanes:plane,...] would mean the
+            // number on screen is the one thing the command will not accept. So the argument is the
+            // number, resolved through Level#getEntity(int), which is the same lookup the id came
+            // from.
+            //
+            // Left off, both forms behave exactly as they always did: every aircraft in the
+            // dimension.
+            root.then(Commands.literal("status")
+                .executes(AutopilotCommand::status)
+                .then(Commands.argument("aircraft", IntegerArgumentType.integer(1))
+                    .executes(AutopilotCommand::statusOne)));
+            root.then(Commands.literal("stop")
+                .executes(AutopilotCommand::stop)
+                .then(Commands.argument("aircraft", IntegerArgumentType.integer(1))
+                    .executes(AutopilotCommand::stopOne)));
 
             dispatcher.register(root);
         });
@@ -1017,14 +1038,82 @@ public final class AutopilotCommand {
         CommandSourceStack source = context.getSource();
         List<? extends PlaneEntity> planes = activePlanes(source.getLevel());
         for (PlaneEntity plane : planes) {
-            PlaneAutopilot autopilot = plane.getAutopilot();
-            if (autopilot != null) {
-                autopilot.stop(plane);
-            }
-            plane.setAutopilot(null);
+            stopFlight(plane);
         }
         source.sendSuccess(() -> Component.literal("Stopped " + planes.size() + " autopilot aircraft."), true);
         return planes.size();
+    }
+
+    /** {@code /autopilot status <aircraft>} — the one readout, for the aircraft with that id. */
+    private static int statusOne(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        PlaneEntity plane = addressed(context);
+        if (plane == null) {
+            return 0;
+        }
+        PlaneAutopilot autopilot = plane.getAutopilot();
+        if (autopilot == null || !autopilot.isActive()) {
+            source.sendFailure(notFlying(plane));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("  " + autopilot.statusLine(plane)), false);
+        return 1;
+    }
+
+    /**
+     * {@code /autopilot stop <aircraft>} — ends one flight.
+     *
+     * <p>Exactly the path the all-stop takes, on one aircraft: {@link #stopFlight} is the whole of
+     * what the loop above does per aircraft, so the two forms cannot drift apart. No control law
+     * and no persisted state is touched — the aircraft is left standing wherever it was, as an
+     * all-stop leaves all of them.
+     */
+    private static int stopOne(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        PlaneEntity plane = addressed(context);
+        if (plane == null) {
+            return 0;
+        }
+        PlaneAutopilot autopilot = plane.getAutopilot();
+        if (autopilot == null || !autopilot.isActive()) {
+            source.sendFailure(notFlying(plane));
+            return 0;
+        }
+        stopFlight(plane);
+        source.sendSuccess(() -> Component.literal("Stopped autopilot aircraft #" + plane.getId() + "."), true);
+        return 1;
+    }
+
+    /** Ends one aircraft's flight. Shared verbatim by the all-stop and the single-aircraft stop. */
+    private static void stopFlight(PlaneEntity plane) {
+        PlaneAutopilot autopilot = plane.getAutopilot();
+        if (autopilot != null) {
+            autopilot.stop(plane);
+        }
+        plane.setAutopilot(null);
+    }
+
+    /**
+     * The aircraft the {@code aircraft} argument names, or null after saying why there is none.
+     *
+     * <p>Scoped to the source's dimension, which is where the ids it was read from were printed:
+     * an entity id is only unique within a level, so looking one up anywhere else would be a
+     * different aircraft with the same number.
+     */
+    private static @Nullable PlaneEntity addressed(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        int id = IntegerArgumentType.getInteger(context, "aircraft");
+        Entity entity = source.getLevel().getEntity(id);
+        if (!(entity instanceof PlaneEntity plane)) {
+            source.sendFailure(Component.literal("No aircraft #" + id + " in this dimension."
+                + " /autopilot status lists the ids of the ones there are."));
+            return null;
+        }
+        return plane;
+    }
+
+    private static Component notFlying(PlaneEntity plane) {
+        return Component.literal("#" + plane.getId() + " is not flying an autopilot flight.");
     }
 
     private static List<? extends PlaneEntity> activePlanes(ServerLevel level) {
