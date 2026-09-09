@@ -34,6 +34,7 @@ public class SimplePlanesClient implements ClientModInitializer {
         MenuScreens.register(SimplePlanesContainers.PLANE_INVENTORY.get(), PlaneInventoryScreen::new);
 
         ClientEventHandler.registerKeyBindings();
+        ClientEventHandler.registerAttackTrigger();
         ClientTickEvents.END_CLIENT_TICK.register(ClientEventHandler::onClientTick);
         ClientTickEvents.END_CLIENT_TICK.register(ToolPreview::tick);
 
