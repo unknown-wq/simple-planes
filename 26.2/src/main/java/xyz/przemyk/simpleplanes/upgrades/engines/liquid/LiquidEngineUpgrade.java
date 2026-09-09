@@ -1,6 +1,12 @@
 package xyz.przemyk.simpleplanes.upgrades.engines.liquid;
 
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
@@ -14,6 +20,11 @@ import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.level.material.MapColor;
+import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.client.ModBusClientEventHandler;
+import xyz.przemyk.simpleplanes.client.gui.PlaneInventoryScreen;
 import xyz.przemyk.simpleplanes.datapack.PlaneLiquidFuelReloadListener;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesConfig;
@@ -156,6 +167,94 @@ public class LiquidEngineUpgrade extends EngineUpgrade {
     public void addContainerData(Function<Slot, Slot> addSlot, Function<DataSlot, DataSlot> addDataSlot) {
         addSlot.apply(new Slot(container, 0, 152, 8));
         addSlot.apply(new Slot(container, 1, 152, 62));
+    }
+
+    // ------------------------------------------------------------------ gauges
+
+    /** Height of the tank window in the inventory screen, in pixels. */
+    private static final int TANK_HEIGHT = 36;
+
+    /** Inset of the fluid column inside that window, in pixels on each side. */
+    private static final int TANK_INSET = 2;
+
+    /**
+     * The colour to draw this tank's contents in.
+     *
+     * <p>The tiled still-texture this used to draw came from NeoForge's fluid extensions, which have
+     * no counterpart here — vanilla has no fluid-to-sprite mapping at all, only the block renderer's
+     * private knowledge of water and lava, so any general one would be a guess at a texture path.
+     * The fluid's own block is the general answer vanilla does have: every fluid has one, and its map
+     * colour is the single colour the game itself picks to stand for it. Water reads blue and lava
+     * orange, which is the whole job of a fuel gauge.
+     */
+    @Environment(EnvType.CLIENT)
+    private int fluidColour() {
+        MapColor colour = fluidTank.fluid.defaultFluidState().createLegacyBlock()
+            .getMapColor(planeEntity.level(), BlockPos.ZERO);
+        return 0xFF000000 | (colour == MapColor.NONE ? 0x4060C0 : colour.col);
+    }
+
+    /**
+     * The fluid's name, taken from its bucket.
+     *
+     * <p>A fluid carries no translated name of its own — vanilla never shows one — and its
+     * registry id is not a name to put in front of a player. The bucket is the one item that
+     * always exists for a fuel this engine can accept, since {@code tickBucket} is how the fuel
+     * got in.
+     */
+    @Environment(EnvType.CLIENT)
+    private Component fluidName() {
+        return new ItemStack(fluidTank.fluid.getBucket()).getHoverName();
+    }
+
+    @Environment(EnvType.CLIENT)
+    @Override
+    public void renderPowerHUD(GuiGraphicsExtractor graphics, HumanoidArm side,
+                               int screenWidth, int screenHeight, float partialTick) {
+        // The frame the furnace engine uses, because the two answer the same question in the same
+        // place and a pilot switching airframes should not have to learn a second gauge. This one
+        // was never drawn at all before — the engine flew with no fuel indication whatsoever.
+        int middle = screenWidth / 2;
+        int left = side == HumanoidArm.LEFT ? middle - 91 - 29 : middle + 91;
+        int top = screenHeight - 40;
+        graphics.blit(RenderPipelines.GUI_TEXTURED, ModBusClientEventHandler.HUD_TEXTURE,
+            left, top, 0, 44, 22, 40, 256, 256);
+
+        if (!fluidTank.isEmpty()) {
+            int filled = Math.max(1, fluidTank.amount * 16 / fluidTank.capacity);
+            graphics.fill(left + 4, top + 16 - filled + 1, left + 18, top + 17, fluidColour());
+        }
+    }
+
+    @Environment(EnvType.CLIENT)
+    @Override
+    public void renderScreenBg(GuiGraphicsExtractor graphics, int mouseX, int mouseY,
+                               float partialTick, PlaneInventoryScreen screen) {
+        int left = screen.getGuiLeft();
+        int top = screen.getGuiTop();
+        graphics.blit(RenderPipelines.GUI_TEXTURED, PlaneInventoryScreen.GUI,
+            left + 151, top + 7, 176, 72, 18, 72, 256, 256);
+
+        if (!fluidTank.isEmpty()) {
+            int filled = fluidTank.amount * (TANK_HEIGHT - 2 * TANK_INSET) / fluidTank.capacity;
+            int bottom = top + 7 + 18 + TANK_HEIGHT - TANK_INSET;
+            graphics.fill(left + 151 + TANK_INSET, bottom - filled,
+                left + 151 + 18 - TANK_INSET, bottom, fluidColour());
+        }
+        // The window frame goes on top of the fluid, so the column reads as being inside it.
+        graphics.blit(RenderPipelines.GUI_TEXTURED, PlaneInventoryScreen.GUI,
+            left + 154, top + 28, 194, 72, 12, 30, 256, 256);
+    }
+
+    @Environment(EnvType.CLIENT)
+    @Override
+    public void renderScreen(GuiGraphicsExtractor graphics, int mouseX, int mouseY,
+                             float partialTick, PlaneInventoryScreen screen) {
+        if (!fluidTank.isEmpty() && screen.isHovering(153, 7 + 18 + 2, 16, 32, mouseX, mouseY)) {
+            graphics.setTooltipForNextFrame(screen.getFont(),
+                Component.translatable(SimplePlanesMod.MODID + ".gui.fluid", fluidName(),
+                    fluidTank.amount), mouseX, mouseY);
+        }
     }
 
     /** Minimal stand-in for NeoForge's {@code FluidTank} (C4 — no Transfer API). */
