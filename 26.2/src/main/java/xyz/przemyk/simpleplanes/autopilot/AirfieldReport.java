@@ -139,15 +139,23 @@ public final class AirfieldReport {
             output.line("  marked parking spots: " + airfield.parkingSpots().size());
         } else if (airfield.standsMissing()) {
             // The survey is not the end of the job any more, so it does not print as though it were.
-            // Two lines: what is missing, and the exact next gesture — the tool is already in the
-            // player's hand, and the command form is here because this same report is what the
-            // headless rig reads.
+            // Two lines: what is missing, and how to supply it — in the same words the browser and a
+            // stopped arrival already use, with the command form alongside because this same report
+            // is what the headless rig reads.
+            //
+            // What the second line deliberately does not name is the mode-switch gesture. The tool
+            // puts itself into parking mode as soon as this report returns and announces it in the
+            // very next line of the same chat, so "sneak + right-click the air to put the tool into
+            // parking mode" was an instruction to toggle straight back out of the mode the following
+            // line says the player is now in. Stating the requirement rather than the gesture is
+            // right on both paths: on the tool path the next line tells the player they are already
+            // there, and on the command path — where this is also printed by resurvey — there need
+            // not be a tool in hand at all.
             output.warn("  NOT FINISHED: no parking marked. A runway with nowhere to park is one an"
                 + " aircraft departs from a square nobody surveyed and lands on with nowhere to go,"
                 + " so sorties to and from " + airfield.name() + " are refused until a stand exists.");
-            output.line("  Next: sneak + right-click the air to put the Runway Survey Tool into"
-                + " parking mode, then right-click beside the runway. Or:"
-                + " /autopilot airfields park \"" + airfield.name() + "\" <x y z>");
+            output.line("  Next: mark a stand beside the runway with the Runway Survey Tool in"
+                + " parking mode, or: /autopilot airfields park \"" + airfield.name() + "\" <x y z>");
         } else {
             output.line("  no marked parking; departures use the apron derived from the survey");
         }

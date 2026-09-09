@@ -1525,13 +1525,14 @@ airfield-3  name threshold_a threshold_b width parking obstacles_a obstacles_b r
 
 Four things follow from the flag, and none of them touches a grandfathered field:
 
-* **The survey says the job is not done**, in the report, with the next gesture spelled out:
-  `NOT FINISHED: no parking marked … Next: sneak + right-click the air to put the Runway Survey Tool
-  into parking mode, then right-click beside the runway. Or: /autopilot airfields park "airfield-3"
-  <x y z>`.
-* **The tool puts itself into parking mode** after such a survey. It is the same gesture sequence
-  either way and the report has just said in words what the tool does silently; re-surveying a field
-  that already has stands leaves the mode alone.
+* **The survey says the job is not done**, in the report, with what is missing spelled out:
+  `NOT FINISHED: no parking marked … Next: mark a stand beside the runway with the Runway Survey
+  Tool in parking mode, or: /autopilot airfields park "airfield-3" <x y z>`.
+* **The tool puts itself into parking mode** after such a survey, and says so on the line after the
+  report. The report names the mode but not the gesture that reaches it, because the tool is already
+  in that mode by the time the player reads it — telling them to sneak + right-click the air there
+  would be telling them to toggle straight back out. Re-surveying a field that already has stands
+  leaves the mode alone.
 * **The browser marks it `NO PARKING`**, in red, in the same column and the same tone as `TOO SHORT`,
   and `airfields info` prints the whole instruction.
 * **Sorties are refused at the command**, at both ends — `flight` checks the departure and the
