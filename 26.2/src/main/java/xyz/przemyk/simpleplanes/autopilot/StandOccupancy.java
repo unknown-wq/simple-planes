@@ -218,6 +218,20 @@ public final class StandOccupancy {
         return false;
     }
 
+    /**
+     * Drops one stand's booking outright, for an aircraft that is knowingly leaving it.
+     *
+     * <p>The self-healing rule in {@link #isTaken} would get there on its own — the aircraft is
+     * loaded and is about to be somewhere else, so the next look at the square releases it — but a
+     * departure knows the answer now, and saying so is cheaper and clearer than waiting to be
+     * noticed.
+     */
+    public static void release(Level level, String airfield, BlockPos spot) {
+        if (level instanceof ServerLevel serverLevel) {
+            AutopilotSavedData.get(serverLevel).releaseStand(new Stand(airfield, spot));
+        }
+    }
+
     /** Forgets every record for an airfield, so removing or renaming one leaves nothing behind. */
     public static void forget(Level level, String airfield) {
         if (level instanceof ServerLevel serverLevel) {

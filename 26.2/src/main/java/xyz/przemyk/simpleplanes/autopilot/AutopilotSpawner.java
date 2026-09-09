@@ -251,18 +251,24 @@ public final class AutopilotSpawner {
         // itself: from a spot a few blocks down the runway, "face the threshold" points it backwards
         // down its own departure path.
         Vec3 position = parking.position();
+        Vec3 spawn = new Vec3(position.x, position.y + 1.0, position.z);
 
-        PlaneEntity plane = create(level, position.x, position.y + 1.0, position.z, parking.heading(), type);
-        if (plane == null) {
+        // An airframe already parked at this field is flown again rather than a new one being built,
+        // whenever one can be seen from here — see AircraftReuse for why "can be seen" is the whole
+        // rule and what happens on the field that cannot be.
+        Departing departing = departing(level, departure.name(), departure.parkingSpots(),
+            type, spawn, parking.heading(), owner);
+        if (departing == null) {
             return null;
         }
+        PlaneEntity plane = departing.plane();
         // Explicitly stationary. No synthetic velocity on a runway departure. The booster is fitted
         // all the same — it is the throttle ceiling for the cruise, not a launch aid, and a take-off
         // roll that starts at zero is unaffected by it.
         fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
         plane.setDeltaMovement(Vec3.ZERO);
         plane.setThrottle(0);
-        addToWorld(level, plane);
+        departing.enterWorld(level);
 
         int cruiseAltitude = sortieCruiseAltitude(level, departure, destination);
         BlockPos aim = BlockPos.containing(destination.centre());
@@ -343,14 +349,21 @@ public final class AutopilotSpawner {
 
         Vec3 pad = departure.touchdown();
         double heading = AutopilotMath.headingTo(pad, destination.touchdown());
-        PlaneEntity plane = create(level, pad.x, pad.y + 1.0, pad.z, heading, AircraftType.HELICOPTER);
-        if (plane == null) {
+        Vec3 spawn = new Vec3(pad.x, pad.y + 1.0, pad.z);
+
+        // A pad has exactly one square, so its booking is either the machine that last landed on it
+        // or nothing. Reuse here never moves anything: the machine is claimed off the square it is
+        // already standing on and set down again facing the new destination.
+        Departing departing = departing(level, departure.name(), List.of(departure.centre()),
+            AircraftType.HELICOPTER, spawn, heading, owner);
+        if (departing == null) {
             return null;
         }
+        PlaneEntity plane = departing.plane();
         fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
         plane.setDeltaMovement(Vec3.ZERO);
         plane.setThrottle(0);
-        addToWorld(level, plane);
+        departing.enterWorld(level);
 
         int cruiseAltitude = Helipad.cruiseAltitude(level, departure, destination);
         PlaneAutopilot autopilot = new PlaneAutopilot();
@@ -482,15 +495,23 @@ public final class AutopilotSpawner {
         return Math.min(highest + 60, level.getMaxY() - 10);
     }
 
-    private static void addToWorld(Level level, PlaneEntity plane) {
-        // Chunks first, and resident before the entity is added rather than merely requested. An
-        // aircraft is nearly always spawned far from any player, and an entity added to a chunk that
-        // is not loaded yet does not tick — it just hangs there. A ticket on its own only schedules
-        // the load, so the spawn chunk is also pulled in synchronously.
+    /**
+     * Keeps an aircraft's own chunk resident.
+     *
+     * <p>Chunks first, and resident rather than merely requested. An aircraft is nearly always
+     * placed far from any player, and an entity in a chunk that is not loaded yet does not tick — it
+     * just hangs there. A ticket on its own only schedules the load, so the chunk is also pulled in
+     * synchronously.
+     */
+    private static void keepResident(Level level, PlaneEntity plane) {
         if (level instanceof ServerLevel serverLevel) {
             loadAround(serverLevel, plane.position());
             PlaneAutopilot.keepChunksLoaded(serverLevel, plane);
         }
+    }
+
+    private static void addToWorld(Level level, PlaneEntity plane) {
+        keepResident(level, plane);
         level.addFreshEntity(plane);
     }
 
@@ -505,6 +526,18 @@ public final class AutopilotSpawner {
         if (plane == null) {
             return null;
         }
+        orient(plane, x, y, z, heading);
+        return plane;
+    }
+
+    /**
+     * Puts an airframe on its departure point facing its departure heading.
+     *
+     * <p>One copy for both airframes a departure can end up with — a new one out of {@link #create}
+     * and one {@link AircraftReuse} claimed off a stand — because the quaternion rule below is
+     * exactly the kind of thing two copies come to disagree about.
+     */
+    private static void orient(PlaneEntity plane, double x, double y, double z, double heading) {
         plane.setPos(x, y, z);
         plane.setYRot((float) heading);
         plane.yRotO = (float) heading;
@@ -514,6 +547,66 @@ public final class AutopilotSpawner {
         plane.setQ_Client(MathUtil.toQuaternionf(heading, 0, 0));
         plane.setQ_prev(MathUtil.toQuaternionf(heading, 0, 0));
         plane.setMaxSpeed(1.0f);
-        return plane;
+    }
+
+    /**
+     * The airframe a ground departure will fly: one already parked at the field where there is a
+     * usable one that can be seen, otherwise a new one. Null only when a new one could not be built.
+     *
+     * <p>The reused branch and the fresh branch are deliberately left side by side rather than
+     * folded together. They differ in three ways that all matter and none of which is obvious: a
+     * claimed airframe carries a previous flight's damage and attitude and has to be scrubbed, it is
+     * already in the world so it must not be added again, and being already tracked it wants its
+     * interpolation baseline reset or every client watching sees it slide across the apron.
+     *
+     * <p>Ordering is the fresh path's, unchanged: everything the caller does to the aircraft happens
+     * before {@code addFreshEntity}, so a new airframe's upgrades ride out in its spawn data exactly
+     * as they always did. A claimed airframe is already spawned, so the same calls reach its
+     * trackers as ordinary update packets instead — which is the correct path for an entity that is
+     * in the world, and the reason {@code addUpgradeUsingWrench} sends one.
+     *
+     * <p>A reuse is reported rather than silent. An operator watching a field's aircraft count stop
+     * growing has to be able to tell that from the command having quietly stopped launching, and the
+     * id in the line is the one every other message about this flight will carry. It goes through
+     * {@link AutopilotFeedback#report}, beside the departure and arrival reports, and not into the
+     * command's own success line — that line is what the recipes in {@code TESTING.md} read the
+     * aircraft's number off, and its shape is left exactly as it was.
+     *
+     * @return the airframe, and whether it was claimed rather than created
+     */
+    private static @Nullable Departing departing(ServerLevel level, String field, List<BlockPos> stands,
+                                                 AircraftType type, Vec3 spawn, double heading,
+                                                 @Nullable Player owner) {
+        AircraftReuse.Claimed claimed = AircraftReuse.claim(level, field, stands, type, spawn);
+        if (claimed != null) {
+            PlaneEntity plane = claimed.plane();
+            AircraftReuse.scrub(plane);
+            orient(plane, spawn.x, spawn.y, spawn.z, heading);
+            // Already tracked, so the move has to land as a teleport rather than as a step: without
+            // this the client interpolates the whole distance from wherever it was parked.
+            plane.setOldPosAndRot();
+            // "Helicopter" or "Plane", the same two words every other report about an aircraft
+            // uses, so a reader does not have to work out which kind of field this was.
+            AutopilotFeedback.report(owner,
+                (type == AircraftType.HELICOPTER ? "Helicopter #" : "Plane #") + plane.getId()
+                    + " taken from stand " + claimed.stand().toShortString() + " at " + field
+                    + " and re-tasked; no new airframe built.");
+            return new Departing(plane, true);
+        }
+        PlaneEntity fresh = create(level, spawn.x, spawn.y, spawn.z, heading, type);
+        return fresh == null ? null : new Departing(fresh, false);
+    }
+
+    /** An airframe about to depart, and whether it was already standing at the field. */
+    private record Departing(PlaneEntity plane, boolean reused) {
+
+        /** Makes it resident, and adds it to the world if it is not in it yet. */
+        void enterWorld(Level level) {
+            if (reused) {
+                keepResident(level, plane);
+            } else {
+                addToWorld(level, plane);
+            }
+        }
     }
 }

@@ -3039,6 +3039,24 @@ world cannot double-count either.
   are promoted would send an aircraft that has already completed its flight back down the runway.
   The aircraft stays where it stands, off the runway, and the flight is over. That is a worse parking
   job than it asked for, not a lost aircraft.
+* **Reuse only fires on a field something can see.** A ground departure flies an airframe already
+  parked at the field rather than building another one, but only where the booking on a stand
+  resolves to a loaded entity *in the tick the command runs*. Chunks give back their blocks
+  synchronously and their entities a tick or more later, so on a field nobody has been near the
+  parked airframe is not in the level yet and a new one is built — safely, on a different stand,
+  because the booking says the stand is taken. Waiting for the entity would mean `/autopilot flight`
+  no longer returning the aircraft it launched, which is the identifier every recipe in `TESTING.md`
+  reads, and a window in which a shutdown loses a sortie with nothing durable to recover it from.
+  So accumulation is slowed on a field in use and not stopped on a field that is not.
+* **A reused airframe is repaired on dispatch.** Reuse is meant to be invisible, and a fresh spawn
+  departs at full health; screening on health instead would retire an airframe permanently on its
+  first firm landing. Upgrades and their contents are kept, which is the point. An airframe carrying
+  anything at all — a player, or livestock a large airframe collected while parked — is never
+  claimed.
+* **Only an aircraft with a stand booking is ever claimed.** That is the fleet identity: bookings are
+  written in exactly two places, both at the end of a flight this mod dispatched, so an aircraft with
+  one is an aircraft this mod parked there. A player's own plane on a marked stand has no booking and
+  cannot be taken.
 * **Nothing re-parks an aircraft that stopped on the runway.** All three "cannot taxi in" outcomes
   end the flight where the aircraft is; there is no retry when a stand later frees up, and no
   dispatcher to notice. `/autopilot tower` shows the strip as free — because the *reservation* is —
