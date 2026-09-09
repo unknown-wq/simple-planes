@@ -112,6 +112,15 @@ public class RunwayToolItem extends Item {
 
         Airfield surveyed = AirfieldReport.surveyAndRegister(
             AutopilotOutput.toPlayer(player), serverLevel, anchor, clicked);
+        // A strip whose surface will not do registers nothing, and the report above has already said
+        // which block is in the way and where it is. The tool stays in survey mode with no anchor
+        // set, so the next click starts the same job again on the cleared strip — putting it into
+        // parking mode here would be offering to finish an airfield that does not exist.
+        if (surveyed == null) {
+            AutopilotFeedback.warn(player, "Nothing registered. Clear the strip and mark both ends"
+                + " again — a runway carries nothing but air, snow or grass.");
+            return InteractionResult.CONSUME;
+        }
         // The survey is only half the job now, so the tool puts itself into the half that is left
         // rather than telling the player to change mode and hoping they do. It is the same gesture
         // sequence either way — the tool is already in hand and the next click is a parking click.

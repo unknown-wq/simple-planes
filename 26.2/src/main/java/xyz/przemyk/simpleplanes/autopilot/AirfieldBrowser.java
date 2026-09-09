@@ -140,6 +140,7 @@ public final class AirfieldBrowser {
             String.format("%.1f", airfield.slopeDegrees()),
             String.format("%.2f", airfield.roughness(level))));
 
+        surfaceLine(output, level, airfield);
         thresholdLine(output, level, airfield, endA);
         thresholdLine(output, level, airfield, endB);
         centrelineLine(output, level, airfield);
@@ -204,6 +205,46 @@ public final class AirfieldBrowser {
         }
         output.component(line.append(Component.literal("  "))
             .append(copyable(BlockPos.containing(end.threshold()))));
+    }
+
+    /**
+     * Whether the strip itself is still a landing surface: nothing but air, snow or grass over it,
+     * and even. The survey refuses a strip that fails this, so a registered airfield that fails it
+     * is one somebody has built on, ploughed, flooded or let a forest grow over since.
+     *
+     * <p><b>Reported, never enforced.</b> An airfield already in the registry keeps working exactly
+     * as it did, and this line is the whole of the change for it. Three reasons, and they are the
+     * same three this file already gives for leaving stored geometry alone:
+     * <ul>
+     *   <li>The measurement is live. It needs the runway's chunks resident, and the browser is
+     *       normally read from somewhere else entirely, so a rule enforced on it would refuse
+     *       sorties into fields nobody has looked at. That is exactly the failure
+     *       {@link #thresholdLine} avoids by printing the stored obstacle counts rather than fresh
+     *       ones.</li>
+     *   <li>Nothing on disk was surveyed under this rule, so turning it into a refusal would ground
+     *       fleets in worlds that fly perfectly well today — the same argument the
+     *       {@code requires_stands} codec default makes, and the same answer.</li>
+     *   <li>It is recoverable by hand. A player who reads this line knows the block and the
+     *       coordinate; clearing it and re-surveying is two gestures. A refusal they cannot see the
+     *       cause of is not.</li>
+     * </ul>
+     *
+     * <p>Silent when the thresholds are cold, for {@link #centrelineLine}'s reason: an airfield
+     * nobody is standing near must not be accused on no evidence. And deliberately not in the list
+     * rows — it is a few thousand block reads per airfield, and the list is a list.
+     */
+    private static void surfaceLine(AutopilotOutput output, ServerLevel level, Airfield airfield) {
+        if (!level.hasChunkAt(airfield.thresholdA()) || !level.hasChunkAt(airfield.thresholdB())) {
+            return;
+        }
+        String problem = airfield.surfaceProblem(level);
+        output.component(problem == null
+            ? AutopilotText.tr("detail.surface_clear",
+                "  surface clear: nothing but air, snow or grass over the strip")
+                .withStyle(ChatFormatting.GREEN)
+            : AutopilotText.tr("detail.surface_blocked",
+                "  SURFACE NOT CLEAR: %s - clear it, then run /autopilot airfields resurvey \"%s\"",
+                problem, airfield.name()).withStyle(ChatFormatting.RED));
     }
 
     /**
@@ -476,6 +517,18 @@ public final class AirfieldBrowser {
         Airfield fresh = Airfield.survey(level, name, a, b)
             .withParkingSpots(airfield.parkingSpots())
             .withRequiredStands(airfield.requiresStands());
+        // Refused for the same reason a fresh survey is refused, and with the same consequence as a
+        // fresh survey has for an existing field: nothing is written and nothing is removed, so the
+        // registered airfield is left exactly as it was saved. Re-measuring a strip that has had a
+        // wall built across it must not quietly replace a working entry with a measurement of the
+        // wall.
+        String surface = fresh.surfaceProblem(level);
+        if (surface != null) {
+            output.component(AutopilotText.tr("manage.resurvey_surface",
+                "%s cannot be re-surveyed: %s. Nothing was changed - it is still registered exactly"
+                    + " as it was.", name, surface).withStyle(ChatFormatting.RED));
+            return false;
+        }
         data.put(fresh);
         double moved = Math.max(distance(a, fresh.thresholdA()), distance(b, fresh.thresholdB()));
         output.component(moved < 0.5

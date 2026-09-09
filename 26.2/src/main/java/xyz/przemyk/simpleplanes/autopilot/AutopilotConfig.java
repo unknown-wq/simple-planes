@@ -942,6 +942,70 @@ public final class AutopilotConfig {
     public static final double SURVEY_OBSTACLE_MARGIN = 3.0;
 
     /*
+     * ---- what has to be on the strip itself ----
+     *
+     * The approach numbers above are about the air an aircraft flies through on its way in. These
+     * four are about the ground it then rolls along, which until now was measured and printed and
+     * never once enforced: Airfield#roughness said in its own javadoc that it was "reported by the
+     * survey tool, not used for guidance", and nothing looked at the strip's surface at all beyond
+     * its elevation. A strip with a fence line down one edge, a tree in the middle or a metre of
+     * standing water surveyed exactly as cleanly as a runway.
+     */
+    /**
+     * Blocks of clear air the survey requires directly above the strip, over its whole measured
+     * width. The runway counterpart of {@link RotorcraftConfig#PAD_CLEAR_HEIGHT}, and much smaller
+     * than it for the reason that constant gives: a helicopter departs vertically and everything
+     * over the pad is on its flight path, while an aeroplane rolls out along the ground and only
+     * meets what its own airframe is tall enough to hit.
+     *
+     * <p>Three, because the tallest airframe in the mod is 2.3 blocks high (the large and cargo
+     * planes; see {@code SimplePlanesEntities}) and a block is either wholly in the way or wholly
+     * not.
+     */
+    public static final int RUNWAY_CLEAR_HEIGHT = 3;
+    /**
+     * How far the strip surface may sit above or below the straight line between the two thresholds
+     * before the survey calls it a step, in blocks.
+     *
+     * <p>One, and it is one for a reason that has nothing to do with taste: it is exactly the
+     * tolerance {@code Airfield#levelWith} uses when it walks outwards to decide how wide the strip
+     * is. The width measurement and the surface rule therefore agree about which columns are "the
+     * runway" — with a tighter tolerance the survey would measure a width and then refuse the strip
+     * for the shoulder it had just counted as part of it.
+     *
+     * <p>A column that sits inside this band but is topped by something that is not a full block of
+     * collision — a fence post, a wall, a slab, a chest — is still refused, because it is a thing
+     * standing on the runway rather than a runway one block higher. See
+     * {@code Airfield#surfaceProblem}.
+     */
+    public static final int RUNWAY_MAX_SURFACE_STEP = 1;
+    /**
+     * Columns probed across the strip at each along-track station, spread over the measured width.
+     *
+     * <p>Five, the same number of lateral samples the approach funnel uses, and for the same reason:
+     * a rule that walked only the centreline would pass a runway with a wall of oak along one edge.
+     * Combined with the along-track stations — {@code length / 4}, capped at 64, which is the
+     * sampling {@link Airfield#roughness} already uses — this bounds one survey at 325 columns.
+     */
+    public static final int RUNWAY_SURFACE_LATERAL_SAMPLES = 5;
+    /**
+     * Largest surface roughness the survey will register, in blocks of standard deviation along the
+     * centreline. The runway counterpart of {@link RotorcraftConfig#PAD_MAX_ROUGHNESS}, and looser
+     * than it because an aeroplane rolls over a strip rather than settling onto a point.
+     *
+     * <p>Two, and the reason it is not one is that {@link Airfield#roughness} measures the spread of
+     * the surface heights about their <em>mean</em> rather than about the runway's own sloping line,
+     * so a perfectly smooth ramp is "rough" in proportion to how much it climbs: a linear rise of
+     * {@code R} blocks scores {@code R / (2 * sqrt 3)}, i.e. 0.29 per block of rise. At 2.0 a smooth
+     * strip may climb about 7 blocks end to end before this fires, which is a gradient a runway of
+     * any length can have honestly, while a strip that wanders up and down by that much cannot.
+     *
+     * <p>Local lumps are not this constant's job — {@link #RUNWAY_MAX_SURFACE_STEP} catches those
+     * per column, and catches them across the width, which a single centreline figure cannot.
+     */
+    public static final double RUNWAY_MAX_ROUGHNESS = 2.0;
+
+    /*
      * ---- deciding the departure before the aircraft rolls ----
      *
      * The same idea as the arrival decision above, at the other end of the flight, and it had the
