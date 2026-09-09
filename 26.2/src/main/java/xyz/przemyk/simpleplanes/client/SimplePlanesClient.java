@@ -12,6 +12,7 @@ import xyz.przemyk.simpleplanes.client.gui.PlaneInventoryScreen;
 import xyz.przemyk.simpleplanes.client.gui.PlaneWorkbenchScreen;
 import xyz.przemyk.simpleplanes.client.gui.StorageScreen;
 import xyz.przemyk.simpleplanes.client.render.AirfieldOverlayRenderer;
+import xyz.przemyk.simpleplanes.client.render.ToolPreview;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesContainers;
 
@@ -34,6 +35,7 @@ public class SimplePlanesClient implements ClientModInitializer {
 
         ClientEventHandler.registerKeyBindings();
         ClientTickEvents.END_CLIENT_TICK.register(ClientEventHandler::onClientTick);
+        ClientTickEvents.END_CLIENT_TICK.register(ToolPreview::tick);
 
         HudElementRegistry.addLast(ModBusClientEventHandler.HUD_ELEMENT_ID, ModBusClientEventHandler.INSTANCE);
 

@@ -36,6 +36,9 @@ import java.util.List;
  * a stand with an aircraft on it or an aircraft on its way to it. A <b>violet square</b> is a
  * helicopter pad, drawn inside the wider violet outline of the clearance the survey required around
  * it.
+ *
+ * <p>The <b>green, amber and red</b> shapes on top of all that are the selection the tool in hand
+ * would mark if it were clicked now; see {@link ToolPreview}.
  */
 @Environment(EnvType.CLIENT)
 public final class AirfieldOverlayRenderer {
@@ -60,8 +63,9 @@ public final class AirfieldOverlayRenderer {
 
     public static void register() {
         LevelRenderEvents.COLLECT_SUBMITS.register(context -> {
-            List<GroundOverlay.Patch> patches = new ArrayList<>();
-            List<GroundOverlay.Post> posts = new ArrayList<>();
+            ToolPreview.Preview preview = ToolPreview.current();
+            List<GroundOverlay.Patch> patches = new ArrayList<>(preview.patches());
+            List<GroundOverlay.Post> posts = new ArrayList<>(preview.posts());
             collectKnownFields(patches);
             if (patches.isEmpty() && posts.isEmpty()) {
                 return;
