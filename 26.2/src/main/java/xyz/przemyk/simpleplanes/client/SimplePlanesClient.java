@@ -11,6 +11,8 @@ import xyz.przemyk.simpleplanes.client.gui.ModifyUpgradesScreen;
 import xyz.przemyk.simpleplanes.client.gui.PlaneInventoryScreen;
 import xyz.przemyk.simpleplanes.client.gui.PlaneWorkbenchScreen;
 import xyz.przemyk.simpleplanes.client.gui.StorageScreen;
+import xyz.przemyk.simpleplanes.client.render.AirfieldOverlayRenderer;
+import xyz.przemyk.simpleplanes.client.render.ToolPreview;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesContainers;
 
@@ -32,9 +34,13 @@ public class SimplePlanesClient implements ClientModInitializer {
         MenuScreens.register(SimplePlanesContainers.PLANE_INVENTORY.get(), PlaneInventoryScreen::new);
 
         ClientEventHandler.registerKeyBindings();
+        ClientEventHandler.registerAttackTrigger();
         ClientTickEvents.END_CLIENT_TICK.register(ClientEventHandler::onClientTick);
+        ClientTickEvents.END_CLIENT_TICK.register(ToolPreview::tick);
 
         HudElementRegistry.addLast(ModBusClientEventHandler.HUD_ELEMENT_ID, ModBusClientEventHandler.INSTANCE);
+
+        AirfieldOverlayRenderer.register();
 
         // The sound classes remember what they are playing in static tables keyed by entity, and the
         // sound engine drops its own instances on world unload without telling them. Leaving a world
@@ -42,6 +48,8 @@ public class SimplePlanesClient implements ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             PlaneSound.clear();
             MovingSound.clear();
+            // Markers from the world just left, drawn over the next one, would be worse than none.
+            AirfieldMarkers.clear();
         });
 
         SimplePlanesNetworking.registerClient();

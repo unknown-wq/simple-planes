@@ -942,6 +942,70 @@ public final class AutopilotConfig {
     public static final double SURVEY_OBSTACLE_MARGIN = 3.0;
 
     /*
+     * ---- what has to be on the strip itself ----
+     *
+     * The approach numbers above are about the air an aircraft flies through on its way in. These
+     * four are about the ground it then rolls along, which until now was measured and printed and
+     * never once enforced: Airfield#roughness said in its own javadoc that it was "reported by the
+     * survey tool, not used for guidance", and nothing looked at the strip's surface at all beyond
+     * its elevation. A strip with a fence line down one edge, a tree in the middle or a metre of
+     * standing water surveyed exactly as cleanly as a runway.
+     */
+    /**
+     * Blocks of clear air the survey requires directly above the strip, over its whole measured
+     * width. The runway counterpart of {@link RotorcraftConfig#PAD_CLEAR_HEIGHT}, and much smaller
+     * than it for the reason that constant gives: a helicopter departs vertically and everything
+     * over the pad is on its flight path, while an aeroplane rolls out along the ground and only
+     * meets what its own airframe is tall enough to hit.
+     *
+     * <p>Three, because the tallest airframe in the mod is 2.3 blocks high (the large and cargo
+     * planes; see {@code SimplePlanesEntities}) and a block is either wholly in the way or wholly
+     * not.
+     */
+    public static final int RUNWAY_CLEAR_HEIGHT = 3;
+    /**
+     * How far the strip surface may sit above or below the straight line between the two thresholds
+     * before the survey calls it a step, in blocks.
+     *
+     * <p>One, and it is one for a reason that has nothing to do with taste: it is exactly the
+     * tolerance {@code Airfield#levelWith} uses when it walks outwards to decide how wide the strip
+     * is. The width measurement and the surface rule therefore agree about which columns are "the
+     * runway" — with a tighter tolerance the survey would measure a width and then refuse the strip
+     * for the shoulder it had just counted as part of it.
+     *
+     * <p>A column that sits inside this band but is topped by something that is not a full block of
+     * collision — a fence post, a wall, a slab, a chest — is still refused, because it is a thing
+     * standing on the runway rather than a runway one block higher. See
+     * {@code Airfield#surfaceProblem}.
+     */
+    public static final int RUNWAY_MAX_SURFACE_STEP = 1;
+    /**
+     * Columns probed across the strip at each along-track station, spread over the measured width.
+     *
+     * <p>Five, the same number of lateral samples the approach funnel uses, and for the same reason:
+     * a rule that walked only the centreline would pass a runway with a wall of oak along one edge.
+     * Combined with the along-track stations — {@code length / 4}, capped at 64, which is the
+     * sampling {@link Airfield#roughness} already uses — this bounds one survey at 325 columns.
+     */
+    public static final int RUNWAY_SURFACE_LATERAL_SAMPLES = 5;
+    /**
+     * Largest surface roughness the survey will register, in blocks of standard deviation along the
+     * centreline. The runway counterpart of {@link RotorcraftConfig#PAD_MAX_ROUGHNESS}, and looser
+     * than it because an aeroplane rolls over a strip rather than settling onto a point.
+     *
+     * <p>Two, and the reason it is not one is that {@link Airfield#roughness} measures the spread of
+     * the surface heights about their <em>mean</em> rather than about the runway's own sloping line,
+     * so a perfectly smooth ramp is "rough" in proportion to how much it climbs: a linear rise of
+     * {@code R} blocks scores {@code R / (2 * sqrt 3)}, i.e. 0.29 per block of rise. At 2.0 a smooth
+     * strip may climb about 7 blocks end to end before this fires, which is a gradient a runway of
+     * any length can have honestly, while a strip that wanders up and down by that much cannot.
+     *
+     * <p>Local lumps are not this constant's job — {@link #RUNWAY_MAX_SURFACE_STEP} catches those
+     * per column, and catches them across the width, which a single centreline figure cannot.
+     */
+    public static final double RUNWAY_MAX_ROUGHNESS = 2.0;
+
+    /*
      * ---- deciding the departure before the aircraft rolls ----
      *
      * The same idea as the arrival decision above, at the other end of the flight, and it had the
@@ -1010,6 +1074,112 @@ public final class AutopilotConfig {
     public static final double STRIKE_MAX_DIVE_DISTANCE = 320.0;
     /** Speed under which an aircraft on a strike run is considered to have hit something. */
     public static final double STRIKE_STALLED_SPEED = 0.35;
+
+    /*
+     * ---- scheduled shuttles ----
+     *
+     * A shuttle is one aircraft flying between two airfields for ever with a turnaround wait at each
+     * end. Everything below bounds it. See AutopilotDispatcher for the reasoning behind each number; what
+     * they have in common is that a shuttle runs unattended for hours, so every one of them exists
+     * to stop a fault repeating in silence rather than to tune anything.
+     */
+    /**
+     * Hard cap on scheduled shuttles per dimension.
+     *
+     * <p>Four, and it is a tighter cap than {@link #MAX_ACTIVE_AUTOPILOTS} for a reason that is not
+     * tick cost. A waiting shuttle keeps a chunk ticket alive over its parked aircraft for the whole
+     * turnaround — see {@link #SHUTTLE_HOLD_RADIUS} — so N shuttles is N small permanently resident
+     * areas for as long as they run, and that is a cost a server owner is entitled to be able to
+     * predict. Four shuttles is at most eight such areas (each shuttle holds one end at a time) and,
+     * with both legs of all four in the air at once, sixteen of the twenty-four autopilot slots.
+     */
+    public static final int MAX_SHUTTLES = 4;
+    /**
+     * Shortest and longest turnaround {@code /autopilot shuttle add … <seconds>} accepts.
+     *
+     * <p>Seconds, and bounded at both ends by the argument type itself so the refusal arrives while
+     * the player is still typing. Zero is excluded rather than clamped: the wait <em>is</em> the
+     * feature, and a shuttle that departs in the same tick it finishes taxiing in would relaunch
+     * before {@code PlaneAutopilot#finishTaxiIn} has finished writing the stand booking. Ten seconds
+     * is short enough to watch a full cycle on a test rig and long enough that the arrival is
+     * complete. The ceiling is {@link #MAX_DEPARTURE_DELAY_SECONDS}, the same hour a single sortie's
+     * departure delay is bounded by, for the same reason — a turnaround nobody can observe inside
+     * one session is indistinguishable from a shuttle that has stopped working.
+     */
+    public static final int MIN_SHUTTLE_DELAY_SECONDS = 10;
+    public static final int MAX_SHUTTLE_DELAY_SECONDS = MAX_DEPARTURE_DELAY_SECONDS;
+    /**
+     * Ticks between runs of the shuttle state machine.
+     *
+     * <p>One second. The check is a comparison of a stored game-time stamp against the clock, not a
+     * scan of anything: no airfield is walked, no entity search is run, and a dimension with no
+     * shuttles in it costs one map lookup and an {@code isEmpty}.
+     */
+    public static final int SHUTTLE_CHECK_INTERVAL = 20;
+    /**
+     * Ticks between renewals of a waiting shuttle's chunk ticket.
+     *
+     * <p>The same {@link #CHUNK_TICKET_INTERVAL} a flight's own bubble is renewed at, and for the
+     * same arithmetic: {@code TicketType.ENDER_PEARL} expires 40 ticks after it is placed, so the
+     * renewal has to be comfortably inside that or the hold blinks out between renewals.
+     */
+    public static final int SHUTTLE_HOLD_INTERVAL = CHUNK_TICKET_INTERVAL;
+    /**
+     * Radius of the chunk ticket a waiting shuttle keeps over its parked aircraft.
+     *
+     * <p>Three, not {@link #CHUNK_TICKET_RADIUS}. A ticket of radius {@code r} entity-ticks the
+     * chunks within {@code r - 2} of the centre (see {@code PlaneAutopilot#keepChunksLoaded} for
+     * why the radius is not the bubble), so three ticks the stand's chunk and its eight neighbours —
+     * enough that an aircraft parked against a chunk boundary is still resolvable, and no more. A
+     * parked aircraft does not move, so there is nothing to lead and nothing to outrun.
+     */
+    public static final int SHUTTLE_HOLD_RADIUS = 3;
+    /**
+     * How long past a due departure a shuttle goes on looking for its airframe before it gives up on
+     * that departure, in ticks.
+     *
+     * <p>Five seconds, and it is a window rather than a retry count because what it is waiting for
+     * is a chunk load: chunks hand back blocks synchronously and entities a tick or more later, which
+     * is the same asynchrony {@code StandOccupancy.EMPTY_CONFIRM_TICKS} exists for. The normal case
+     * never uses it — a waiting shuttle has been holding a ticket over its own aircraft, so the
+     * airframe is already in the level — and the case it does cover is the first departure after a
+     * restart, where nothing has held anything and the field starts cold.
+     */
+    public static final int SHUTTLE_WAKE_TICKS = 100;
+    /** How long a shuttle waits before retrying a departure it could not fly, in ticks. */
+    public static final int SHUTTLE_RETRY_TICKS = 600;
+    /**
+     * Consecutive deferred departures before a shuttle stops trying and pauses.
+     *
+     * <p>The point of the whole feature is unattended operation, and the failure mode a thing that
+     * runs unattended must not have is retrying for ever without saying anything. Three attempts
+     * over {@value #SHUTTLE_RETRY_TICKS}-tick intervals is a minute and a half of trying, after
+     * which the shuttle pauses, keeps its record, and shows the reason in
+     * {@code /autopilot shuttle list} until somebody deals with it.
+     */
+    public static final int SHUTTLE_MAX_MISSES = 3;
+    /**
+     * How long an in-flight shuttle aircraft may be unresolvable before it is declared lost, in
+     * ticks.
+     *
+     * <p>Ten seconds. A flying autopilot aircraft carries its own chunk ticket and is renewed from
+     * {@code AutopilotRegistry} on the level tick, so it is resolvable on essentially every tick of
+     * its flight; not being able to find it means it is gone rather than merely far away. The delay
+     * is there for the one tick either side of a dimension-crossing or a chunk handover, not as a
+     * search.
+     */
+    public static final int SHUTTLE_LOST_TICKS = 200;
+    /**
+     * How far from a field's centre an aircraft may be and still count as "at" it, in blocks, over
+     * and above half the runway length.
+     *
+     * <p>Used for exactly one decision: whether the airframe a shuttle is about to re-task is
+     * actually standing at the field it is supposed to depart from. Generous, because a stand may
+     * be a long way off the centreline and an arrival that stopped short of one is further still;
+     * it only has to be tight enough that an aircraft a player has flown somewhere else is not
+     * teleported back onto a departure spot.
+     */
+    public static final double SHUTTLE_AT_FIELD_MARGIN = 96.0;
 
     // ---- waypoints ----
     public static final double WAYPOINT_ARRIVAL_RADIUS = 30.0;

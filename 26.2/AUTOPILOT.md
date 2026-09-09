@@ -1525,13 +1525,16 @@ airfield-3  name threshold_a threshold_b width parking obstacles_a obstacles_b r
 
 Four things follow from the flag, and none of them touches a grandfathered field:
 
-* **The survey says the job is not done**, in the report, with the next gesture spelled out:
-  `NOT FINISHED: no parking marked … Next: sneak + right-click the air to put the Runway Survey Tool
-  into parking mode, then right-click beside the runway. Or: /autopilot airfields park "airfield-3"
-  <x y z>`.
-* **The tool puts itself into parking mode** after such a survey. It is the same gesture sequence
-  either way and the report has just said in words what the tool does silently; re-surveying a field
-  that already has stands leaves the mode alone.
+* **The survey says the job is not done**, in the report, with what is missing spelled out:
+  `NOT FINISHED: no parking marked … Next: mark a stand beside the runway with the Runway Survey
+  Tool in parking mode, or: /autopilot airfields park "airfield-3" <x y z>`. It says this when the
+  survey could not find a stand for itself — see below.
+* **The tool puts itself into parking mode** after a survey that leaves the field unfinished, and
+  says so on the line after the report. The report names the mode but not the gesture that reaches
+  it, because the tool is already in that mode by the time the player reads it — telling them to
+  sneak + right-click the air there would be telling them to toggle straight back out. A survey that
+  derived its own stand, one that re-surveys a field that already has stands, and a grandfathered
+  field all leave the mode alone.
 * **The browser marks it `NO PARKING`**, in red, in the same column and the same tone as `TOO SHORT`,
   and `airfields info` prints the whole instruction.
 * **Sorties are refused at the command**, at both ends — `flight` checks the departure and the
@@ -1540,6 +1543,44 @@ Four things follow from the flag, and none of them touches a grandfathered field
   arrives at by stopping on the landing area, which is the exact defect this feature exists to
   remove, so completing the flight and leaving the mess behind is not an outcome worth having. It
   costs nothing to obey — the refusal names the one command that fixes it.
+
+**The survey marks the first stand itself when the ground allows it.** A fresh survey of a usable
+strip asks `Airfield.parkingPosition` for the square a departure from each threshold would use —
+beside the strip, a little way back from the threshold — and puts it through
+`Airfield.parkingSpotProblem`, the same four tests `/autopilot airfields park` holds a player's own
+click to: ground to stand on, no step up or down onto the strip, a line to the threshold that rolls
+the whole way, and clearance from any other stand. If one of the two passes, it is stored as an
+ordinary marked stand and the report says so and where:
+
+```
+  stand derived at 672, -61, -6: level ground beside a threshold, checked exactly as a stand you
+  mark yourself is checked. airfield-3 is ready to fly from.
+  Somewhere else would suit you better? Sneak + right-click that stand with the Runway Survey Tool
+  in parking mode to drop it, then right-click where you want it — or /autopilot airfields unpark
+  "airfield-3" <x y z>.
+```
+
+If neither passes, nothing is stored and the report prints the `NOT FINISHED` block above, exactly
+as it did.
+
+This is not the derived apron the stand rule was written against, and the distinction is the whole
+of the argument. That apron was worked out at the moment of use and acted on unexamined — the
+javadoc of `Airfield.arrivalStand` calls it "a guess at a square nobody looked at, reached by a taxi
+nobody validated", and that objection still holds against it. `parkingSpotProblem` *is* the looking:
+it is not a weaker check applied to a machine's suggestion, it is the identical check, and `park`
+accepts a player's click on no other evidence. A stored stand also gains the thing a square derived
+on the spot never had — an identity a taxiing aircraft claims, so a second arrival picks another
+square rather than driving into the first.
+
+What the survey cannot supply is the part of a click that is not a measurement: where the player
+would *like* their aircraft to sit, next to their hangar or out of the way of their build. So the
+stand is announced with its coordinate rather than left to be found, and one gesture moves it.
+Nothing derives a stand on a **re-survey** (a registered field keeps its own stands, and a
+grandfathered one is entitled to have none), on a field that already has one, or on a strip too
+short to land on — that field is refused for its length whatever is beside it. The on-strip
+last-resort candidate is skipped too: it is where a departure starts when nothing beside the strip
+is level, and storing it as a stand would send every arrival onto the landing area and leave it
+there.
 
 **Re-surveying never changes the grandfathering.** A fresh survey sets the flag; a survey that
 replaces a registered airfield keeps whatever that airfield had, alongside its name and its spots.
@@ -2417,15 +2458,16 @@ you want a reliable one.
 |---|---|---|
 | Airfields, including marked parking spots | `SavedData` per dimension, `data/simpleplanes/airfields.dat` | **Yes** |
 | Whether an airfield is held to the stand rule | `requires_stands` on the airfield, optional, default false | **Yes** — an absent key means grandfathered |
-| The stand an arrival is taxiing to, and the legs to it | Flight director only | No — see §9; a reloaded `TAXI_IN` simply stays parked where it is |
+| The stand an arrival is taxiing to, and the legs to it | Flight director only | No — see §10; a reloaded `TAXI_IN` simply stays parked where it is |
 | In-progress route flight | Plane entity NBT, via `FlightPlan.CODEC` | **Yes** |
 | Departure delay *ordered* | Plane entity NBT, `departure_delay` on the plan | **Yes** |
-| Departure delay *remaining* | Flight director only | No — a reloaded `PARKED` becomes `TAKEOFF`, see §9 |
+| Departure delay *remaining* | Flight director only | No — a reloaded `PARKED` becomes `TAKEOFF`, see §10 |
 | Half-drawn route / half-marked runway / half-marked helipad | Data component on the item | **Yes** |
 | Surveyed helipads | `SavedData`, `helipads` key in the same `airfields.dat` | **Yes** |
 | In-progress helicopter sortie | Plane entity NBT, `kind: "heli"` on the plan | **Yes** — resumed in transit, see §4h |
 | Runway reservations | In memory | No — and correctly so, they are re-derived on load |
-| Which stands have an aircraft parked on them | In memory (`StandOccupancy`) | No — a restart falls back to the entity search; see §4d |
+| Which stands have an aircraft parked on them | `SavedData`, `stands` key in the same `airfields.dat` | **Yes** — as `(field, square, aircraft UUID)`; see §4d |
+| Scheduled shuttles | `SavedData`, `shuttles` key in the same `airfields.dat` | **Yes** — the whole point; see §9 |
 | Strike flights | Not written | No — see below |
 
 Strike flights are deliberately **not** persisted. `addAdditionalSaveData` also backs
@@ -2901,7 +2943,123 @@ world cannot double-count either.
 
 ---
 
-## 9. Limitations and what is not implemented
+## 9. The dispatcher: scheduled shuttles
+
+Everything above flies an aircraft that something else decided to launch — a command, a tool, a
+datapack function. `AutopilotDispatcher` is the thing that decides: a durable, per-dimension set of
+scheduled departures, serviced from the level tick. There is one kind of schedule today, the
+**shuttle** — one aircraft between two airfields for ever, with a turnaround wait at each end.
+
+**This section replaces a claim that used to be made twice in this file: that the mod has no
+dispatcher.** It had none, several decisions were justified by its absence, and `AircraftReuse`
+explicitly declined to keep a durable queue of pending flights on that ground. That is no longer
+true. Where the old reasoning still holds it is restated for the reason that actually carries it —
+a command's launch is synchronous and must hand back an aircraft in the same tick, so it still
+cannot wait for one — and where it does not, it has been removed rather than worked around.
+
+### The cycle
+
+Depart A → fly → land B → taxi in → **wait** → depart B → fly → land A → taxi in → wait → repeat.
+The taxi in is the existing one and is not touched; what is new is that
+`PlaneAutopilot.finishTaxiIn` now tells the dispatcher a leg has ended. That call site is the point:
+it is the moment the taxi is complete and the stand booking has been written, rather than a guess
+about when the aircraft has stopped moving.
+
+### One airframe, and the fleet problem
+
+The first departure builds an aircraft. Every departure after that flies **that** aircraft, claimed
+off wherever it is standing through a named-airframe variant of `AircraftReuse.claim`. If it cannot
+be claimed the leg does not fly; nothing ever builds a replacement, because a schedule that could
+would be a machine for filling a world with derelict planes — the exact defect stand bookings and
+reuse were written to slow down.
+
+The named claim differs from the ordinary one in what supplies the provenance. The ordinary claim
+will only take an aircraft with a **stand booking**, because a booking is the only available evidence
+that this mod flew the thing onto that square itself. A shuttle recorded the UUID of the airframe it
+dispatched, in its own persisted record, at the moment it dispatched it — a stronger claim, not a
+weaker one. It follows that the named claim is *not* restricted to aircraft on a marked stand, and
+that is the fix for a real failure: an arrival that finds no free stand stops on the runway and
+writes no booking, and a shuttle that could not pick its own aircraft up from there would be
+stranded for good by one busy field. The aircraft still has to be **at** the field — half the runway
+length plus 96 blocks from the centre — so nothing is dragged back across the map.
+
+### Unattended operation, which is the hard part
+
+A shuttle runs between fields nobody is standing near. Three of its four states already work with no
+player in the world: in the air and taxiing it is an ordinary autopilot aircraft carrying its own
+chunk bubble, renewed from `AutopilotRegistry` on the level tick, and paused it does nothing at all.
+
+**The gap is the parked wait**, which is the state this feature invents. The moment a flight ends the
+aircraft is unregistered, its `ENDER_PEARL` ticket lapses within 40 ticks, and the chunk unloads
+unless a player happens to be near — and a parked aircraft in an unloaded chunk cannot be resolved,
+so it cannot be re-tasked. So **a waiting shuttle keeps a ticket alive over its own parked aircraft**,
+radius 3 (nine entity-ticking chunks), renewed every 5 ticks on the same level tick the flight
+tickets use, for exactly as long as it is waiting.
+
+The terms are narrow on purpose. One aircraft, one waiting schedule — not the airfield, not stands in
+general, which is the permanent-ticket-on-every-stand idea that was ruled out and stays ruled out.
+It is **removed**, not left to expire, the moment the wait ends: a departure, a pause or
+`/autopilot shuttle stop`. And it is capped: at most 4 shuttles per dimension, so at most four such
+areas at any instant.
+
+**What that does to the reuse argument.** `AircraftReuse` says reuse "does not fire on a field nobody
+has been near", because the parked airframe is not deserialised yet. For an aircraft a shuttle owns
+that stops being true — its chunk has been held loaded for the whole turnaround, so the entity is
+resolvable in the tick the departure launches. The general case is unchanged; only an aircraft a
+schedule is actively waiting on gets this.
+
+**A restart still starts cold.** Nothing holds a chunk across a shutdown. On load the aircraft is on
+disk in an unloaded chunk, and the answer is not to build a new one: the schedule persisted the
+square it is parked on, so the first hold tick after load puts the ticket back over that chunk and
+the aircraft deserialises a tick or two later. If a departure is due inside that window, the
+departure is given 100 ticks to find the airframe before it counts as having failed.
+
+### What the delay means when the world was not running
+
+`nextDeparture` is an **absolute game time**, written when the previous leg arrives, and there is
+never more than one of them. `ServerLevel#getGameTime` does not advance while the server is down, so
+a shuttle with 400 ticks left to wait still has 400 ticks left on load, and a shuttle that came due
+during the shutdown is due exactly **once**. There is no cadence to fall behind, so the
+fifty-legs-at-once failure is not defended against — it is unrepresentable. The cost of measuring in
+ticks is stated rather than hidden: a lagging server stretches a turnaround, and a shut-down world
+does not advance it at all.
+
+### Deferred, paused, and how a player finds out
+
+A due departure that cannot be flown is **deferred**, never skipped and never retried in silence: the
+reason is written into the record where `/autopilot shuttle list` shows it, the owner is told, and
+after 3 consecutive failures (30 seconds apart) the shuttle **pauses**. A paused shuttle keeps its
+record and its reason, holds nothing, retries nothing, and stays in the listing until somebody stops
+it — visibility being the thing that matters when the alternative is a schedule that quietly did
+nothing for six hours.
+
+| What happens | What the shuttle does |
+|---|---|
+| destination has no free stand, so the arrival stops on the runway | counts as arrived — the leg is over and the aircraft is at the field. The turnaround starts, the reason goes on the listing, and the next departure lifts it off the runway, which is the only thing that ever clears it |
+| an airfield is renamed or removed under it | pauses within a second. A rename is a removal: a schedule records names, not references, and `AirfieldBrowser.rename` re-files the field under a new key |
+| the aircraft is destroyed mid-leg | pauses after 10 seconds of not resolving. A flying aircraft renews its own ticket every 5 ticks, so not finding it means it is gone rather than far away |
+| the aircraft is flown away, or a leg ends at neither field | pauses, naming the coordinates it is at |
+| the aircraft is busy on another `/autopilot flight`, or has somebody aboard | defers |
+| all 24 autopilot slots are in use | defers |
+| the airframe cannot be found on a cold field | waits 100 ticks for the chunk load, then defers |
+| both fields are in different dimensions | cannot be created — `SavedData` is per dimension, so a field in another one is simply not found |
+| a shuttle between a field and itself | refused at creation |
+| the turnaround is 0, or a week | refused by the argument type: 10…3600 seconds |
+
+Both fields are also put through the same usability and stand checks `/autopilot flight` makes,
+before the shuttle exists. A sortie that cannot park is one aircraft on a runway; a shuttle that
+cannot park is one aircraft on a runway every turnaround for ever.
+
+### Cost
+
+The state machine runs every 20 ticks and is a comparison of a stored game time against the clock —
+no airfield is walked and no entity search is run. A dimension with no schedules costs one map lookup
+and an `isEmpty`. The ticket renewal runs every 5 ticks and is one `addTicketWithRadius` per waiting
+schedule. The standing cost is the chunk hold: **9 chunks per waiting shuttle, at most 4 shuttles**.
+
+---
+
+## 10. Limitations and what is not implemented
 
 * **Helicopters fly pad to pad only.** `/autopilot heliflight` and `/autopilot heliinbound` are the
   whole of it (§4h). A rotorcraft cannot be dispatched onto a runway — `route`, `flight` and
@@ -3039,15 +3197,39 @@ world cannot double-count either.
   are promoted would send an aircraft that has already completed its flight back down the runway.
   The aircraft stays where it stands, off the runway, and the flight is over. That is a worse parking
   job than it asked for, not a lost aircraft.
+* **Reuse only fires on a field something can see.** A ground departure flies an airframe already
+  parked at the field rather than building another one, but only where the booking on a stand
+  resolves to a loaded entity *in the tick the command runs*. Chunks give back their blocks
+  synchronously and their entities a tick or more later, so on a field nobody has been near the
+  parked airframe is not in the level yet and a new one is built — safely, on a different stand,
+  because the booking says the stand is taken. Waiting for the entity would mean `/autopilot flight`
+  no longer returning the aircraft it launched, which is the identifier every recipe in `TESTING.md`
+  reads, and a window in which a shutdown loses a sortie with nothing durable to recover it from.
+  So accumulation is slowed on a field in use and not stopped on a field that is not.
+* **A reused airframe is repaired on dispatch.** Reuse is meant to be invisible, and a fresh spawn
+  departs at full health; screening on health instead would retire an airframe permanently on its
+  first firm landing. Upgrades and their contents are kept, which is the point. An airframe carrying
+  anything at all — a player, or livestock a large airframe collected while parked — is never
+  claimed.
+* **Only an aircraft with a stand booking is ever claimed.** That is the fleet identity: bookings are
+  written in exactly two places, both at the end of a flight this mod dispatched, so an aircraft with
+  one is an aircraft this mod parked there. A player's own plane on a marked stand has no booking and
+  cannot be taken.
 * **Nothing re-parks an aircraft that stopped on the runway.** All three "cannot taxi in" outcomes
-  end the flight where the aircraft is; there is no retry when a stand later frees up, and no
-  dispatcher to notice. `/autopilot tower` shows the strip as free — because the *reservation* is —
-  while an aircraft is physically sitting on it.
-* **Stand occupancy does not survive a restart.** `StandOccupancy` is in memory, so after a restart a
-  stand with an aircraft parked on it in an unloaded chunk reads as free until something loads it. A
-  sortie ordered in that window can be spawned on top of a parked aircraft, exactly as it could
-  before this feature existed. Persisting it would mean writing an occupancy nothing can validate on
-  load, which is a different and worse failure.
+  end the flight where the aircraft is, and there is no retry when a stand later frees up.
+  `/autopilot tower` shows the strip as free — because the *reservation* is — while an aircraft is
+  physically sitting on it. The one thing that does clear such an aircraft is a shuttle: it counts
+  the leg as arrived, and its next departure lifts its own aircraft off the runway (§9). Nothing
+  clears anybody else's.
+* **A stand booking whose square is never loaded again is never healed.** Stand occupancy now
+  survives a restart: a booking is `(field, square, aircraft UUID)` in `airfields.dat`, and the UUID
+  is what makes it checkable — it is resolved through `ServerLevel#getEntity` on every read, and
+  where it cannot be resolved the square is confirmed empty for 20 ticks before the booking is
+  dropped. A restored booking is trusted no further than a live one and heals on the same rule. What
+  is left is the other direction: if an aircraft is deleted out from under the game (a chunk removed
+  on disk, a world edit, another mod culling entities) and nothing ever loads that square again,
+  nothing ever looks at the booking, so the stand stays booked. That costs one stand of eight on one
+  field; removing or renaming the field clears it outright.
 * **There is no runway sequencing.** One reservation per airfield, now taken by departures as well
   as arrivals, but still no queue behind it: waiting aircraft re-poll every 20 ticks and whoever
   polls first is next, so a long-waiting aircraft can be passed over and the order between two
@@ -3063,8 +3245,9 @@ world cannot double-count either.
   from different directions fly through each other's airspace, and planes are hard-colliding
   entities: two arrivals launched 120 blocks apart towards the same runway were reproducibly
   destroyed against each other in `DESCENT` on the rig, before and after the work above. A second,
-  completely free runway in the same dimension attracts nothing. Both belong to a dispatcher that
-  does not exist yet.
+  completely free runway in the same dimension attracts nothing. There is a dispatcher now (§9), but
+  it schedules *departures*: it does not sequence traffic, separate aircraft in the air or divert
+  anything, and a shuttle's aircraft competes for a strip on exactly the same terms as any other.
 * **A go-around from short final over water is unreliable.** From ~30 blocks above the surface at
   final speed the aircraft frequently does not climb away and ends up in the sea. Reproduced on the
   unmodified build as well, so it is not new, but it is what turns one failed gate into a lost
@@ -3075,3 +3258,23 @@ world cannot double-count either.
 * **No player is ever required.** Aircraft spawn, fly, land, save and load with no player involved;
   an owning player is only an optional recipient for progress messages, and `AutopilotFeedback`
   no-ops when there is none.
+* **A paused shuttle does not resume itself, and there is no verb to resume it.** Every route into
+  the paused state is something a player has to act on — a field removed, an aircraft lost, three
+  failed departures — so the record stays with its reason, holds one of the 4 slots, and is removed
+  with `/autopilot shuttle stop <id>`. Recreating it is the resume, and the new shuttle's first
+  departure will build an aircraft if the old one is gone, which is a launch somebody asked for
+  rather than one the schedule invented.
+* **A shuttle's aircraft can be taken by `/autopilot flight`.** The ordinary reuse claim takes any
+  idle airframe with a stand booking at the field it is departing from, and it neither knows nor
+  cares that a schedule owns it. The shuttle notices at its next departure and defers while the
+  other sortie is flying; if that sortie ends somewhere else, the shuttle pauses naming where its
+  aircraft went. It is visible, but it is not prevented.
+* **Nothing holds a chunk across a restart, so the first departure after one is the slow one.** The
+  hold is re-established on the first tick after load and the airframe deserialises a tick or two
+  later; a departure due inside that window has 100 ticks to find it. On a server that comes back up
+  under heavy chunk-load pressure that can be too short, in which case the departure defers for 30
+  seconds and tries again, which is enough.
+* **A shuttle is two airfields and nothing else.** No helicopters and no helipads — `type helicopter`
+  is refused, as it is on every fixed-wing command — no more than two fields, no cargo, no
+  timetable beyond "wait this long at each end", and no dependence between two shuttles. The
+  dispatcher is a schedule of departures, not an operation.

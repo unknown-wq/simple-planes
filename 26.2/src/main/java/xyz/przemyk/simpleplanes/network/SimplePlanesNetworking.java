@@ -26,6 +26,7 @@ public class SimplePlanesNetworking {
         PayloadTypeRegistry.serverboundPlay().register(OpenPlaneInventoryPacket.TYPE, OpenPlaneInventoryPacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(CycleItemsPacket.TYPE, CycleItemsPacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(DropPayloadPacket.TYPE, DropPayloadPacket.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(ShootPacket.TYPE, ShootPacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(ChangeThrottlePacket.TYPE, ChangeThrottlePacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(PitchPacket.TYPE, PitchPacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(YawPacket.TYPE, YawPacket.STREAM_CODEC);
@@ -38,6 +39,7 @@ public class SimplePlanesNetworking {
         PayloadTypeRegistry.clientboundPlay().register(NewCargoUpgradePacket.TYPE, NewCargoUpgradePacket.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(CargoUpgradeRemovedPacket.TYPE, CargoUpgradeRemovedPacket.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(PlaneSpawnDataPacket.TYPE, PlaneSpawnDataPacket.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(AirfieldMarkersPacket.TYPE, AirfieldMarkersPacket.STREAM_CODEC);
 
         // ---- server receivers ----
         ServerPlayNetworking.registerGlobalReceiver(RotationPacket.TYPE, (payload, context) -> payload.handle(context.player()));
@@ -46,10 +48,14 @@ public class SimplePlanesNetworking {
         ServerPlayNetworking.registerGlobalReceiver(OpenPlaneInventoryPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(CycleItemsPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(DropPayloadPacket.TYPE, (payload, context) -> payload.handle(context.player()));
+        ServerPlayNetworking.registerGlobalReceiver(ShootPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(ChangeThrottlePacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(PitchPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(YawPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(CyclePlaneInventoryPacket.TYPE, (payload, context) -> payload.handle(context.player()));
+
+        // The world overlay's view of the registered fields: join, plus whatever changes them.
+        AirfieldMarkerSync.register();
 
         // replacement for NeoForge's IEntityWithComplexSpawn
         EntityTrackingEvents.START_TRACKING.register((trackedEntity, player) -> {

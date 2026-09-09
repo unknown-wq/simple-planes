@@ -1,11 +1,8 @@
 {
     "block.simpleplanes.plane_workbench": "航空機作業台",
-    "block.simpleplanes.charging_station": "充電台",
-    "item.simpleplanes.electric_engine": "電気エンジン",
     "item.simpleplanes.furnace_engine": "かまどエンジン",
     "item.simpleplanes.liquid_engine": "液体エンジン",
     "item.simpleplanes.armor": "飛行機用装甲",
-    "item.simpleplanes.solar_panel": "ソーラーパネル",
     "item.simpleplanes.propeller": "プロペラ",
     "item.simpleplanes.booster": "ロケットブースター",
     "item.simpleplanes.floaty_bedding": "浮きアップグレード",
@@ -16,11 +13,9 @@
     "item.simpleplanes.seats": "座席アップグレード",
     "item.simpleplanes.shooter": "シューターアップグレード",
 
-    "block.simpleplanes.charger_block": "FE充電台",
     "block.simpleplanes.fueling_block": "燃料補給台",
 
     "name.simpleplanes.furnace_engine": "かまどエンジン",
-    "name.simpleplanes.electric_engine": "電気エンジン",
     "name.simpleplanes.propeller": "プロペラ",
     "name.simpleplanes.sprayer": "Sprayer",
     "name.simpleplanes.booster": "ロケットブースター",
@@ -36,7 +31,6 @@
     "name.simpleplanes.armor": "飛行機用装甲",
     "name.simpleplanes.supply_crate": "補給箱",
     "name.simpleplanes.seats": "座席",
-    "name.simpleplanes.solar_panel": "ソーラーパネル",
     "name.simpleplanes.chest": "チェスト",
     "name.simpleplanes.payload": "ペイロード",
 
@@ -56,7 +50,6 @@
     "text.autoconfig.simpleplanes.category.default": "その他",
     "text.autoconfig.simpleplanes.category.coal": "石炭",
     "text.autoconfig.simpleplanes.category.mana": "マナ",
-    "text.autoconfig.simpleplanes.category.energy": "エネルギー",
     "text.autoconfig.simpleplanes.category.lava": "溶岩",
     "text.autoconfig.simpleplanes.option.TURN_THRESHOLD": "ターンしきい値",
     "text.autoconfig.simpleplanes.option.TURN_THRESHOLD.@Tooltip": "コントローラーの場合の飛行機のジョイスティックの動作のしきい値",
@@ -77,19 +70,16 @@
     "simpleplanes.material": "素材 - ",
 
     "simpleplanes.furnace_engine_container": "かまどエンジン",
-    "simpleplanes.electric_engine_container": "電気エンジン",
     "simpleplanes.remove_upgrades": "アップグレードを外す:",
     "simpleplanes:booster": "ブースター",
     "simpleplanes:floaty_bedding": "浮き",
     "simpleplanes:shooter": "シューター",
     "simpleplanes:furnace_engine": "かまどエンジン",
-    "simpleplanes:electric_engine": "電気エンジン",
     "simpleplanes:liquid_engine": "液体エンジン",
     "simpleplanes:tnt": "TNT",
     "simpleplanes:banner": "バナー",
     "simpleplanes:chest": "チェスト",
     "simpleplanes:armor": "装甲",
-    "simpleplanes:solar_panel": "ソーラーパネル",
     "simpleplanes:folding": "折り畳み",
     "simpleplanes:supply_crate": "補給箱",
     "simpleplanes:seats": "座席",
@@ -100,7 +90,6 @@
     "entity.simpleplanes.helicopter": "ヘリコプター",
     "entity.simpleplanes.parachute": "パラシュート",
 
-    "simpleplanes.gui.energy": "エネルギー: %s FE",
     "simpleplanes.gui.fluid": "%s: %s mb",
 
     "simpleplanes.press_key": "航空機内で%sで開く",

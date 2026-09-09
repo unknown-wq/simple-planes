@@ -8,7 +8,6 @@ import xyz.przemyk.simpleplanes.upgrades.UpgradeType;
 import xyz.przemyk.simpleplanes.upgrades.armor.ArmorUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.banner.BannerUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
-import xyz.przemyk.simpleplanes.upgrades.engines.electric.ElectricEngineUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.engines.furnace.FurnaceEngineUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.engines.liquid.LiquidEngineUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.floating.FloatingUpgrade;
@@ -18,7 +17,6 @@ import xyz.przemyk.simpleplanes.upgrades.jukebox.JukeboxUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.payload.PayloadUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.seats.SeatsUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.shooter.ShooterUpgrade;
-import xyz.przemyk.simpleplanes.upgrades.solarpanel.SolarPanelUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.storage.ChestUpgrade;
 import xyz.przemyk.simpleplanes.upgrades.supplycrate.SupplyCrateUpgrade;
 
@@ -64,12 +62,10 @@ public class SimplePlanesUpgrades {
     public static final Supplier<UpgradeType> SHOOTER = register("shooter", new UpgradeType(ShooterUpgrade::new));
     public static final Supplier<UpgradeType> HEALING = register("healing", new UpgradeType(HealingUpgrade::new));
     public static final Supplier<UpgradeType> ARMOR = register("armor", new UpgradeType(ArmorUpgrade::new));
-    public static final Supplier<UpgradeType> SOLAR_PANEL = register("solar_panel", new UpgradeType(SolarPanelUpgrade::new));
     public static final Supplier<UpgradeType> FOLDING = register("folding", new UpgradeType(FoldingUpgrade::new));
     public static final Supplier<UpgradeType> SEATS = register("seats", new UpgradeType(SeatsUpgrade::new));
 
     public static final Supplier<UpgradeType> FURNACE_ENGINE = register("furnace_engine", new UpgradeType(FurnaceEngineUpgrade::new, true));
-    public static final Supplier<UpgradeType> ELECTRIC_ENGINE = register("electric_engine", new UpgradeType(ElectricEngineUpgrade::new, true));
     public static final Supplier<UpgradeType> LIQUID_ENGINE = register("liquid_engine", new UpgradeType(LiquidEngineUpgrade::new, true));
 
     public static final Supplier<UpgradeType> BANNER = register("banner", new UpgradeType(BannerUpgrade::new));
