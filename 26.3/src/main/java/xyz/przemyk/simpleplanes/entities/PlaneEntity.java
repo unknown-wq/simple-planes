@@ -406,6 +406,15 @@ public class PlaneEntity extends Entity {
         };
     }
 
+    /**
+     * The shooter installed on this aircraft, or null. Present on both sides: upgrades are synced,
+     * and the client needs to know whether a left click is a trigger pull before it steals it.
+     */
+    public @Nullable ShooterUpgrade getShooterUpgrade() {
+        return upgrades.get(SimplePlanesRegistries.UPGRADE_TYPE.getKey(SimplePlanesUpgrades.SHOOTER.get()))
+            instanceof ShooterUpgrade shooterUpgrade ? shooterUpgrade : null;
+    }
+
     protected boolean tryToAddUpgrade(Player playerEntity, ItemStack itemStack) {
         Optional<UpgradeType> upgradeTypeOptional = SimplePlanesUpgrades.getUpgradeFromItem(itemStack.getItem());
         return upgradeTypeOptional.map(upgradeType -> {
@@ -451,7 +460,12 @@ public class PlaneEntity extends Entity {
     public boolean hurtServer(ServerLevel serverLevel, DamageSource source, float amount) {
         Entity entity = source.getDirectEntity();
         if (entity == getControllingPassenger() && entity instanceof Player player) {
-            if (upgrades.get(SimplePlanesRegistries.UPGRADE_TYPE.getKey(SimplePlanesUpgrades.SHOOTER.get())) instanceof ShooterUpgrade shooterUpgrade) {
+            // Upstream's trigger, kept because it is also what stops a pilot damaging the aircraft
+            // he is flying. It is no longer how the gun is fired: vanilla's entity picking never
+            // selects the vehicle you ride, so this branch is unreachable from a real left click.
+            // ShootPacket is the trigger; see the note there.
+            ShooterUpgrade shooterUpgrade = getShooterUpgrade();
+            if (shooterUpgrade != null) {
                 shooterUpgrade.use(player);
             }
             return false;

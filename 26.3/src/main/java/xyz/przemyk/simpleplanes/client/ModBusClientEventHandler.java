@@ -9,12 +9,13 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.HumanoidArm;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.upgrades.booster.BoosterUpgrade;
 
 /**
- * The plane HUD (health hearts + throttle gauge).
+ * The plane HUD (health hearts, throttle gauge and the engine's fuel gauge).
  *
  * <p>Was a NeoForge {@code RegisterGuiLayersEvent} layer; on 26.2 it is a Fabric
  * {@link HudElement}, which draws during GUI render-state extraction via
@@ -85,8 +86,14 @@ public final class ModBusClientEventHandler implements HudElement {
                     22, 90 + 28 - throttleScaled, 2, throttleScaled, 256, 256);
         }
 
-        // TODO(port-26.2): DISABLED — EngineUpgrade#renderPowerHUD (fuel / energy gauge next to the
-        // hotbar). It took a GuiGraphics, which no longer exists; restoring it needs the upgrade
-        // classes (Agent B) to move to GuiGraphicsExtractor.
+        // The fuel gauge, on whichever side of the hotbar the off hand is not using. Without it the
+        // HUD said how hard the player was pulling and never whether there was anything left to
+        // pull on.
+        if (planeEntity.engineUpgrade != null) {
+            boolean onLeft = player.getMainArm() == HumanoidArm.LEFT || player.getOffhandItem().isEmpty();
+            planeEntity.engineUpgrade.renderPowerHUD(graphics,
+                onLeft ? HumanoidArm.LEFT : HumanoidArm.RIGHT, scaledWidth, scaledHeight,
+                deltaTracker.getGameTimeDeltaPartialTick(false));
+        }
     }
 }

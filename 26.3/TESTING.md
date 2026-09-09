@@ -286,7 +286,7 @@ sleep 8
 ./cmd.sh "autopilot survey 2654 -60 -9 2654 -60 -192"
 ./cmd.sh "autopilot airfields"
 
-./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 6'    # a field is not usable without a stand
+./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 6'    # a second stand, beside the derived one
 ./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 -8'
 ./cmd.sh 'autopilot airfields park "airfield-2" 2672 -60 6'
 ./cmd.sh 'autopilot airfields park "airfield-2" 2672 -60 -8'
@@ -295,9 +295,15 @@ sleep 8
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'
 ```
 
-The four `park` calls are not optional any more: a runway surveyed by this build refuses sorties
-until at least one stand is marked beside it, and the sortie now ends on a stand rather than on the
-strip. See the marked-parking and taxi-in recipes below.
+A runway surveyed by this build refuses sorties until at least one stand is marked beside it, and
+the sortie now ends on a stand rather than on the strip. On flat ground the survey supplies that
+first stand itself and says `stand derived at …`, so a sortie will fly with no `park` call at all —
+check the survey output for that line before assuming a failure is about parking. The four calls
+are kept because the taxi-in and marked-parking recipes below want **two** stands per field, and
+because they are what exercises the marking path; if a survey has already derived a stand within
+`PARKING_SPOT_CLEARANCE` of one of these coordinates, that call is refused with `there is already a
+parking spot at …`, which is correct and not a failure of the recipe. See the marked-parking and
+taxi-in recipes below.
 
 Airfields persist in `SavedData`, so the survey only has to be done once per world. A 2000-block
 sortie takes about **two minutes** of wall clock at the 2.60 default (it was nearer four at the old
@@ -394,7 +400,7 @@ sleep 5
 
 Health is an int, default 10. A plane that no longer answers `data get` was destroyed. Measured
 boundary with Floaty Bedding and wings level: free to 0.70 b/t, 1 HP at 0.75, 5 HP at 1.00,
-destroyed from 1.2. See `COLLISION-DIAGNOSIS.md`, section Р3.
+destroyed from 1.2.
 
 Both flights print a terminal line (`hit the target at …`, `flew into terrain at …`, …), which is
 what makes them assertable from a shell.
@@ -1056,9 +1062,9 @@ sleep 4                                            # taxiing, so it holds airfie
 An autopilot plane has **no rider**, so on the server `isClientAuthoritative()` is false and
 `canSimulateMovement()` is true — the server simulates it fully. A plane flown by a *player* is
 client-authoritative: the client runs the physics and the server only receives positions. That
-split is the root cause documented in `COLLISION-DIAGNOSIS.md`, and it is exactly the branch the
-autopilot does **not** exercise. Anything about the ridden case has to be reasoned out against
-the snapshot-10 sources (`Entity#isLocalInstanceAuthoritative`, `Entity#move`,
+split is exactly the branch the autopilot does **not** exercise. Anything about the ridden case
+has to be reasoned out against the generated pre-3 sources of §2
+(`Entity#isLocalInstanceAuthoritative`, `Entity#move`,
 `ServerGamePacketListenerImpl#handleMoveVehicle`) or tested with a real client — see below.
 
 ---

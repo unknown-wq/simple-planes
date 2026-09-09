@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.event.client.player.ClientPreAttackCallback;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -18,6 +19,7 @@ import xyz.przemyk.simpleplanes.network.HeliCyclicPacket;
 import xyz.przemyk.simpleplanes.network.MoveHeliUpPacket;
 import xyz.przemyk.simpleplanes.network.OpenPlaneInventoryPacket;
 import xyz.przemyk.simpleplanes.network.PitchPacket;
+import xyz.przemyk.simpleplanes.network.ShootPacket;
 import xyz.przemyk.simpleplanes.network.YawPacket;
 
 /**
@@ -62,6 +64,40 @@ public final class ClientEventHandler {
         pitchDown = bind("key.plane_pitch_down.desc", InputConstants.KEY_S);
         yawRight = bind("key.plane_yaw_right.desc", InputConstants.KEY_RIGHT);
         yawLeft = bind("key.plane_yaw_left.desc", InputConstants.KEY_LEFT);
+    }
+
+    /**
+     * Makes the attack key fire the shooter, which is what the upgrade's own tooltip promises
+     * ("Left Button to shoot").
+     *
+     * <p>It could not work through an attack, and that is not a port regression. The server fires
+     * the gun from {@code PlaneEntity#hurtServer} when the attacker is the controlling passenger,
+     * but that damage never arrives: {@code ProjectileUtil.getEntityHitResult} — which is what
+     * {@code LocalPlayer}'s picking uses — skips any candidate entity whose {@code getRootVehicle()}
+     * equals the picker's own, i.e. exactly the vehicle you are sitting in. No entity hit result,
+     * no {@code ServerboundInteractPacket}, no shot. That rule is vanilla's, and the only other way
+     * in — the branch that does allow an entity whose box contains the ray origin — needs the
+     * pilot's eyes to be inside the plane's bounding box, which they are not.
+     *
+     * <p>So the click is read where it happens. {@link ClientPreAttackCallback} runs in
+     * {@code handleKeybinds} just before the attack clicks are consumed, and returning true both
+     * cancels {@code startAttack} for those clicks and suppresses the held-button block breaking
+     * for as long as the key is down — deliberate: with a gun installed, the button is the trigger
+     * and nothing else. The click is only taken when there is something to fire it: the player must
+     * be the pilot of a plane that has a shooter, and otherwise the vanilla attack runs untouched.
+     */
+    public static void registerAttackTrigger() {
+        ClientPreAttackCallback.EVENT.register((client, player, clickCount) -> {
+            if (!(player.getVehicle() instanceof PlaneEntity planeEntity)
+                || planeEntity.getControllingPassenger() != player
+                || planeEntity.getShooterUpgrade() == null) {
+                return false;
+            }
+            for (int i = 0; i < clickCount; i++) {
+                ClientPlayNetworking.send(new ShootPacket());
+            }
+            return true;
+        });
     }
 
     private static boolean oldMoveHeliUpState = false;

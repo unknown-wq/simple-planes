@@ -14,9 +14,12 @@ import java.util.Map;
  *
  * <h2>Why this is sampled rather than stamped</h2>
  * {@link RunwayOccupancy} stores a reservation, not the tick it was made, and {@link PlaneAutopilot}
- * keeps its mode timer private. Neither is worth changing for a read-only readout: the reservation
- * logic is about to be replaced by a real dispatcher, and a board that writes into the thing it is
- * reporting on is a board that can be blamed for what it shows. So this class watches from the
+ * keeps its mode timer private. Neither is worth changing for a read-only readout: a board that
+ * writes into the thing it is reporting on is a board that can be blamed for what it shows. (This
+ * used to add "and the reservation logic is about to be replaced by a real dispatcher".
+ * {@link AutopilotDispatcher} exists now and does not own runway reservations — it schedules
+ * departures, and the aircraft it launches compete for a strip on exactly the same terms as any
+ * other, so the sentence has gone and the reason above has not.) So this class watches from the
  * outside, on the server tick, and never touches occupancy at all.
  *
  * <p>Roles are decided with the autopilot's own {@link PlaneAutopilot#holdsRunway} validation rather

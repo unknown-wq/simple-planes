@@ -25,10 +25,6 @@ import xyz.przemyk.simpleplanes.upgrades.booster.BoosterModel;
 import xyz.przemyk.simpleplanes.upgrades.booster.CargoBoosterModel;
 import xyz.przemyk.simpleplanes.upgrades.booster.HeliBoosterModel;
 import xyz.przemyk.simpleplanes.upgrades.booster.LargeBoosterModel;
-import xyz.przemyk.simpleplanes.upgrades.engines.electric.CargoElectricEngineModel;
-import xyz.przemyk.simpleplanes.upgrades.engines.electric.ElectricEngineModel;
-import xyz.przemyk.simpleplanes.upgrades.engines.electric.HeliElectricEngineModel;
-import xyz.przemyk.simpleplanes.upgrades.engines.electric.LargeElectricEngineModel;
 import xyz.przemyk.simpleplanes.upgrades.engines.furnace.CargoFurnaceEngineModel;
 import xyz.przemyk.simpleplanes.upgrades.engines.furnace.FurnaceEngineModel;
 import xyz.przemyk.simpleplanes.upgrades.engines.furnace.HeliFurnaceEngineModel;
@@ -52,9 +48,6 @@ import xyz.przemyk.simpleplanes.upgrades.seats.WoodenSeatsModel;
 import xyz.przemyk.simpleplanes.upgrades.shooter.HeliShooterModel;
 import xyz.przemyk.simpleplanes.upgrades.shooter.LargeShooterModel;
 import xyz.przemyk.simpleplanes.upgrades.shooter.ShooterModel;
-import xyz.przemyk.simpleplanes.upgrades.solarpanel.CargoSolarPanelModel;
-import xyz.przemyk.simpleplanes.upgrades.solarpanel.LargeSolarPanelModel;
-import xyz.przemyk.simpleplanes.upgrades.solarpanel.SolarPanelModel;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -123,12 +116,6 @@ public final class UpgradesModels {
                 new HeliFurnaceEngineModel(models.bakeLayer(PlanesModelLayers.HELI_FURNACE_ENGINE)), tex("furnace_engine_heli.png"),
                 new CargoFurnaceEngineModel(models.bakeLayer(PlanesModelLayers.CARGO_FURNACE_ENGINE)), tex("furnace_engine_cargo.png")));
 
-        MODEL_ENTRIES.put(SimplePlanesUpgrades.ELECTRIC_ENGINE.get(), new ModelEntry(
-                new ElectricEngineModel(models.bakeLayer(PlanesModelLayers.ELECTRIC_ENGINE)), tex("electric_engine.png"),
-                new LargeElectricEngineModel(models.bakeLayer(PlanesModelLayers.LARGE_ELECTRIC_ENGINE)), tex("electric_engine_large.png"),
-                new HeliElectricEngineModel(models.bakeLayer(PlanesModelLayers.HELI_ELECTRIC_ENGINE)), tex("electric_engine_heli.png"),
-                new CargoElectricEngineModel(models.bakeLayer(PlanesModelLayers.CARGO_ELECTRIC_ENGINE)), tex("electric_engine_cargo.png")));
-
         MODEL_ENTRIES.put(SimplePlanesUpgrades.LIQUID_ENGINE.get(), new ModelEntry(
                 new LiquidEngineModel(models.bakeLayer(PlanesModelLayers.LIQUID_ENGINE)), tex("liquid_engine.png"),
                 new LargeLiquidEngineModel(models.bakeLayer(PlanesModelLayers.LARGE_LIQUID_ENGINE)), tex("liquid_engine_large.png"),
@@ -158,12 +145,6 @@ public final class UpgradesModels {
                 new LargeArmorModel(models.bakeLayer(PlanesModelLayers.LARGE_ARMOR)), tex("armor_large.png"),
                 new HeliArmorModel(models.bakeLayer(PlanesModelLayers.HELI_ARMOR)), tex("armor_heli.png"),
                 new CargoArmorModel(models.bakeLayer(PlanesModelLayers.CARGO_ARMOR)), tex("armor_cargo.png")));
-
-        MODEL_ENTRIES.put(SimplePlanesUpgrades.SOLAR_PANEL.get(), new ModelEntry(
-                new SolarPanelModel(models.bakeLayer(PlanesModelLayers.SOLAR_PANEL)), tex("solar_panel.png"),
-                new LargeSolarPanelModel(models.bakeLayer(PlanesModelLayers.LARGE_SOLAR_PANEL)), tex("solar_panel_large.png"),
-                null, null,
-                new CargoSolarPanelModel(models.bakeLayer(PlanesModelLayers.CARGO_SOLAR_PANEL)), tex("solar_panel_cargo.png")));
 
         SEATS = new SeatsModel(models.bakeLayer(PlanesModelLayers.SEATS));
         LARGE_SEATS = new LargeSeatsModel(models.bakeLayer(PlanesModelLayers.LARGE_SEATS));

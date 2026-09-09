@@ -1971,6 +1971,13 @@ public class PlaneAutopilot {
                 + " blocks to go, " + (clearOfRunway ? "clear of the runway" : "STILL ON THE RUNWAY")
                 + ").");
         }
+        // A scheduled shuttle's turnaround starts here, and deliberately here: this is the moment
+        // the taxi in is complete and, on the stand branch, the moment the booking above was
+        // written -- not a guess about when the aircraft has stopped moving. A no-op for every
+        // flight that is not a shuttle leg, which is nearly all of them.
+        AutopilotDispatcher.arrived(plane, landingAirfield.name(), onStand ? ""
+            : "leg ended " + Math.round(distance) + " blocks short of its stand at "
+                + landingAirfield.name());
         stop(plane);
     }
 

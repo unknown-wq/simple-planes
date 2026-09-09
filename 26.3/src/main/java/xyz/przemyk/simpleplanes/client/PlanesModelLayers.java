@@ -17,13 +17,11 @@ import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
 import xyz.przemyk.simpleplanes.upgrades.armor.*;
 import xyz.przemyk.simpleplanes.upgrades.booster.*;
-import xyz.przemyk.simpleplanes.upgrades.engines.electric.*;
 import xyz.przemyk.simpleplanes.upgrades.engines.furnace.*;
 import xyz.przemyk.simpleplanes.upgrades.engines.liquid.*;
 import xyz.przemyk.simpleplanes.upgrades.floating.*;
 import xyz.przemyk.simpleplanes.upgrades.seats.*;
 import xyz.przemyk.simpleplanes.upgrades.shooter.*;
-import xyz.przemyk.simpleplanes.upgrades.solarpanel.*;
 
 /**
  * Model layer ids + the layer/renderer registration that used to live on the NeoForge
@@ -51,10 +49,6 @@ public final class PlanesModelLayers {
     public static final ModelLayerLocation LARGE_FURNACE_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "furnace_engine"), "large");
     public static final ModelLayerLocation HELI_FURNACE_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "furnace_engine"), "heli");
     public static final ModelLayerLocation CARGO_FURNACE_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "furnace_engine"), "cargo");
-    public static final ModelLayerLocation ELECTRIC_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "electric_engine"), "main");
-    public static final ModelLayerLocation LARGE_ELECTRIC_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "electric_engine"), "large");
-    public static final ModelLayerLocation HELI_ELECTRIC_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "electric_engine"), "heli");
-    public static final ModelLayerLocation CARGO_ELECTRIC_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "electric_engine"), "cargo");
     public static final ModelLayerLocation LIQUID_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "liquid_engine"), "main");
     public static final ModelLayerLocation LARGE_LIQUID_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "liquid_engine"), "large");
     public static final ModelLayerLocation HELI_LIQUID_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "liquid_engine"), "heli");
@@ -75,9 +69,6 @@ public final class PlanesModelLayers {
     public static final ModelLayerLocation HELI_ARMOR = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "armor"), "heli");
     public static final ModelLayerLocation CARGO_ARMOR = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "armor"), "cargo");
     public static final ModelLayerLocation ARMOR_WINDOW = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "armor"), "window");
-    public static final ModelLayerLocation SOLAR_PANEL = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "solar_panel"), "main");
-    public static final ModelLayerLocation LARGE_SOLAR_PANEL = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "solar_panel"), "large");
-    public static final ModelLayerLocation CARGO_SOLAR_PANEL = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "solar_panel"), "cargo");
     public static final ModelLayerLocation SEATS = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "seats"), "main");
     public static final ModelLayerLocation LARGE_SEATS = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "seats"), "large");
     public static final ModelLayerLocation CARGO_SEATS = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "seats"), "cargo");
@@ -105,10 +96,6 @@ public final class PlanesModelLayers {
         ModelLayerRegistry.registerModelLayer(LARGE_FURNACE_ENGINE, LargeFurnaceEngineModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(HELI_FURNACE_ENGINE, HeliFurnaceEngineModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(CARGO_FURNACE_ENGINE, CargoFurnaceEngineModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(ELECTRIC_ENGINE, ElectricEngineModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(LARGE_ELECTRIC_ENGINE, LargeElectricEngineModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(HELI_ELECTRIC_ENGINE, HeliElectricEngineModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(CARGO_ELECTRIC_ENGINE, CargoElectricEngineModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(LIQUID_ENGINE, LiquidEngineModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(LARGE_LIQUID_ENGINE, LargeLiquidEngineModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(HELI_LIQUID_ENGINE, HeliLiquidEngineModel::createBodyLayer);
@@ -129,9 +116,6 @@ public final class PlanesModelLayers {
         ModelLayerRegistry.registerModelLayer(HELI_ARMOR, HeliArmorModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(CARGO_ARMOR, CargoArmorModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(ARMOR_WINDOW, ArmorWindowModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(SOLAR_PANEL, SolarPanelModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(LARGE_SOLAR_PANEL, LargeSolarPanelModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(CARGO_SOLAR_PANEL, CargoSolarPanelModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(SEATS, SeatsModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(LARGE_SEATS, LargeSeatsModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(CARGO_SEATS, CargoSeatsModel::createBodyLayer);

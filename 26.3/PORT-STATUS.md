@@ -1,8 +1,8 @@
 # PORT-STATUS — Simple Planes → Fabric / Minecraft 26.3-pre-3
 
 `26.3/` is a copy of `26.2/` converted to **Minecraft 26.3-pre-3 / Fabric loader 0.19.5 /
-Fabric API 0.159.4+26.3 / Loom 1.17.19 / Java 25**. `26.2/` is untouched and remains the 26.2
-build. The heavy lifting — NeoForge → Fabric, and the 1.21.1 → 26.2 render-state and
+Fabric API 0.160.2+26.3 / Loom 1.17.19 / Java 25**. `26.2/` alongside it is the 26.2 build,
+kept as the baseline this port is read against and held identical to branch `26.2`. The heavy lifting — NeoForge → Fabric, and the 1.21.1 → 26.2 render-state and
 `ValueInput`/`ValueOutput` rewrites — was done in the 26.2 port and carries over unchanged; this
 document covers only what 26.2 → 26.3 broke.
 
@@ -222,3 +222,45 @@ The two API changes pre-3 does carry are both absent from this mod. `Util.OS` lo
 openers (`openUri` moved to `com.mojang.blaze3d.Blaze3D`, and it takes a `URI` now), and
 `ConfirmLinkScreen` takes a `URI` rather than a `String` — Simple Planes opens no links. Nothing was
 removed at class level between pre-2 and pre-3: four classes were added and none deleted.
+
+## The 26.2 feature rollup
+
+Six feature branches from the 26.2 line — the survey report and the derived stand, the runway
+surface requirement, `/autopilot status|stop <id>` with UUID-keyed stand occupancy and airframe
+reuse, the dispatcher and scheduled shuttles, the in-world tool preview and field markers with the
+fuel gauges restored, and the engine/shooter work — were carried across in two steps: `26.2/` was
+first brought up to branch `26.2` (it had fallen 57 commits behind, carrying only seven of the
+airfield and helipad fixes), then the rollup was applied on top of that.
+
+**The rollup needed no new 26.3 adaptation.** All 87 files ported as written and `26.3/` compiled
+first time. Every API the new code reaches for was checked against `0.160.2+26.3` before the port
+rather than after:
+
+| What the new code uses | 26.2 | 26.3-pre-3 | Verdict |
+|---|---|---|---|
+| `fabric-transfer-api-v1` (`FluidStorage`, `FluidVariant`, `FluidConstants`, `SingleVariantStorage`, `ContainerStorage`, `ContainerItemContext`, `Storage`, `StorageUtil`, `Transaction`) | 8.0.11 | 8.0.25 | signatures identical |
+| `ClientPreAttackCallback` (`fabric-events-interaction-v0`) | 5.2.6 | 5.3.6 | `onClientPlayerPreAttack(Minecraft, LocalPlayer, int)` identical |
+| `LevelRenderEvents` (`fabric-rendering-v1`) | 25.3.1 | 27.0.13 | same twelve events, same context types, despite the two major versions |
+| `RenderTypes.lines()`, `RenderTypes.debugQuads()` | yes | yes | the overlay renderer deliberately uses only render types common to both, so `GroundOverlay`, `ToolPreview` and `AirfieldOverlayRenderer` are byte-identical in the two trees. `LINES_TRANSLUCENT_NO_DEPTH_WRITE` and `LINES_DEPTH_BIAS` are 26.3-only and are **not** used |
+| `SubmitRenderPhases` | 15 phases | 15 phases | not reached by this code at all |
+
+No mixin was added and no access widener entry was added; all four entries still resolve, and
+`CameraMixin` is untouched.
+
+The port adaptation set is therefore unchanged from the pre-3 note above: the same thirteen files
+listed in the sync commit, plus `misc/FuelValues.java`, are the whole of the difference between
+`26.2/` and `26.3/` outside `gradle.properties`, `PORT-STATUS.md` and `TESTING.md`.
+
+### Still not verified
+
+Everything in **Not verified** above still stands, and the rollup adds to it. None of the following
+can be settled by a compiler and all of it wants a running game:
+
+* The ground overlay and the tool preview — `LevelRenderEvents.COLLECT_SUBMITS` fires only on a
+  client, and nothing here has drawn a frame. Whether the translucent fill lands after opaque
+  terrain, and whether the outlines z-fight with the ground, is a screenshot question.
+* The liquid tank through `FluidStorage`: that a bucket or a hopper actually finds the tank on a
+  plane is a lookup registration that only runs in a world.
+* The shooter firing from the pilot's seat — `ClientPreAttackCallback` is a client input path.
+* The dispatcher and the scheduled shuttles over real wall-clock time.
+* The fuel gauges in the plane inventory screen.
