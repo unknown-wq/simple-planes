@@ -14,6 +14,10 @@ import net.minecraft.world.entity.player.Inventory;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.container.PlaneInventoryContainer;
 import xyz.przemyk.simpleplanes.network.CyclePlaneInventoryPacket;
+import xyz.przemyk.simpleplanes.upgrades.Upgrade;
+
+import java.util.Collection;
+import java.util.List;
 
 @Environment(EnvType.CLIENT)
 public class PlaneInventoryScreen extends AbstractContainerScreen<PlaneInventoryContainer> {
@@ -54,8 +58,38 @@ public class PlaneInventoryScreen extends AbstractContainerScreen<PlaneInventory
         super.extractBackground(graphics, mouseX, mouseY, a);
         graphics.blit(RenderPipelines.GUI_TEXTURED, GUI, this.leftPos, this.topPos, 0.0F, 0.0F, this.imageWidth, this.imageHeight, 256, 256);
 
-        // TODO(port-26.2): DISABLED — Upgrade#renderScreenBg / #renderScreen overlays (furnace burn
-        // bar, energy bar, fluid tank). They took a GuiGraphics, which no longer exists in 26.2, and
-        // the fluid one additionally used NeoForge's IClientFluidTypeExtensions.
+        for (Upgrade upgrade : upgrades()) {
+            upgrade.renderScreenBg(graphics, mouseX, mouseY, a, this);
+        }
+    }
+
+    /**
+     * The upgrades' own overlays in front of the slots, which is where their hover tooltips live.
+     *
+     * <p>{@code extractTooltip} rather than the background pass: a tooltip is not drawn where it is
+     * asked for any more, it is handed to the frame and drawn last, and this is the point in a
+     * container screen where the slot tooltips are collected too — so an upgrade gauge and a slot
+     * cannot both claim the pointer.
+     */
+    @Override
+    protected void extractTooltip(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+        super.extractTooltip(graphics, mouseX, mouseY);
+        for (Upgrade upgrade : upgrades()) {
+            upgrade.renderScreen(graphics, mouseX, mouseY, 0.0F, this);
+        }
+    }
+
+    /**
+     * Widened from protected so the upgrades can ask it. They are in another package and the
+     * hover regions belong with the gauge that owns them, not in a table here.
+     */
+    @Override
+    public boolean isHovering(int x, int y, int width, int height, double mouseX, double mouseY) {
+        return super.isHovering(x, y, width, height, mouseX, mouseY);
+    }
+
+    /** The upgrades installed on the plane this screen is open on, or none if it has gone away. */
+    private Collection<Upgrade> upgrades() {
+        return menu.planeEntity == null ? List.of() : menu.planeEntity.upgrades.values();
     }
 }

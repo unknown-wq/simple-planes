@@ -184,8 +184,10 @@ Three runtime faults were fixed after the first boot:
 - `client/ClientUtil` — `renderTiledTextureAtlas`, `renderLiquidEngineFluid`, `setColorRGBA` cut.
   They used immediate-mode `Tesselator`/`BufferUploader.drawWithShader` + `RenderSystem.setShaderTexture`
   (all gone: GUI drawing is `GuiGraphicsExtractor` + `RenderPipelines` now) and NeoForge
-  `IClientFluidTypeExtensions`/`FluidStack` (removed by contract C4). The liquid engine's fuel gauge
-  therefore has no fluid fill.
+  `IClientFluidTypeExtensions`/`FluidStack` (removed by contract C4). The liquid engine's tank is
+  drawn again, but **flat-shaded rather than tiled with the fluid's still texture**: vanilla has no
+  fluid-to-sprite mapping at all, so the colour comes from the fluid's own block's `MapColor`
+  instead — water blue, lava orange — which is general and needs no texture-path guessing.
 - `upgrades/banner/BannerModel` — banner-on-the-tail rendering cut. 26.2 renders banners as *block*
   models; `BannerRenderer` no longer exposes a `flag` `ModelPart` or a static `renderPatterns`, and
   `ModelBakery.BANNER_BASE` is gone.
@@ -202,10 +204,8 @@ Three runtime faults were fixed after the first boot:
   style blocks, wrong for blocks whose texture name differs from their id.
 - `client/ModBusClientEventHandler` (plane HUD) — `Gui.rightHeight` no longer exists in 26.2, so the
   health rows are drawn at a fixed offset above the hotbar instead of stacking on the vanilla mount
-  bar. `EngineUpgrade#renderPowerHUD` (fuel / energy gauge) is not called any more — it took a
-  `GuiGraphics`, which no longer exists.
-- `client/gui/PlaneInventoryScreen` — `Upgrade#renderScreen` / `#renderScreenBg` overlays (furnace
-  burn bar, energy bar, fluid tank) are not drawn: same `GuiGraphics` removal.
+  bar. `EngineUpgrade#renderPowerHUD` (fuel / energy gauge) is **restored**, on
+  `GuiGraphicsExtractor`.
 - `client/gui/StorageScreen` — Iron Chests layout support removed with `compat/**`; the screen is
   always the `vanilla_chest.png` layout, sized through `ChestTypes.getXSize/getYSize` (184x168 for
   the 27-slot chest) and blitted in one piece, because that texture is a finished panel rather than
@@ -219,13 +219,19 @@ Three runtime faults were fixed after the first boot:
 
 ### Agent B (entities / upgrades / networking) cuts
 
-- `upgrades/Upgrade` — `render(PoseStack, MultiBufferSource, int, float)`, `renderScreen(GuiGraphics, …)`
-  and `renderScreenBg(GuiGraphics, …)` **removed**, together with every override in
-  `armor`, `banner`, `floating`, `folding`, `jukebox`, `payload`, `seats`, `solarpanel`, `shooter`,
-  `storage`, `supplycrate` and the three engines. `MultiBufferSource`, `GuiGraphics`,
-  `ItemRenderer.getArmorFoilBuffer` and `RenderType.armorCutoutNoCull` do not exist in 26.2.
-  Upgrade world rendering now lives entirely in Agent C's `client/render/UpgradesModels`.
-- `upgrades/engines/EngineUpgrade#renderPowerHUD` — **removed** (same `GuiGraphics` removal).
+- `upgrades/Upgrade` — `render(PoseStack, MultiBufferSource, int, float)` **removed**, together with
+  every override in `armor`, `banner`, `floating`, `folding`, `jukebox`, `payload`, `seats`,
+  `solarpanel`, `shooter`, `storage`, `supplycrate` and the three engines. `MultiBufferSource`,
+  `ItemRenderer.getArmorFoilBuffer` and `RenderType.armorCutoutNoCull` do not exist in 26.2, and
+  upgrade world rendering now lives entirely in `client/render/UpgradesModels`.
+  `renderScreen` / `renderScreenBg` are **restored** on `GuiGraphicsExtractor`, with the furnace,
+  electric and liquid overrides; the other upgrades never drew a screen overlay. Both are
+  `@Environment(EnvType.CLIENT)`, which is what makes it safe for a common class to name a client
+  type: the loader strips them, and every override of them, on a dedicated server.
+- `upgrades/engines/EngineUpgrade#renderPowerHUD` — **restored** on `GuiGraphicsExtractor`, and no
+  longer abstract, so an engine with nothing to show says so by leaving it alone. The liquid engine
+  now has one, which it never did: upstream left it a `//TODO` and the engine flew with no fuel
+  indication at all.
 - `upgrades/engines/liquid/LiquidEngineUpgrade` — the NeoForge fluid-handler capability transfer
   (fill/empty **any** modded fluid container placed in the input slot) is replaced by
   **vanilla-bucket-only** transfer: a bucket of a fluid listed in `plane_liquid_fuels` fills the tank

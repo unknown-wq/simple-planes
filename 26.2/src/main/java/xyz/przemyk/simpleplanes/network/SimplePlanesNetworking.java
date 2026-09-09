@@ -38,6 +38,7 @@ public class SimplePlanesNetworking {
         PayloadTypeRegistry.clientboundPlay().register(NewCargoUpgradePacket.TYPE, NewCargoUpgradePacket.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(CargoUpgradeRemovedPacket.TYPE, CargoUpgradeRemovedPacket.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(PlaneSpawnDataPacket.TYPE, PlaneSpawnDataPacket.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(AirfieldMarkersPacket.TYPE, AirfieldMarkersPacket.STREAM_CODEC);
 
         // ---- server receivers ----
         ServerPlayNetworking.registerGlobalReceiver(RotationPacket.TYPE, (payload, context) -> payload.handle(context.player()));
@@ -50,6 +51,9 @@ public class SimplePlanesNetworking {
         ServerPlayNetworking.registerGlobalReceiver(PitchPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(YawPacket.TYPE, (payload, context) -> payload.handle(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(CyclePlaneInventoryPacket.TYPE, (payload, context) -> payload.handle(context.player()));
+
+        // The world overlay's view of the registered fields: join, plus whatever changes them.
+        AirfieldMarkerSync.register();
 
         // replacement for NeoForge's IEntityWithComplexSpawn
         EntityTrackingEvents.START_TRACKING.register((trackedEntity, player) -> {
