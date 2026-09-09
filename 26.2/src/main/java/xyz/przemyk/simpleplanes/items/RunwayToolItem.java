@@ -112,13 +112,18 @@ public class RunwayToolItem extends Item {
 
         Airfield surveyed = AirfieldReport.surveyAndRegister(
             AutopilotOutput.toPlayer(player), serverLevel, anchor, clicked);
-        // A strip whose surface will not do registers nothing, and the report above has already said
-        // which block is in the way and where it is. The tool stays in survey mode with no anchor
-        // set, so the next click starts the same job again on the cleared strip — putting it into
-        // parking mode here would be offering to finish an airfield that does not exist.
+        // A strip whose surface will not do registers nothing, and nothing is said about it here.
+        // The report went to this same player a line ago and it says the part that varies — which
+        // block is in the way and where it is, or that the ground is too uneven, or that the strip
+        // is not loaded — and then "Nothing was registered. Clear the strip and mark both ends
+        // again." A second line here repeated that word for word and named the cover rule as the
+        // reason whichever rule had actually refused the strip, so a player turned away for
+        // roughness was told to clear grass that was not there.
+        //
+        // The tool stays in survey mode with no anchor set, so the next click starts the same job
+        // again on the cleared strip — putting it into parking mode here would be offering to finish
+        // an airfield that does not exist.
         if (surveyed == null) {
-            AutopilotFeedback.warn(player, "Nothing registered. Clear the strip and mark both ends"
-                + " again — a runway carries nothing but air, snow or grass.");
             return InteractionResult.CONSUME;
         }
         // The survey is only half the job now, so the tool puts itself into the half that is left
