@@ -2425,7 +2425,7 @@ you want a reliable one.
 | Surveyed helipads | `SavedData`, `helipads` key in the same `airfields.dat` | **Yes** |
 | In-progress helicopter sortie | Plane entity NBT, `kind: "heli"` on the plan | **Yes** — resumed in transit, see §4h |
 | Runway reservations | In memory | No — and correctly so, they are re-derived on load |
-| Which stands have an aircraft parked on them | In memory (`StandOccupancy`) | No — a restart falls back to the entity search; see §4d |
+| Which stands have an aircraft parked on them | `SavedData`, `stands` key in the same `airfields.dat` | **Yes** — as `(field, square, aircraft UUID)`; see §4d |
 | Strike flights | Not written | No — see below |
 
 Strike flights are deliberately **not** persisted. `addAdditionalSaveData` also backs
@@ -3043,11 +3043,15 @@ world cannot double-count either.
   end the flight where the aircraft is; there is no retry when a stand later frees up, and no
   dispatcher to notice. `/autopilot tower` shows the strip as free — because the *reservation* is —
   while an aircraft is physically sitting on it.
-* **Stand occupancy does not survive a restart.** `StandOccupancy` is in memory, so after a restart a
-  stand with an aircraft parked on it in an unloaded chunk reads as free until something loads it. A
-  sortie ordered in that window can be spawned on top of a parked aircraft, exactly as it could
-  before this feature existed. Persisting it would mean writing an occupancy nothing can validate on
-  load, which is a different and worse failure.
+* **A stand booking whose square is never loaded again is never healed.** Stand occupancy now
+  survives a restart: a booking is `(field, square, aircraft UUID)` in `airfields.dat`, and the UUID
+  is what makes it checkable — it is resolved through `ServerLevel#getEntity` on every read, and
+  where it cannot be resolved the square is confirmed empty for 20 ticks before the booking is
+  dropped. A restored booking is trusted no further than a live one and heals on the same rule. What
+  is left is the other direction: if an aircraft is deleted out from under the game (a chunk removed
+  on disk, a world edit, another mod culling entities) and nothing ever loads that square again,
+  nothing ever looks at the booking, so the stand stays booked. That costs one stand of eight on one
+  field; removing or renaming the field clears it outright.
 * **There is no runway sequencing.** One reservation per airfield, now taken by departures as well
   as arrivals, but still no queue behind it: waiting aircraft re-poll every 20 ticks and whoever
   polls first is next, so a long-waiting aircraft can be passed over and the order between two

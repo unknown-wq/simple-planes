@@ -7,15 +7,17 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
+import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
- * Per-dimension persistent store of surveyed airfields. Written to
+ * Per-dimension persistent store of surveyed airfields, helipads and stand bookings. Written to
  * {@code <world>/<dimension>/data/simpleplanes/airfields.dat} by vanilla's
  * {@link net.minecraft.world.level.storage.SavedDataStorage}, so airfields survive a restart.
  *
@@ -30,7 +32,14 @@ public class AutopilotSavedData extends SavedData {
         // Beside the runways rather than among them - see Helipad for why a pad is not an airfield.
         // Optional with an empty default, so every world saved before helipads existed loads
         // unchanged and a world with no pads writes no key at all.
-        Helipad.CODEC.listOf().optionalFieldOf("helipads", List.<Helipad>of()).forGetter(AutopilotSavedData::helipadList)
+        Helipad.CODEC.listOf().optionalFieldOf("helipads", List.<Helipad>of()).forGetter(AutopilotSavedData::helipadList),
+        // Which stands have an aircraft standing on them. Named by the aircraft's UUID, because
+        // that is the one thing about a parked aircraft that can still be checked when the aircraft
+        // itself is on disk in an unloaded chunk -- see StandOccupancy for the whole argument.
+        // Optional with an empty default, so a world saved before this field existed loads unchanged
+        // and a world with nothing parked writes no key at all.
+        StandOccupancy.Booking.CODEC.listOf().optionalFieldOf("stands", List.<StandOccupancy.Booking>of())
+            .forGetter(AutopilotSavedData::standList)
     ).apply(instance, AutopilotSavedData::new));
 
     public static final SavedDataType<AutopilotSavedData> TYPE = new SavedDataType<>(
@@ -50,6 +59,15 @@ public class AutopilotSavedData extends SavedData {
      */
     private final Map<String, Helipad> helipads = new LinkedHashMap<>();
 
+    /**
+     * Stand bookings, keyed by field name and square.
+     *
+     * <p>Insertion-ordered so the file is stable between saves and a diff of two worlds is
+     * readable. Reached only through {@link StandOccupancy}, which owns the rule about when a
+     * booking may be believed; the accessors below are deliberately dumb.
+     */
+    private final Map<StandOccupancy.Stand, StandOccupancy.Held> stands = new LinkedHashMap<>();
+
     public AutopilotSavedData() {
     }
 
@@ -58,11 +76,22 @@ public class AutopilotSavedData extends SavedData {
     }
 
     public AutopilotSavedData(List<Airfield> airfields, List<Helipad> helipads) {
+        this(airfields, helipads, List.of());
+    }
+
+    public AutopilotSavedData(List<Airfield> airfields, List<Helipad> helipads,
+                              List<StandOccupancy.Booking> stands) {
         for (Airfield airfield : airfields) {
             this.airfields.put(airfield.name(), airfield);
         }
         for (Helipad helipad : helipads) {
             this.helipads.put(helipad.name(), helipad);
+        }
+        for (StandOccupancy.Booking booking : stands) {
+            // emptySince starts at zero on every load. It is the confirmation clock, not part of the
+            // booking: a restored record has not been looked at yet, so it has not started reading
+            // empty yet either.
+            this.stands.put(booking.stand(), new StandOccupancy.Held(booking.aircraft(), 0));
         }
     }
 
@@ -140,6 +169,57 @@ public class AutopilotSavedData extends SavedData {
             }
         }
         return best;
+    }
+
+    // ------------------------------------------------------------------ stand bookings
+
+    /** Every booking, flattened for the codec. */
+    public List<StandOccupancy.Booking> standList() {
+        List<StandOccupancy.Booking> out = new ArrayList<>(stands.size());
+        stands.forEach((stand, held) ->
+            out.add(new StandOccupancy.Booking(stand.airfield(), stand.spot(), held.aircraft())));
+        return out;
+    }
+
+    /** The raw booking on a stand, or null when there is none. */
+    public StandOccupancy.@Nullable Held stand(StandOccupancy.Stand stand) {
+        return stands.get(stand);
+    }
+
+    /** Books a stand for an aircraft, replacing whatever was there. */
+    public void bookStand(StandOccupancy.Stand stand, UUID aircraft) {
+        StandOccupancy.Held previous = stands.put(stand, new StandOccupancy.Held(aircraft, 0));
+        if (previous == null || !previous.aircraft().equals(aircraft)) {
+            setDirty();
+        }
+    }
+
+    /**
+     * Records that the square has been reading empty since {@code gameTime}, or clears the stamp
+     * with 0.
+     *
+     * <p><b>Deliberately does not mark the file dirty.</b> The stamp is the confirmation clock and
+     * is not written: it exists to stop the very first look at a cold chunk from throwing a good
+     * booking away, and a booking reloaded from disk has to start that clock afresh anyway.
+     */
+    public void stampStand(StandOccupancy.Stand stand, long gameTime) {
+        StandOccupancy.Held held = stands.get(stand);
+        if (held != null) {
+            stands.put(stand, new StandOccupancy.Held(held.aircraft(), gameTime));
+        }
+    }
+
+    public void releaseStand(StandOccupancy.Stand stand) {
+        if (stands.remove(stand) != null) {
+            setDirty();
+        }
+    }
+
+    /** Drops every booking for a field, so removing or renaming one leaves nothing behind. */
+    public void forgetStands(String airfield) {
+        if (stands.keySet().removeIf(stand -> stand.airfield().equals(airfield))) {
+            setDirty();
+        }
     }
 
     /** Nearest airfield to a point, or null if none is within {@code maxDistance}. */
