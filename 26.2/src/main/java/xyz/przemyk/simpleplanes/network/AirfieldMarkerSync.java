@@ -12,6 +12,7 @@ import xyz.przemyk.simpleplanes.autopilot.Airfield;
 import xyz.przemyk.simpleplanes.autopilot.AirfieldBrowser;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotSavedData;
 import xyz.przemyk.simpleplanes.autopilot.Helipad;
+import xyz.przemyk.simpleplanes.autopilot.StandOccupancy;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -137,8 +138,19 @@ public final class AirfieldMarkerSync {
             // The same question the ground handling asks when it picks a stand, rather than a
             // second opinion of our own: a marker that disagrees with where an aircraft will
             // actually be sent is worse than no marker.
+            //
+            // Asked in two halves rather than through Airfield#standFree(airfield, ...), because
+            // that one finishes with StandOccupancy#isTaken, and isTaken is not a question: it
+            // stamps the confirmation clock and releases a booking whose clock has run out. This
+            // poll runs once a second for every player near a field, so a feature that only draws
+            // was writing to persisted saved data on that cadence -- and, with POLL_TICKS and
+            // EMPTY_CONFIRM_TICKS both 20 ticks off the same server tick, it was also the thing
+            // deciding when a booking died, at the earliest instant the rule allows, whether or not
+            // anything had looked at the field for a reason. StandOccupancy#looksTaken is the same
+            // rule with nothing written.
             Vec3 position = new Vec3(spot.getX() + 0.5, spot.getY() + 1.0, spot.getZ() + 0.5);
-            if (!Airfield.standFree(level, airfield, position, spot, null)) {
+            if (!Airfield.standFree(level, position, spot, null)
+                || StandOccupancy.looksTaken(level, airfield.name(), spot)) {
                 occupied |= 1 << i;
             }
         }
