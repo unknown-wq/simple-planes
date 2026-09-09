@@ -66,11 +66,10 @@ please do not send port-specific problems to the upstream authors.
 Everything below comes from the original mod; the port keeps the gameplay intact.
 
 - **Aircraft:** Plane, Large Plane, Cargo Plane, Helicopter, plus a deployable Parachute.
-- **Engines:** Furnace Engine (coal), Electric Engine (Forge Energy–style charging), Liquid Engine
-  (fuel from a bucket — lava and other configured liquid fuels).
-- **Upgrades:** Plane Armor, Seats, Shooter, Rocket Booster, Solar Panel, Propeller, Folding
+- **Engines:** Furnace Engine (coal), Liquid Engine (lava and other configured liquid fuels).
+- **Upgrades:** Plane Armor, Seats, Shooter, Rocket Booster, Propeller, Folding
   Upgrade, Floaty Bedding, Quick Fix Kit, Chest storage, Payload, Supply Crate, Banner, Jukebox.
-- **Blocks:** Plane Workbench, Charging Station.
+- **Blocks:** Plane Workbench.
 - **Wrench** for reconfiguring an assembled aircraft.
 - **Languages:** English, Russian, Ukrainian, Italian, Japanese, Simplified Chinese.
 
@@ -81,10 +80,13 @@ cuts, not bugs** — check this list before reporting one:
 
 - All mod compat (`compat/**`): **JEI, Iron Chests, Quark, MrCrayfish's Gun Mod** integration is gone.
 - The config is **not editable** — NeoForge's `ModConfigSpec` was replaced by static defaults.
-- **NeoForge capabilities do not exist on Fabric:** other mods can no longer pipe items, energy or
-  fluid into or out of a plane. The Liquid Engine takes **vanilla buckets only**.
+- **The Electric Engine, the Solar Panel and the Charging Station are removed.** The mod has no
+  energy system: the charging station's only job was to charge an electric engine, and on Fabric
+  nothing could fill the station itself.
+- **NeoForge capabilities do not exist on Fabric:** other mods can no longer pipe items into or out
+  of a plane.
 - Not rendered: camera roll, rotated riding players, banner on the tail, blocks inside the cargo
-  bay, item tinting by build material, and the fuel / energy HUD gauges.
+  bay, and item tinting by build material.
 
 The complete per-file list is the **Disabled content** log in
 [`26.2/PORT-STATUS.md`](26.2/PORT-STATUS.md).

@@ -141,6 +141,27 @@ Three runtime faults were fixed after the first boot:
 3. two non-mod red herrings: a flat `level-type` without generator settings, and a leftover
    server holding port 25565.
 
+## Removed content (features taken out of the port, not merely cut down)
+
+- **Electric Engine, Solar Panel and Charging Station are gone** — item, upgrade type, block, block
+  entity, recipes, models, textures, loot table, `mineable/pickaxe` tag and lang keys in all six
+  languages, plus `misc/EnergyStorageWithSet` (nothing else used it). The mod no longer has an
+  energy system of any kind.
+
+  The charging station could not survive them by construction: its `tick` existed only to find an
+  `ElectricEngineUpgrade` on a plane parked above it and push energy into it, and its own buffer had
+  no filler on Fabric to begin with (NeoForge filled it through `Capabilities.EnergyStorage.BLOCK`).
+  With the electric engine gone it had nothing to charge and no way to be charged.
+
+  `HelicopterEntity#canAddUpgrade` went with them: the override existed only to refuse the solar
+  panel, so the helicopter now inherits `PlaneEntity`'s.
+
+  Reading a saved plane that still carries `simpleplanes:electric_engine` or
+  `simpleplanes:solar_panel` in its `upgrades` tag is not an error:
+  `PlaneEntity#deserializeUpgrades` looks each key up in the upgrade-type registry and skips the
+  ones it does not find, so an unknown upgrade is dropped and the aircraft loads without it. A plane
+  whose only engine was electric loads with no engine and takes a new one from the wrench screen.
+
 ## Disabled content (§9 log — append here, one line per cut)
 
 - `compat/**` — JEI, IronChests, Quark and MrCrayfishGun integration deleted wholesale.
@@ -162,13 +183,8 @@ Three runtime faults were fixed after the first boot:
   constant tint (`0xB28F55`, the old `DEFAULT_COLOR`) instead of sampling the material block texture.
 - `assets/simpleplanes/blockstates/cloud.json` (Agent A) — deleted; no `cloud` block is registered
   and no `block/cloud_*` models exist.
-- `blocks/ChargingStationBlockEntity` (Agent A) — charged any `IEnergyStorage` capability holder
-  standing on it; now looks up `ElectricEngineUpgrade` on a `PlaneEntity` directly (contract C4).
-  **The block is inert as shipped.** Its own buffer was filled through the same capability, and
-  nothing on Fabric fills it now, so it holds 0 for ever and charges nothing — while still being
-  craftable and listed in the creative tab. Restoring it needs an energy input (a transfer API, or
-  an in-world source); whether to keep shipping the block meanwhile is a content decision, not a
-  port one. Until then the solar panel is the only way to charge an electric engine.
+- `blocks/ChargingStation*`, `upgrades/engines/electric/**`, `upgrades/solarpanel/**` — **removed
+  from the mod**, not merely disabled. See "Removed content" above.
 
 ### Agent C (client) cuts
 
@@ -204,7 +220,7 @@ Three runtime faults were fixed after the first boot:
   style blocks, wrong for blocks whose texture name differs from their id.
 - `client/ModBusClientEventHandler` (plane HUD) — `Gui.rightHeight` no longer exists in 26.2, so the
   health rows are drawn at a fixed offset above the hotbar instead of stacking on the vanilla mount
-  bar. `EngineUpgrade#renderPowerHUD` (fuel / energy gauge) is **restored**, on
+  bar. `EngineUpgrade#renderPowerHUD` (the fuel gauge) is **restored**, on
   `GuiGraphicsExtractor`.
 - `client/gui/StorageScreen` — Iron Chests layout support removed with `compat/**`; the screen is
   always the `vanilla_chest.png` layout, sized through `ChestTypes.getXSize/getYSize` (184x168 for
@@ -221,11 +237,11 @@ Three runtime faults were fixed after the first boot:
 
 - `upgrades/Upgrade` — `render(PoseStack, MultiBufferSource, int, float)` **removed**, together with
   every override in `armor`, `banner`, `floating`, `folding`, `jukebox`, `payload`, `seats`,
-  `solarpanel`, `shooter`, `storage`, `supplycrate` and the three engines. `MultiBufferSource`,
+  `shooter`, `storage`, `supplycrate` and the engines. `MultiBufferSource`,
   `ItemRenderer.getArmorFoilBuffer` and `RenderType.armorCutoutNoCull` do not exist in 26.2, and
   upgrade world rendering now lives entirely in `client/render/UpgradesModels`.
-  `renderScreen` / `renderScreenBg` are **restored** on `GuiGraphicsExtractor`, with the furnace,
-  electric and liquid overrides; the other upgrades never drew a screen overlay. Both are
+  `renderScreen` / `renderScreenBg` are **restored** on `GuiGraphicsExtractor`, with the furnace
+  and liquid overrides; the other upgrades never drew a screen overlay. Both are
   `@Environment(EnvType.CLIENT)`, which is what makes it safe for a common class to name a client
   type: the loader strips them, and every override of them, on a dedicated server.
 - `upgrades/engines/EngineUpgrade#renderPowerHUD` — **restored** on `GuiGraphicsExtractor`, and no

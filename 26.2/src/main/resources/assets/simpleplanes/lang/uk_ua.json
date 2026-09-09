@@ -1,11 +1,8 @@
 {
     "block.simpleplanes.plane_workbench": "Аероверстат",
-    "block.simpleplanes.charging_station": "Зарядна станція",
-    "item.simpleplanes.electric_engine": "Електродвигун",
     "item.simpleplanes.furnace_engine": "Твердопалевний двигун",
     "item.simpleplanes.liquid_engine": "Рідинний двгун",
     "item.simpleplanes.armor": "Броня літака",
-    "item.simpleplanes.solar_panel": "Сонячна панель",
     "item.simpleplanes.propeller": "Винтовий двигун",
     "item.simpleplanes.booster": "Реактивний прискорювач",
     "item.simpleplanes.floaty_bedding": "Поплавок для літака",
@@ -16,11 +13,9 @@
     "item.simpleplanes.seats": "Сидіння",
     "item.simpleplanes.shooter": "Авіаційна гармата",
 
-    "block.simpleplanes.charger_block": "Станція зарядки",
     "block.simpleplanes.fueling_block": "Аерозаправна станция",
 
     "name.simpleplanes.furnace_engine": "Твердопалевний",
-    "name.simpleplanes.electric_engine": "Електродвигун",
     "name.simpleplanes.propeller": "Пропелер",
     "name.simpleplanes.sprayer": "Обприскувач",
     "name.simpleplanes.booster": "Ракетний прискорювач",
@@ -36,7 +31,6 @@
     "name.simpleplanes.armor": "Броня літака",
     "name.simpleplanes.supply_crate": "Ящик з припасами",
     "name.simpleplanes.seats": "Сидіння",
-    "name.simpleplanes.solar_panel": "Сонячна панель",
 
     "simpleplanes.planes_tab": "Simple Planes",
     "simpleplanes.container.plane_workbench": "Аероверстат",
@@ -53,7 +47,6 @@
     "text.autoconfig.simpleplanes.category.default": "misc",
     "text.autoconfig.simpleplanes.category.coal": "вугілля",
     "text.autoconfig.simpleplanes.category.mana": "мана",
-    "text.autoconfig.simpleplanes.category.energy": "енергія",
     "text.autoconfig.simpleplanes.category.lava": "лава",
     "text.autoconfig.simpleplanes.option.TURN_THRESHOLD": "Вкл/Викл Керування геймпадом",
     "text.autoconfig.simpleplanes.option.TURN_THRESHOLD.@Tooltip": "На випадок керування літаком геймпадом",
@@ -74,19 +67,16 @@
     "simpleplanes.material": "Матеріал - ",
 
     "simpleplanes.furnace_engine_container": "Твердопалевний двигун",
-    "simpleplanes.electric_engine_container": "Електродвигун",
     "simpleplanes.remove_upgrades": "Дистанційне оновлення:",
     "simpleplanes:booster": "Ракетний прискорювач",
     "simpleplanes:floaty_bedding": "Поплавок для літака",
     "simpleplanes:shooter": "Авіаційна гармата",
     "simpleplanes:furnace_engine": "Твердопалевний двигун",
-    "simpleplanes:electric_engine": "Електродвигун",
     "simpleplanes:liquid_engine": "Рідинний двигун",
     "simpleplanes:tnt": "Вибухівка",
     "simpleplanes:banner": "Стяг",
     "simpleplanes:chest": "Скриння",
     "simpleplanes:armor": "Броння",
-    "simpleplanes:solar_panel": "Сонячна панель",
     "simpleplanes:folding": "Багажне відділення",
     "simpleplanes:supply_crate": "Ящик з припасами",
     "simpleplanes:seats": "Сидіння",
@@ -97,7 +87,6 @@
     "entity.simpleplanes.helicopter": "Гелікоптер",
     "entity.simpleplanes.parachute": "Парашут",
 
-    "simpleplanes.gui.energy": "Енергія: %s FE",
     "simpleplanes.gui.fluid": "%s: %s mb",
 
     "simpleplanes.press_key": "Натисніть %s коли в літаку",

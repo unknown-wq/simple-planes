@@ -1,7 +1,5 @@
 {
     "block.simpleplanes.plane_workbench": "飞机工作台",
-    "block.simpleplanes.charging_station": "充电站",
-    "item.simpleplanes.electric_engine": "电动引擎",
     "item.simpleplanes.furnace_engine": "熔炉引擎",
     "item.simpleplanes.armor": "飞机护甲",
     "item.simpleplanes.propeller": "螺旋桨",
@@ -13,11 +11,9 @@
     "item.simpleplanes.supply_crate": "补给木箱",
     "item.simpleplanes.seats": "座椅升级",
 
-    "block.simpleplanes.charger_block": "FE charging station",
     "block.simpleplanes.fueling_block": "plane fueling station",
 
     "name.simpleplanes.furnace_engine": "熔炉引擎",
-    "name.simpleplanes.electric_engine": "电动引擎",
     "name.simpleplanes.propeller": "螺旋桨",
     "name.simpleplanes.sprayer": "喷雾器",
     "name.simpleplanes.booster": "火箭助推器",
@@ -53,7 +49,6 @@
     "text.autoconfig.simpleplanes.category.default": "misc",
     "text.autoconfig.simpleplanes.category.coal": "coal",
     "text.autoconfig.simpleplanes.category.mana": "mana",
-    "text.autoconfig.simpleplanes.category.energy": "energy",
     "text.autoconfig.simpleplanes.category.lava": "lava",
     "text.autoconfig.simpleplanes.option.TURN_THRESHOLD": "Turn Threshold",
     "text.autoconfig.simpleplanes.option.TURN_THRESHOLD.@Tooltip": "For controllers, a threshold for the joystick movement of the plane",
@@ -74,13 +69,11 @@
     "simpleplanes.material": "材料 - ",
 
     "simpleplanes.furnace_engine_container": "熔炉引擎",
-    "simpleplanes.electric_engine_container": "电动引擎",
     "simpleplanes.remove_upgrades": "移除升级:",
     "simpleplanes:booster": "火箭助推器",
     "simpleplanes:floaty_bedding": "漂浮垫",
     "simpleplanes:shooter": "机炮",
     "simpleplanes:furnace_engine": "熔炉引擎",
-    "simpleplanes:electric_engine": "电动引擎",
     "simpleplanes:tnt": "TNT",
     "simpleplanes:banner": "旗帜",
     "simpleplanes:chest": "箱子",
@@ -93,7 +86,6 @@
     "entity.simpleplanes.plane": "飞机",
     "entity.simpleplanes.large_plane": "大飞机",
     "entity.simpleplanes.helicopter": "直升机",
-    "entity.simpleplanes.parachute": "降落伞",
+    "entity.simpleplanes.parachute": "降落伞"
 
-    "simpleplanes.gui.energy": "剩余能量: %s FE"
 }
