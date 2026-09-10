@@ -49,6 +49,16 @@ import java.util.UUID;
  * <p>Self-healing, and it has to be, or an aircraft a player flies away leaves its stand blocked for
  * the rest of the session: the first look at a loaded, empty square forgets the record.
  *
+ * <p><b>Asking {@link #isTaken} is therefore a write</b>, and only a caller deciding where to put an
+ * aircraft has any business making one. Anything that is merely reporting occupancy — the marker
+ * overlay, a listing — must use {@link #looksTaken}, which applies the same rule and changes
+ * nothing; otherwise a poll that runs on a fixed interval becomes the thing that decides when a
+ * booking dies.
+ *
+ * <p>"Still on its stand" is {@link AutopilotConfig#STAND_OCCUPIED_RADIUS} and not
+ * {@link AutopilotConfig#PARKING_SPOT_CLEARANCE}: the latter is exactly how far apart two stands may
+ * be marked, so it made an aircraft on the neighbouring stand keep this stand's booking alive.
+ *
  * <h2>Why it is persisted now, when it deliberately was not</h2>
  * This class used to be runtime-only, and said so, on the grounds that "the alternative is
  * persisting an occupancy that nothing can validate on load". That objection is about what a record
@@ -155,6 +165,8 @@ public final class StandOccupancy {
      *
      * <p>The raw record, with none of {@link #isTaken}'s validation applied: a caller that wants to
      * know <em>who</em> must still decide for itself what to do about an answer it cannot resolve.
+     * A caller that wants to know <em>what is standing there</em> wants {@link #parkedOn} instead,
+     * which is this plus the check that the aircraft has not moved.
      */
     public static @Nullable UUID heldBy(Level level, String airfield, BlockPos spot) {
         if (!(level instanceof ServerLevel serverLevel)) {
@@ -162,6 +174,58 @@ public final class StandOccupancy {
         }
         Held held = AutopilotSavedData.get(serverLevel).stand(new Stand(airfield, spot));
         return held == null ? null : held.aircraft();
+    }
+
+    /**
+     * The aircraft this mod parked on this stand and that is <b>still standing on it</b>, resolved
+     * and alive, or null.
+     *
+     * <p>The whole of the "an aircraft with a booking is an aircraft this mod flew onto that square
+     * itself" argument in {@link AircraftReuse}, in one place, because it was possible to have half
+     * of it. A booking names a UUID and nothing more; resolving that UUID answers "where is this
+     * aircraft now", not "is this aircraft on that square". A claim written as
+     * {@code heldBy} + {@code getEntity} therefore re-tasked a fleet aircraft a player had flown
+     * home and parked in their own hangar, cargo and all — the booking was stale, and the distance
+     * to the stand was only ever consulted as a tie-break between candidates.
+     *
+     * <p>Where the aircraft has moved, the booking is <b>released</b> rather than merely refused:
+     * that is the same self-healing rule {@link #isTaken} applies, and applying it here is what
+     * finally heals a stale booking on a stand nothing else looks at. {@code Airfield}'s departure
+     * search stops at the first usable stand, so before this the later stands' bookings were never
+     * reached by anything that could throw them away.
+     */
+    public static @Nullable PlaneEntity parkedOn(ServerLevel level, String airfield, BlockPos spot) {
+        AutopilotSavedData data = AutopilotSavedData.get(level);
+        Stand stand = new Stand(airfield, spot);
+        Held held = data.stand(stand);
+        if (held == null) {
+            return null;
+        }
+        if (!(level.getEntity(held.aircraft()) instanceof PlaneEntity plane)
+            || plane.isRemoved() || !plane.isAlive()) {
+            // Unresolvable is not "gone": it may simply be on disk. isTaken owns that distinction
+            // and the clock that settles it; here it is enough that there is nothing to hand over.
+            return null;
+        }
+        if (!onStand(plane, spot)) {
+            data.releaseStand(stand);
+            return null;
+        }
+        return plane;
+    }
+
+    /**
+     * Whether the aircraft is close enough to the stand to count as standing on it.
+     *
+     * <p>Measured at the aircraft's own altitude, so a stand on sloping ground is not disqualified
+     * by the y term. See {@link AutopilotConfig#STAND_OCCUPIED_RADIUS} for why the radius is not
+     * {@link AutopilotConfig#PARKING_SPOT_CLEARANCE}: that one is the minimum gap between two
+     * stands, so using it here made a machine on the neighbouring stand hold this stand's booking.
+     */
+    private static boolean onStand(PlaneEntity plane, BlockPos spot) {
+        return AutopilotMath.horizontalDistance(plane.position(),
+            new Vec3(spot.getX() + 0.5, plane.getY(), spot.getZ() + 0.5))
+            <= AutopilotConfig.STAND_OCCUPIED_RADIUS;
     }
 
     /**
@@ -191,9 +255,7 @@ public final class StandOccupancy {
         if (entity instanceof PlaneEntity plane && plane.isAlive() && !plane.isRemoved()) {
             // Loaded and alive: believe where it actually is rather than where it was left. A stand
             // whose aircraft has been flown away is free, and nothing else would ever free it.
-            if (AutopilotMath.horizontalDistance(plane.position(),
-                new Vec3(spot.getX() + 0.5, plane.getY(), spot.getZ() + 0.5))
-                <= AutopilotConfig.PARKING_SPOT_CLEARANCE) {
+            if (onStand(plane, spot)) {
                 data.stampStand(stand, 0);
                 return true;
             }
@@ -216,6 +278,51 @@ public final class StandOccupancy {
         }
         data.releaseStand(stand);
         return false;
+    }
+
+    /**
+     * {@link #isTaken}'s answer, without touching the record: for a reader that only draws.
+     *
+     * <p><b>Every other reader of this class is deciding where to put an aircraft, and this one is
+     * not.</b> {@code AirfieldMarkerSync} rebuilds each nearby player's overlay once a second and
+     * asks the same occupancy question the ground handling asks, deliberately, so that a marker
+     * cannot disagree with where an aircraft will actually be sent. But {@link #isTaken} is not a
+     * question — it stamps the confirmation clock and releases what has run out — so "a feature that
+     * only draws" was writing to persisted saved data once a second per nearby player, and, since
+     * its poll interval and {@link #EMPTY_CONFIRM_TICKS} are both 20 ticks off the same server tick,
+     * it was also the thing deciding when a booking died: the clock started on one poll and expired
+     * on the next, at the earliest instant the rule allows, whether or not anything had looked at
+     * the field for a real reason.
+     *
+     * <p>So the drawing path gets the rule and not the side effects, which means it also gets the
+     * rule's pessimism: a booking whose confirmation clock has never been started reads
+     * <em>taken</em>, and nothing here will start it, so a stand whose aircraft was deleted out from
+     * under the game keeps its marker until something asks about the square for a real reason — an
+     * arrival choosing a stand, or a departure looking for an airframe. That is the same direction of
+     * error the rest of this class takes, and the same cost {@link StandOccupancy} already documents
+     * for a booking nothing ever looks at; what it buys is that a marker never contradicts where an
+     * aircraft would actually be sent, which is the whole reason the overlay asks this question
+     * rather than one of its own.
+     */
+    public static boolean looksTaken(Level level, String airfield, BlockPos spot) {
+        if (!(level instanceof ServerLevel serverLevel)) {
+            return false;
+        }
+        Held held = AutopilotSavedData.get(serverLevel).stand(new Stand(airfield, spot));
+        if (held == null) {
+            return false;
+        }
+        if (serverLevel.getEntity(held.aircraft()) instanceof PlaneEntity plane
+            && plane.isAlive() && !plane.isRemoved()) {
+            return onStand(plane, spot);
+        }
+        if (!serverLevel.areEntitiesLoaded(ChunkPos.pack(spot))) {
+            return true;
+        }
+        // Unstamped means the clock has not been started by a reader that is allowed to start it,
+        // so there is nothing yet to say the square has been empty long enough to believe.
+        return held.emptySince() == 0
+            || serverLevel.getGameTime() - held.emptySince() < EMPTY_CONFIRM_TICKS;
     }
 
     /**

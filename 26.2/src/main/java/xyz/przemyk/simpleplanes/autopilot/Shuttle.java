@@ -54,7 +54,9 @@ import java.util.UUID;
  * @param state         see {@link State}
  * @param nextDeparture game time the next departure is due; meaningless while flying
  * @param legs          completed legs, for the listing
- * @param misses        consecutive departures that could not be flown; reset by a successful one
+ * @param misses        consecutive departures that could not be flown, which sets how long the next
+ *                      retry waits and when the reports stop; reset by a successful one. Reused
+ *                      while flying as the count of ticks-worth of not finding the aircraft
  * @param owner         the player who created it, so reports have somewhere to go; empty for a
  *                      shuttle created from the console
  * @param note          the last thing that went wrong, or empty
@@ -74,12 +76,22 @@ public record Shuttle(int id, String fieldA, String fieldB, int delayTicks, Airc
         /**
          * Stopped by a fault, and not retrying.
          *
-         * <p>Deliberately not self-clearing and deliberately not self-deleting. Every route into
-         * this state is something a player has to know about — the field was removed, the aircraft
-         * was destroyed, the airframe could not be found for three departures running — so the
-         * record stays, holds its slot against {@link AutopilotConfig#MAX_SHUTTLES}, and prints its
-         * reason in {@code /autopilot shuttle list} until somebody stops it. A paused shuttle
-         * releases its chunk ticket immediately; what it keeps is its visibility.
+         * <p>Deliberately not self-clearing and deliberately not self-deleting, which is only
+         * defensible because of what no longer reaches it. A departure that merely could not be
+         * flown — no free autopilot slot, somebody aboard, the airframe busy on another sortie — is
+         * retried for as long as it takes, with a growing interval; see
+         * {@link AutopilotDispatcher#defer}. Getting here takes a fault a player has to act on: the
+         * field was removed or renamed, the aircraft was destroyed, the aircraft is somewhere the
+         * schedule cannot fly it from, or servicing the schedule threw.
+         *
+         * <p>So the record stays and prints its reason in {@code /autopilot shuttle list} until
+         * somebody stops it. It does <b>not</b> hold a slot against
+         * {@link AutopilotConfig#MAX_SHUTTLES} — that cap rations resident chunks and autopilot
+         * slots, and a paused shuttle uses neither; it is counted against
+         * {@link AutopilotConfig#MAX_PAUSED_SHUTTLES} instead, so the diagnostic survives without
+         * costing a working schedule its place. A paused shuttle releases its chunk ticket
+         * immediately and stops owning its airframe, which is free to be re-tasked by anything else;
+         * what it keeps is its visibility.
          */
         PAUSED("paused");
 
