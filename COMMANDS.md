@@ -18,9 +18,9 @@ needed where that is called out separately.
 /give @s simpleplanes:route_wand
 /give @s simpleplanes:plane_strike_tool
 
-# 2. Survey a runway: right-click one threshold, then the other
+# 2. Survey a runway: right-click one corner, then the opposite one
 #    (or by command, if you already have the coordinates)
-/autopilot survey 654 68 -9 654 68 -75
+/autopilot survey 654 68 -15 654 68 -75
 
 # 3. See what you got
 /autopilot airfields
@@ -31,6 +31,9 @@ needed where that is called out separately.
 # 5. Watch it fly
 /autopilot tower
 /autopilot status
+
+# 6. Want the running commentary too? (per player, off by default)
+/autopilot debug true
 ```
 
 ---
@@ -287,6 +290,49 @@ Airfield names go in quotes. Tab completion works.
 
 ---
 
+## How much it says in chat
+
+The autopilot is **quiet by default**. A flight reports what a player has to know about or
+act on, and nothing else:
+
+* an aircraft lost, ditched or shot down;
+* a landing that did not happen, an aircraft stuck on a runway or short of its stand, a
+  departure that gave up;
+* a go-around, and an aircraft held on its stand because the runway is occupied;
+* one line when a leg finishes, naming the landing and where the aircraft is parked;
+* a shuttle that has stopped, or that has failed to depart (the first three tries — after
+  that the reason stays in `/autopilot shuttle list`).
+
+Everything else — arrival plans and replans, taxi and lineup, vacating the runway, shuttle
+legs turning over, an airframe being re-tasked — is *progress*, and nobody sees it unless
+they ask:
+
+```
+/autopilot debug         # say which it is
+/autopilot debug true    # show progress for my flights
+/autopilot debug false   # stop
+```
+
+It is **per player** — everything it unmutes already goes to whoever ordered the flight, so
+a server-wide switch would silence other people's flights along with your own — and it is
+**not saved**: it lasts until the server restarts.
+
+Even with it on, an arrival that replans to the same end for the same reason does not
+reprint, and a flight announces at most **three** arrival decisions before it goes quiet about
+them. A holding aircraft used to re-announce `holding, runway busy` every time the runway in
+front of it emptied and filled again, which with several machines in the circuit never stopped.
+Nothing is lost by the limit: `/autopilot tower` and `/autopilot status` show the live plan and
+its reason on demand.
+
+Transient status — mode changes, a waypoint reached, the survey tool switching modes — goes
+to the **action bar**, not to chat.
+
+`/autopilot tower` is the live picture of who is where; `/autopilot status`,
+`/autopilot airfields info` and `/autopilot shuttle list` answer on demand. None of them is
+a feed.
+
+---
+
 ## Shuttles
 
 A shuttle is one aircraft flying between two airfields **for ever**: depart A, land B,
@@ -376,7 +422,7 @@ a runway every turnaround rather than only once.
 ## Airfields
 
 ```
-/autopilot survey <threshold1 x y z> <threshold2 x y z>
+/autopilot survey <corner1 x y z> <corner2 x y z>
 /autopilot airfields
 /autopilot airfields info   <"airfield">
 /autopilot airfields show   <"airfield">
@@ -386,13 +432,27 @@ a runway every turnaround rather than only once.
 /autopilot airfields unpark <"airfield"> <x y z>
 ```
 
-* `survey` — measures a runway from its two thresholds and registers it. The name is
-  assigned automatically: `airfield-1`, `airfield-2`, …
+* `survey` — registers the runway spanned by **two opposite corners**. The rectangle you
+  mark is the rectangle you get: the strip runs along its longer side, is as wide as its
+  shorter side, and its heading is always a multiple of 90. Nothing is measured off the
+  terrain and nothing is moved. The name is assigned automatically: `airfield-1`,
+  `airfield-2`, … It answers in **one line**; `info` has the rest.
 * `airfields` — the list, nearest first, with distance and bearing. Names are clickable.
-* `info` — full characteristics: length, width, slope, roughness, both thresholds'
-  headings, approach obstacles, stands.
+* `info` — everything the survey measured and the field's live state: length, width, slope,
+  roughness, the surface verdict, both thresholds' elevations and headings, approach
+  obstacles, the preferred landing direction, where an arrival touches down, whether the
+  runway is free, and every stand. This is where the detail lives — the survey itself no
+  longer prints it.
 * `show` — highlights the centreline, thresholds and stands with particles in the world.
 * `park` — marks a stand, where an aircraft taxis out from before departure.
+* `resurvey` — re-reads the terrain under a field whose shape is already settled: the
+  threshold elevations and both approach funnels. It does **not** move the runway. To change
+  a runway's shape, mark its corners again.
+
+An airfield surveyed by an older build may be stored **diagonally**, because the survey used
+to read the two clicks as the two ends of the centreline. Such a field still loads and flies
+exactly as it was saved; `info` says so, and marking its corners again is what straightens
+it.
 
 **A runway shorter than 18 blocks is not accepted**: a sortie into it is refused with
 the numbers, rather than ending in a wrecked aircraft. It is not the take-off that sets
@@ -402,7 +462,8 @@ The runway tool does the same job:
 
 `/give @s simpleplanes:runway_tool`
 
-* **right-click both thresholds** — survey the runway;
+* **right-click two opposite corners** — survey the runway; the ground preview shades the
+  exact rectangle that will be registered;
 * **sneak + right-click a block** — cancel a half-marked runway;
 * **right-click the air** — list airfields;
 * **sneak + right-click the air** — switch to stand-marking mode;

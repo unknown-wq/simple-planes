@@ -642,6 +642,22 @@ public final class AutopilotConfig {
      */
     public static final int ARRIVAL_RECHECK_INTERVAL = 20;
     /**
+     * How many arrival decisions one flight announces before it goes quiet about them, on a flight
+     * whose owner has asked to see progress at all.
+     *
+     * <p>Dropping the repeats is not enough on its own, and the reason is structural: an aircraft
+     * holding for a busy runway alternates between {@code holding, runway busy} and a real approach
+     * every time the runway in front of it empties and fills, so consecutive announcements genuinely
+     * differ and every one of them survives a dedupe. What bounds that is a count.
+     *
+     * <p>Three, and deliberately the same three as {@link #SHUTTLE_QUIET_MISSES}, which bounds the
+     * same shape of noise for the same reason: the first few carry the information — which end, and
+     * why — and after that the aircraft is repeating itself. Nothing is hidden by it. The live plan
+     * and its reason are on {@code /autopilot tower} and in {@code /autopilot status}, both displays
+     * rather than feeds, and the replan count is in the flight's own trace line.
+     */
+    public static final int ARRIVAL_QUIET_REPLANS = 3;
+    /**
      * How much better a different intercept distance has to be before a committed plan is torn up,
      * in blocks.
      *
@@ -922,16 +938,16 @@ public final class AutopilotConfig {
         Math.max(TAKEOFF_LENGTH_NEEDED, LANDING_LENGTH_NEEDED);
 
     // ---- runway survey ----
-    public static final int SURVEY_MAX_WIDTH = 24;
     /**
-     * How many times the survey re-centres the two clicked thresholds on the strip before giving up.
+     * How many times the pad survey re-centres a clicked helipad on the ground before giving up.
      *
-     * <p>It has to be more than one because the cross-section is measured perpendicular to the
-     * <em>current</em> centreline, and moving an end sideways changes that centreline. Three is
-     * empirically more than enough: on the rig a threshold clicked on the edge of a 13-wide strip is
-     * centred to the block in one pass and the second pass moves it 0, and the two-corners case
-     * (opposite edges at opposite ends of a 160x13 strip, a 4.3-degree error in the clicked heading)
-     * settles in two. The loop also stops as soon as a pass moves nothing.
+     * <p>It has to be more than one because the cross-section is measured about the <em>current</em>
+     * centre, and moving the centre changes what the probes see. Three is empirically more than
+     * enough: on the rig a pad clicked on its edge is centred to the block in one pass and the second
+     * pass moves it 0. The loop also stops as soon as a pass moves nothing.
+     *
+     * <p>The runway survey no longer has a counterpart. It takes its geometry from the marked box —
+     * see {@code Airfield#footprint} — so there is nothing about a runway left to centre.
      */
     public static final int SURVEY_CENTRING_PASSES = 3;
     public static final int SURVEY_APPROACH_LENGTH = 200;
@@ -1003,11 +1019,10 @@ public final class AutopilotConfig {
      * How far the strip surface may sit above or below the straight line between the two thresholds
      * before the survey calls it a step, in blocks.
      *
-     * <p>One, and it is one for a reason that has nothing to do with taste: it is exactly the
-     * tolerance {@code Airfield#levelWith} uses when it walks outwards to decide how wide the strip
-     * is. The width measurement and the surface rule therefore agree about which columns are "the
-     * runway" — with a tighter tolerance the survey would measure a width and then refuse the strip
-     * for the shoulder it had just counted as part of it.
+     * <p>One, and it is one for a reason that has nothing to do with taste: it is the band a strip
+     * has always been allowed to wander through, and the surface rule is now applied to exactly the
+     * columns the player marked out — {@code Airfield#footprint} takes the width from the selection —
+     * so the ground that is judged and the ground that was chosen are the same ground.
      *
      * <p>A column that sits inside this band but is topped by something that is not a full block of
      * collision — a fence post, a wall, a slab, a chest — is still refused, because it is a thing

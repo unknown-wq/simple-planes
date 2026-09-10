@@ -208,10 +208,9 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 | `route <from> <to> [speed]` | point-to-point cruise — the "does it explode for no reason" test, and the speed-regulation test |
 | `flight <from> <to> [speed] [delay <s>]` | full sortie between two registered airfields — park, wait, taxi, take-off, cruise, approach, landing. `delay` is seconds spent on the parking spot before the runway is asked for |
 | `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
-| `survey <t1> <t2>` | register a runway |
+| `survey <corner1> <corner2>` | register a runway from two **opposite corners** of it — and it is only half the job now, see `airfields park` |
 | `airfields [info\|show\|resurvey\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
-| `survey <t1> <t2>` | register a runway — and it is only half the job now, see `airfields park` |
-| `airfields [info\|show\|rename\|remove\|park\|unpark]` | browse and manage them; every form works headlessly |
+| `debug [true\|false]` | show or hide routine progress — arrival plans, replans, taxi, shuttle legs — for the player who typed it |
 | `tower [<airfield>]` | runway states — free/occupied, by which aircraft, in what mode, for how long, and who is holding |
 | `status` | live list of autopilot aircraft with a status line each |
 | `stop` | stop all of them |
@@ -219,6 +218,17 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 `speed` is the cruise speed in blocks per tick, clamped to 0.40–2.80. Omitted, it is the default
 2.60. It is the single most useful argument on this rig: the same flight at 0.40 and at 2.80
 exercises completely different parts of the controller.
+
+**What reaches `console.log`, and what no longer does.** A flight launched from `cmd.sh` has no owner
+— nobody typed the command in-game — so everything it says goes to the log rather than to a chat
+window. Only `AutopilotFeedback.report` is logged at `INFO`: the outcomes, the failures and the one
+line that ends a leg. Routine progress — the arrival plan and its replans, cleared to taxi, lined up,
+vacating, on the stand, a shuttle leg turning over — is `AutopilotFeedback.progress`, which an owned
+flight shows only to a player who typed `/autopilot debug true` and an ownerless one writes at
+`DEBUG`. Under the stock log configuration that is **absent from `console.log`**, so a recipe below
+that greps for a plan or a taxi line needs the logger turned up for
+`simpleplanes-autopilot`; the outcome lines every recipe asserts on are unaffected. Landing and
+parking are now **one** line, not three.
 
 ### Recipe: a complete airfield-to-airfield sortie
 
@@ -229,8 +239,9 @@ also the only place `forceload` is genuinely useful. Two runways 2000 blocks apa
 ./cmd.sh "forceload add 640 -200 670 0"      # 28 chunks - under the 256 limit
 ./cmd.sh "forceload add 2640 -200 2670 0"
 sleep 8
-./cmd.sh "autopilot survey 654 -60 -9 654 -60 -192"
-./cmd.sh "autopilot survey 2654 -60 -9 2654 -60 -192"
+# two opposite corners, not two centreline ends: 25 wide (x 642..666) by 184 long
+./cmd.sh "autopilot survey 642 -60 -9 666 -60 -192"
+./cmd.sh "autopilot survey 2642 -60 -9 2666 -60 -192"
 ./cmd.sh "autopilot airfields"
 
 ./cmd.sh 'autopilot airfields park "airfield-1" 672 -60 6'    # a second stand, beside the derived one
@@ -244,8 +255,8 @@ sleep 8
 
 A runway surveyed by this build refuses sorties until at least one stand is marked beside it, and
 the sortie now ends on a stand rather than on the strip. On flat ground the survey supplies that
-first stand itself and says `stand derived at …`, so a sortie will fly with no `park` call at all —
-check the survey output for that line before assuming a failure is about parking. The four calls
+first stand itself and says `stand at …` on its one-line answer, so a sortie will fly with no `park`
+call at all — check that line before assuming a failure is about parking. The four calls
 are kept because the taxi-in and marked-parking recipes below want **two** stands per field, and
 because they are what exercises the marking path; if a survey has already derived a stand within
 `PARKING_SPOT_CLEARANCE` of one of these coordinates, that call is refused with `there is already a
@@ -405,7 +416,7 @@ own control: fly it dry, flood the corridor, fly it again.
 ```sh
 ./cmd.sh "forceload add -32 -176 32 352"
 sleep 10
-./cmd.sh "autopilot survey 0 -60 0 0 -60 -160"        # end 36 lands towards -Z, approach from +Z
+./cmd.sh "autopilot survey -12 -60 0 12 -60 -160"     # 25 x 161; end 36 lands towards -Z
 ./cmd.sh 'autopilot inbound 0 -20 700 "airfield-1"'   # dry: lands 37 blocks down a 160-block runway
 
 # the sea. -63..-61 is the whole destructible depth of the superflat, so filling it with water
@@ -443,24 +454,31 @@ three times, switches ends, goes around once more, commits, and prints
 `did not land at airfield-1/18: came to rest in the water, at 1, -63, -142`. That is five approaches
 — eight minutes of real time, or about ten seconds under `tick sprint 30000`.
 
-### Recipe: a runway whose edges the survey can see
+### Recipe: a runway on a plinth
 
-**The superflat has no runway edges, and that hides a whole class of bug.** `Airfield.measureWidth`
-and the threshold centring both walk sideways until the surface is more than a block off the
-threshold elevation; on open superflat that never happens, so every strip surveyed there reports the
-maximum width of 25 and every click is already "on the centreline". Testing anything about runway
-width or centreline position needs a strip with a detectable lip.
+**The survey no longer reads the ground for its shape**, so the superflat hides nothing about the
+geometry any more: the registered strip is the marked box, and the assertion is arithmetic. A 25-wide
+selection registers width 25 on a plain, on a plateau and on a plinth alike, and two clicks *down one
+line* register the 3-block floor rather than the 25 they used to — which is the one thing to watch
+for when re-running an old recipe, since every `survey` call written before this change marks a strip
+one block wide.
 
-Build a plinth. Superflat is bedrock −64, dirt −63/−62, grass −61, so `surfaceHeight` is −60; filling
-the strip up to −58 puts its surface at −57, three blocks proud of the field:
+The plinth is still worth building, for the two things that do read the ground: the surface check and
+the derived stand. Superflat is bedrock −64, dirt −63/−62, grass −61, so `surfaceHeight` is −60;
+filling the strip up to −58 puts its surface at −57, three blocks proud of the field:
 
 ```sh
 ./cmd.sh "forceload add -64 -240 64 80"
 ./cmd.sh "fill -6 -60 -160 6 -58 0 minecraft:stone"    # 13 wide (x -6..6), 161 long
-./cmd.sh "autopilot survey -6 -58 0 -6 -58 -160"       # both ends clicked on the LEFT EDGE
+./cmd.sh "autopilot survey -6 -58 0 6 -58 -160"        # its two opposite corners -> 13 x 160
 ```
 
-**Three blocks, not two, and the reason is the departure.** Two is enough for the width probe (its
+The selection above is the plinth exactly, so the answer is known before the command runs:
+thresholds `0 -57 0` and `0 -57 -160`, width 13, designators 000/180. Clicking two corners on the
+*same* side — `-6 -58 0` and `-6 -58 -160` — is now a 1-wide selection and registers a 3-wide strip
+down the left edge, which is the honest reading of what was marked and is worth doing once to see.
+
+**Three blocks, not two, and the reason is the departure.** Two is enough for the surface check (its
 tolerance is ±1) but not for parking: `PARKING_MAX_ELEVATION_DIFFERENCE` is 2, so a two-block plinth
 lets the derived apron sit on the grass *beside* the strip, and the aircraft then has to taxi up a
 step the ground handling cannot climb. Seen on this rig as `takeoff pos=-3,-60,2 spd=0.000 thr=10`
@@ -470,8 +488,8 @@ departure starts on the strip, which is what the code intends.
 
 Read the answer off `airfields info` (the stored thresholds are printed) and off the trace: `pos=` in
 `parked`/`takeoff`/`rollout` is where the aircraft actually is across the strip, while `lat=` is only
-its error against the *surveyed* line and reads 0.2 whether that line is down the middle or on the
-edge. Comparing the two is the whole test.
+its error against the *surveyed* line and reads 0.2 wherever that line happens to be. Comparing the
+two is what catches a strip flown down its own edge.
 
 ### Recipe: what the surface probes read
 
@@ -632,11 +650,11 @@ sleep 8
 ./cmd.sh "fill -12 -61 -90 12 -53 50 minecraft:stone"
 # the mountain: a stepped cone centred (5, -160), half-extents 45 x 55, up to y=36.
 # Emit it 4 layers at a time so each fill stays under the limit and the sides stay conical.
-./cmd.sh "autopilot survey 0 -52 40 0 -52 -70"
+./cmd.sh "autopilot survey -12 -52 40 12 -52 -70"   # the corners of the spit itself
 ./cmd.sh "forceload remove all"                # fly it with no force-loading, as a real flight is
 ```
 
-The survey should report `approach obstacles: 36 -> 0, 18 -> 10` and prefer 36 — the mountain sits
+`airfields info` should report `approach obstacles: 36 -> 0, 18 -> 10` and prefer 36 — the mountain sits
 inside the 200-block funnel of the north threshold, so the *end* choice is already right and what is
 left to test is the path to it. Then:
 
@@ -719,7 +737,8 @@ about a world that has since changed:
 
 Expect, on a build that only plans overhead, three `going around (n/3): terrain in the approach
 corridor` and then a switch to the other end — 2018 ticks and 2350 blocks of track. On one that
-re-checks its committed plan, one line:
+re-checks its committed plan, one line — a `progress` line, so it is in the log only with the
+autopilot logger at `DEBUG`, while the go-arounds it replaces are reports and are always there:
 
 ```
 Plane #2 replanning the arrival at airfield-1/18: straight in, decided 529 blocks out (terrain across the 36 glide slope).
@@ -737,7 +756,7 @@ and send a sortie to a field **in line with the runway** so the departure climbs
 ```sh
 ./cmd.sh "fill -20 -61 20 20 -25 40 minecraft:stone"      # two fills: one would exceed 32768
 ./cmd.sh "fill -20 -61 41 20 -25 60 minecraft:stone"
-./cmd.sh "autopilot survey 0 -60 0 0 -60 -160"            # -> approach obstacles: 36 -> 5, 18 -> 0
+./cmd.sh "autopilot survey -12 -60 0 12 -60 -160"         # -> approach obstacles: 36 -> 5, 18 -> 0
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-3" 2.60'
 ```
 
@@ -788,7 +807,7 @@ worse, and it is how the four-aircraft result above was shown to be pre-existing
 autopilot will accept, so it is the one that has to be flown before the constant may be lowered:
 
 ```sh
-./cmd.sh "autopilot survey 660 -60 40 660 -60 56"     # 16 blocks -> registers with a warning
+./cmd.sh "autopilot survey 654 -60 40 666 -60 56"     # 13 x 17 -> a 16-block roll, registers with a warning
 ./cmd.sh 'autopilot flight "airfield-1" "airfield-3"' # -> refused, with the numbers
 ./cmd.sh 'autopilot airfields'                        # -> the row is marked TOO SHORT
 ```

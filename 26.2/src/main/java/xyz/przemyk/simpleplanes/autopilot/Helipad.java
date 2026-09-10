@@ -230,14 +230,13 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
      * Surveys the pad between two clicked corners.
      *
      * <p><b>The clicks define an area, not a line.</b> Two corners is the selection idiom every
-     * Minecraft player already knows, and unlike a runway's two thresholds it gives the extent
-     * directly: the centre is the middle of the box and the radius is the larger of its two
+     * Minecraft player already knows, and it gives the extent directly: the centre is the middle of the box and the radius is the larger of its two
      * half-spans, so clicking opposite corners of a 7x7 pad produces exactly that pad. Clicking the
      * same block twice produces a 1x1 and is refused.
      *
      * <p><b>The marked shape and the used shape are then made to be the same thing.</b> This is the
-     * lesson the runway survey learned the expensive way — it took the clicked blocks as the
-     * thresholds, so a strip clicked on its edge was flown on its edge — and the fix here is the
+     * lesson the runway survey learned the expensive way — it took the clicked blocks as the two
+     * ends of the centreline, so two corner clicks registered the diagonal — and the fix here is the
      * same shape of fix: the seed centre is moved onto the middle of the pad the terrain actually
      * shows, iterated because moving it changes what the probes see. On ground with no edges (the
      * superflat, or a pad flush with the field around it) the probes find nothing to centre on, the

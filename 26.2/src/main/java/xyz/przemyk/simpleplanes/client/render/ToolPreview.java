@@ -42,10 +42,11 @@ import java.util.List;
  * columns square and cannot run twenty times a second. A pad shaded green can therefore still be
  * refused for having no way in; a pad shaded red will always be refused.
  *
- * <p><b>The width of a runway preview is nominal.</b> The survey measures the strip outwards from
- * its own centreline, and there is nothing to measure from until both thresholds exist. The
- * rectangle is drawn {@value #PREVIEW_WIDTH} blocks wide so it reads as a strip rather than a line;
- * the survey will report the real number.
+ * <p><b>The runway preview is exact.</b> {@link Airfield#footprint} turns two corners into the
+ * runway with no terrain in it at all, so the rectangle drawn here is the rectangle that will be
+ * registered — same origin, same length, same width, same axis. It used to be a nominal five-block
+ * strip drawn corner to corner, which was an honest picture of what the survey then did and a
+ * misleading one about what the player had marked.
  *
  * <p>Recomputed once per client tick rather than once per frame, and handed to the renderer as an
  * immutable snapshot: it walks the terrain, and doing that sixty or two hundred times a second to
@@ -72,11 +73,8 @@ public final class ToolPreview {
     /** How tall the post standing on a marked point is, in blocks. */
     private static final double POST_HEIGHT = 4.0;
 
-    /** Nominal width of a runway preview, in blocks. See the class comment. */
-    private static final int PREVIEW_WIDTH = 5;
-
     /** Shortest runway the survey tool accepts, in blocks. Mirrors {@code RunwayToolItem#useOn}. */
-    private static final double MIN_MARKED_LENGTH = 20.0;
+    private static final int MIN_MARKED_LENGTH = 20;
 
     /**
      * How far a parking click will look for an airfield, in blocks. Mirrors
@@ -149,34 +147,38 @@ public final class ToolPreview {
         }
         List<GroundOverlay.Patch> patches = new ArrayList<>();
         List<GroundOverlay.Post> posts = new ArrayList<>();
-        Vec3 first = onSurface(level, anchor);
-        mark(patches, posts, first, 0.5, ANCHOR_FILL, ANCHOR_LINE);
+        mark(patches, posts, onSurface(level, anchor), 0.5, ANCHOR_FILL, ANCHOR_LINE);
         if (aimed != null) {
-            Vec3 second = onSurface(level, aimed);
-            int colour = runwayVerdict(anchor, aimed, first, second);
+            // The very function the click runs, so the shading and the registered runway can never
+            // disagree about where the strip is or how wide it is.
+            Airfield.Footprint footprint = Airfield.footprint(anchor, aimed);
+            Vec3 thresholdA = onSurface(level, footprint.thresholdA());
+            Vec3 thresholdB = onSurface(level, footprint.thresholdB());
+            int colour = runwayVerdict(anchor, aimed);
             patches.add(new GroundOverlay.Patch(
-                GroundOverlay.rectangle(first, second, PREVIEW_WIDTH / 2.0),
+                GroundOverlay.rectangle(thresholdA, thresholdB, footprint.width() / 2.0),
                 fillOf(colour), colour));
-            posts.add(new GroundOverlay.Post(second, POST_HEIGHT, colour));
+            posts.add(new GroundOverlay.Post(onSurface(level, aimed), POST_HEIGHT, colour));
         }
         return new Preview(List.copyOf(patches), List.copyOf(posts));
     }
 
     /**
-     * The two length rules, in the order the tool applies them: it refuses a strip under
-     * {@value #MIN_MARKED_LENGTH} blocks outright, measured as the tool does between the two clicked
-     * blocks; it registers a longer one but warns that sorties into it will be refused unless it
-     * clears {@link AutopilotConfig#MIN_USABLE_RUNWAY_LENGTH}, which is measured along the ground
-     * because that is what the take-off and landing rolls use.
+     * The two length rules, in the order the tool applies them: it refuses a box whose long side is
+     * under {@value #MIN_MARKED_LENGTH} blocks outright, counted inclusively exactly as
+     * {@code RunwayToolItem#useOn} counts it; it registers a longer one but warns that sorties into
+     * it will be refused unless the threshold-to-threshold roll clears
+     * {@link AutopilotConfig#MIN_USABLE_RUNWAY_LENGTH}, which is one block less because a threshold
+     * sits at the centre of the block at each end.
      */
-    private static int runwayVerdict(BlockPos anchor, BlockPos aimed, Vec3 first, Vec3 second) {
-        if (Math.sqrt(anchor.distSqr(aimed)) < MIN_MARKED_LENGTH) {
+    private static int runwayVerdict(BlockPos anchor, BlockPos aimed) {
+        int spanX = Math.abs(anchor.getX() - aimed.getX()) + 1;
+        int spanZ = Math.abs(anchor.getZ() - aimed.getZ()) + 1;
+        int marked = Math.max(spanX, spanZ);
+        if (marked < MIN_MARKED_LENGTH) {
             return REFUSED_LINE;
         }
-        double dx = second.x - first.x;
-        double dz = second.z - first.z;
-        return Math.sqrt(dx * dx + dz * dz) < AutopilotConfig.MIN_USABLE_RUNWAY_LENGTH
-            ? WARN_LINE : OK_LINE;
+        return marked - 1 < AutopilotConfig.MIN_USABLE_RUNWAY_LENGTH ? WARN_LINE : OK_LINE;
     }
 
     /**
