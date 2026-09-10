@@ -39,17 +39,53 @@ public class ShooterUpgrade extends Upgrade {
     /** C4: NeoForge ItemStackHandler -> vanilla SimpleContainer. */
     public final SimpleContainer container = new SimpleContainer(1);
 
+    /**
+     * The shortest interval, in ticks, at which the trigger will fire.
+     *
+     * <p>Four ticks is vanilla's own use-item cadence ({@code Minecraft#rightClickDelay}), so it is
+     * above anything a person can produce by clicking and no player will ever feel it. What it is
+     * for is the client that is not clicking: {@link xyz.przemyk.simpleplanes.network.ShootPacket}
+     * carries no payload and costs a modified client nothing to send, and every accepted one spawns
+     * a projectile — or, for an eye of ender, runs a 100-chunk structure search. Unbounded, that is
+     * a pilot with a stack of fire charges filling the sky and a server on its knees; the ammo in
+     * the slot is no limit at all when the pilot is in creative and {@link #shrinkAmmo} is skipped.
+     */
+    private static final int SHOT_COOLDOWN_TICKS = 4;
+
+    /**
+     * Game time of the earliest tick the next shot may be taken on.
+     *
+     * <p>Server-side only, and deliberately neither saved nor synced: it is a rate limit on an
+     * incoming packet, not aircraft state, and a cooldown that resets when the plane is reloaded
+     * costs nothing. {@code getGameTime} rather than {@code tickCount} because it does not restart
+     * with the entity, and unlike the time of day it never goes backwards.
+     */
+    private long nextShotTick = Long.MIN_VALUE;
+
     public ShooterUpgrade(PlaneEntity planeEntity) {
         super(SimplePlanesUpgrades.SHOOTER.get(), planeEntity);
     }
 
     public void use(Player player) {
+        Level level = player.level();
+
+        // Before any work at all: the eye-of-ender branch below is expensive whether or not it
+        // finds anything, so a shot that is going to be refused must be refused first. The clock is
+        // set on every accepted call, including the ones that turn out to have nothing to fire.
+        long gameTime = level.getGameTime();
+        if (gameTime < nextShotTick) {
+            return;
+        }
+        nextShotTick = gameTime + SHOT_COOLDOWN_TICKS;
+
         Vector3f motion1 = planeEntity.transformPos(new Vector3f(0, -0.25f, (float) (1 + planeEntity.getDeltaMovement().length())));
         Vec3 motion = new Vec3(motion1);
-        Level level = player.level();
         RandomSource random = level.getRandom();
 
         Vector3f pos = planeEntity.transformPos(new Vector3f(0.0f, 1.8f, 2.0f));
+        // Only a dirty flag; the ammo count is read off the container when the plane's tick actually
+        // serialises the upgrade, which is after the shrinkAmmo() calls below. Nothing is captured
+        // here, so raising it before the shot does not sync a stale count.
         updateClient();
 
         double x = pos.x() + planeEntity.getX();

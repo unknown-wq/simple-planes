@@ -27,6 +27,33 @@ import java.util.UUID;
  * <p>The {@link DataFixTypes} argument is required by {@link SavedDataType} and is only consulted
  * when the stored data version differs from the current one; since this file is always written by
  * the current version, the fixer is a no-op for us.
+ *
+ * <h2>What one malformed entry costs, established rather than assumed</h2>
+ * A review claimed that a single bad {@code stands} entry throws the whole file away, and the
+ * counter-claim was that {@code optionalFieldOf} swallows the error and loses only the bookings.
+ * <b>Both are wrong</b>, and the answer is worth writing down here because it is the thing that
+ * decides whether these {@code optionalFieldOf} defaults are a safety net or a hazard.
+ *
+ * <ul>
+ *   <li>{@code Codec#optionalFieldOf(String, A)} is <b>not</b> lenient — it is
+ *       {@code lenientOptionalFieldOf} that swallows a parse failure. The default covers an
+ *       <em>absent</em> key, which is what it is here for, and nothing else. A malformed value makes
+ *       this codec's parse an error, so nothing is silent: the failure is logged.</li>
+ *   <li>The error carries a <b>partial</b> result all the way up. {@code ListCodec} keeps every
+ *       element it did parse, {@code OptionalFieldCodec} sets that partial list on the error, and
+ *       {@code RecordCodecBuilder}'s applicative keeps the partial while combining the fields — so
+ *       the partial is a fully built instance with every other field intact.</li>
+ *   <li>{@code SavedDataStorage#readSavedData} reads it with
+ *       {@code parse(...).resultOrPartial(LOGGER::error).orElse(null)}, so it takes that partial.</li>
+ * </ul>
+ *
+ * <p>The upshot: one malformed booking costs <b>that booking</b>. Every well-formed booking beside
+ * it in the same list, and every airfield, helipad and shuttle in the file, load unchanged, and one
+ * {@code Failed to parse saved data} line goes to the log. The file is only lost outright if the
+ * failure is one that leaves no partial at all — the NBT itself being unreadable, which is caught
+ * and logged by the same method. Verified against DataFixerUpper 10.0.21, the version this game
+ * version ships, with a malformed element, a missing required key inside an element, and a
+ * {@code stands} value that is not a list: error in all three, partial preserved in all three.
  */
 public class AutopilotSavedData extends SavedData {
 
@@ -40,7 +67,9 @@ public class AutopilotSavedData extends SavedData {
         // that is the one thing about a parked aircraft that can still be checked when the aircraft
         // itself is on disk in an unloaded chunk -- see StandOccupancy for the whole argument.
         // Optional with an empty default, so a world saved before this field existed loads unchanged
-        // and a world with nothing parked writes no key at all.
+        // and a world with nothing parked writes no key at all. The default is for an absent key and
+        // not for a broken one: a malformed entry is an error that is logged, and costs that entry
+        // only -- see the class javadoc, which establishes it rather than guessing at it.
         StandOccupancy.Booking.CODEC.listOf().optionalFieldOf("stands", List.<StandOccupancy.Booking>of())
             .forGetter(AutopilotSavedData::standList),
         // Scheduled shuttles. Optional with an empty default for the same reason as the two above:
@@ -212,10 +241,27 @@ public class AutopilotSavedData extends SavedData {
         return stands.get(stand);
     }
 
-    /** Books a stand for an aircraft, replacing whatever was there. */
+    /**
+     * Books a stand for an aircraft, replacing whatever was there — and dropping any other stand the
+     * same aircraft was booked onto.
+     *
+     * <p><b>One aircraft, one stand.</b> Nothing else enforces it: the two writers are the end of a
+     * taxi in, and a claim releases the one stand it took the airframe off, so an aircraft that was
+     * booked onto a square, flown away by a player and later flown back by this mod onto a different
+     * square held both. The stale one is not harmless — {@code StandOccupancy#isTaken} answers
+     * "taken" for a booking it cannot see, so a stand nobody can look at stayed shut for good, and
+     * the departure search would offer the same airframe twice.
+     *
+     * <p>Swept here rather than at the call sites because this is the only moment the second booking
+     * comes into existence, and a rule enforced where the state changes cannot be forgotten by a
+     * third writer later. At most {@link AutopilotConfig#MAX_PARKING_SPOTS} entries per field, walked
+     * once per landing.
+     */
     public void bookStand(StandOccupancy.Stand stand, UUID aircraft) {
+        boolean dropped = stands.entrySet().removeIf(entry ->
+            !entry.getKey().equals(stand) && entry.getValue().aircraft().equals(aircraft));
         StandOccupancy.Held previous = stands.put(stand, new StandOccupancy.Held(aircraft, 0));
-        if (previous == null || !previous.aircraft().equals(aircraft)) {
+        if (dropped || previous == null || !previous.aircraft().equals(aircraft)) {
             setDirty();
         }
     }

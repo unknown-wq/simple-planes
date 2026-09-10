@@ -739,8 +739,11 @@ public final class AutopilotCommand {
         // answer; go and stand on the runway.
         BlockPos first = BlockPosArgument.getLoadedBlockPos(context, "threshold1");
         BlockPos second = BlockPosArgument.getLoadedBlockPos(context, "threshold2");
-        AirfieldReport.surveyAndRegister(AutopilotOutput.toSource(source), source.getLevel(), first, second);
-        return 1;
+        // The return value is the refusal, exactly as helipadSurvey reads it: a strip whose surface
+        // will not do registers nothing, and a command that answers 1 for that tells a command block,
+        // an `execute if` and every datapack chain hanging off it that an airfield now exists.
+        return AirfieldReport.surveyAndRegister(
+            AutopilotOutput.toSource(source), source.getLevel(), first, second) == null ? 0 : 1;
     }
 
     // ------------------------------------------------------------------ helipads

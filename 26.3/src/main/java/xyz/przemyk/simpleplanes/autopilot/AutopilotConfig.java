@@ -269,6 +269,25 @@ public final class AutopilotConfig {
      * standing on one. Roughly two plane lengths, so a queue of departures does not overlap.
      */
     public static final double PARKING_SPOT_CLEARANCE = 5.0;
+    /**
+     * How close to a stand an aircraft has to be for {@link StandOccupancy} to believe it is still
+     * standing on it, in blocks.
+     *
+     * <p><b>Half {@link #PARKING_SPOT_CLEARANCE}, and it must be less than the whole of it.</b> That
+     * constant is the smallest gap {@code Airfield#parkingSpotProblem} lets a player leave between
+     * two stands, so a radius of one whole clearance calls a machine parked on the <em>next</em>
+     * stand "still on this one" — which keeps a booking alive for an aircraft that has left, and
+     * (before {@code AircraftReuse} was made to ask this question at all) would have handed a
+     * neighbour's airframe to a departure.
+     *
+     * <p>Half of it is also exactly the reach of the box {@code Airfield#standFree} searches for an
+     * aircraft standing on the square ({@code AABB#ofSize} takes the full extent), so the two
+     * questions — "is anything on this square" asked of the level, and "is the booked aircraft still
+     * on this square" asked of the record — agree about where the square ends. Comfortably outside
+     * {@link #TAXI_IN_ARRIVED_RADIUS}, so an aircraft that stopped at the far edge of its own stand
+     * still holds its booking.
+     */
+    public static final double STAND_OCCUPIED_RADIUS = PARKING_SPOT_CLEARANCE / 2.0;
     /** Most parking spots one airfield may have marked, so a stray tool cannot fill the save. */
     public static final int MAX_PARKING_SPOTS = 8;
     /** Ticks a taxi may take before the aircraft gives up and departs from where it stands. */
@@ -299,6 +318,23 @@ public final class AutopilotConfig {
      * neighbouring one.
      */
     public static final double TAXI_IN_ARRIVED_RADIUS = 2.0;
+    /**
+     * How far from the departure spot an airframe may be standing and still be towed onto it, in
+     * blocks.
+     *
+     * <p>The backstop inside {@code AircraftReuse}'s named claim, which — unlike the opportunistic
+     * one — will take an aircraft that is not on a marked stand at all, because an arrival that
+     * found no free stand stops on the runway and writes no booking. Without a bound of its own that
+     * claim would re-task an airframe anywhere in the loaded world, and the only thing stopping it
+     * was a test in {@code AutopilotDispatcher}: the safety lived outside the method that performs
+     * the claim.
+     *
+     * <p>Measured from the departure spot rather than from a field centre, because a spot is all the
+     * claim is given. {@link #TAXI_IN_MAX_DISTANCE} is the same shape of bound — "somewhere at this
+     * field, from a point at this field" — and is reused for it. A caller that knows the field can
+     * and does say something tighter: {@link #SHUTTLE_AT_FIELD_MARGIN}.
+     */
+    public static final double STAND_REUSE_MAX_DISTANCE = TAXI_IN_MAX_DISTANCE;
     /**
      * Margin, in blocks, added to the surveyed runway rectangle when asking whether an aircraft has
      * left it. Roughly a plane's own footprint, so "clear" means the whole aircraft is off the strip
@@ -1095,6 +1131,19 @@ public final class AutopilotConfig {
      */
     public static final int MAX_SHUTTLES = 4;
     /**
+     * How many <em>paused</em> shuttle records a dimension may keep, over and above the running
+     * ones.
+     *
+     * <p>{@link #MAX_SHUTTLES} used to be a cap on stored records, so a paused shuttle — which holds
+     * no chunk ticket, flies nothing and can never run again — went on occupying a slot that the cap
+     * exists to ration resident chunks and autopilot slots with. A player whose four shuttles had all
+     * paused could not create a fifth without first deleting the very records that say what went
+     * wrong. The running ones are now counted against {@link #MAX_SHUTTLES} and the paused ones
+     * against this, so the diagnostic outlives the schedule without costing it its slot; the total is
+     * still bounded, because a record nobody ever stops is a record that is written to disk for ever.
+     */
+    public static final int MAX_PAUSED_SHUTTLES = MAX_SHUTTLES;
+    /**
      * Shortest and longest turnaround {@code /autopilot shuttle add … <seconds>} accepts.
      *
      * <p>Seconds, and bounded at both ends by the argument type itself so the refusal arrives while
@@ -1149,15 +1198,36 @@ public final class AutopilotConfig {
     /** How long a shuttle waits before retrying a departure it could not fly, in ticks. */
     public static final int SHUTTLE_RETRY_TICKS = 600;
     /**
-     * Consecutive deferred departures before a shuttle stops trying and pauses.
+     * Consecutive deferred departures after which a shuttle stops announcing each retry.
      *
      * <p>The point of the whole feature is unattended operation, and the failure mode a thing that
-     * runs unattended must not have is retrying for ever without saying anything. Three attempts
-     * over {@value #SHUTTLE_RETRY_TICKS}-tick intervals is a minute and a half of trying, after
-     * which the shuttle pauses, keeps its record, and shows the reason in
-     * {@code /autopilot shuttle list} until somebody deals with it.
+     * runs unattended must not have is retrying for ever <em>without saying anything</em>. It used
+     * to be read as "must not retry for ever", and the shuttle <b>paused</b> here — permanently,
+     * with no verb to resume it. That is the wrong trade for a condition that is transient by
+     * construction: every deferral is one (the autopilot slots are full, somebody is aboard, another
+     * sortie is flying the airframe), and three of them 30 seconds apart is a minute and a half.
+     * A busy evening ended the schedule for good, and on a four-shuttle dimension the slots being
+     * full is the normal case rather than the edge.
+     *
+     * <p>So a deferral no longer pauses anything. What is bounded instead is the <em>noise</em>: the
+     * first three failures are reported, after which the shuttle goes quiet and its reason stays
+     * where {@code /autopilot shuttle list} shows it, beside a count of how many attempts it has
+     * made. Pausing is kept for the faults a player genuinely has to act on — the field is gone, the
+     * aircraft is gone, the aircraft is somewhere else.
      */
-    public static final int SHUTTLE_MAX_MISSES = 3;
+    public static final int SHUTTLE_QUIET_MISSES = 3;
+    /**
+     * Largest multiple of {@link #SHUTTLE_RETRY_TICKS} a repeatedly deferred departure backs off to.
+     *
+     * <p>The other half of not pausing. A departure that has failed once is probably about to
+     * succeed and is retried in 30 seconds; one that has failed twenty times is a condition nobody
+     * has cleared, and retrying it twice a minute for the rest of the session is exactly the
+     * unattended cost this feature is not allowed to have. The interval grows with the miss count to
+     * a ceiling of {@value} × {@value #SHUTTLE_RETRY_TICKS} ticks, five minutes, which is cheap
+     * enough to leave running for ever and short enough that a shuttle resumes on its own within one
+     * cycle of somebody fixing the thing that was wrong.
+     */
+    public static final int SHUTTLE_MAX_BACKOFF = 10;
     /**
      * How long an in-flight shuttle aircraft may be unresolvable before it is declared lost, in
      * ticks.

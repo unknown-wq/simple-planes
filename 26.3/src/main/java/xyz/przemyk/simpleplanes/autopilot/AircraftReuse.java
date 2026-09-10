@@ -37,8 +37,16 @@ import java.util.UUID;
  * two places, {@code PlaneAutopilot#finishTaxiIn} and {@code HelicopterAutopilot}, both of which run
  * only at the end of a flight this mod dispatched. <b>An aircraft with a booking is therefore an
  * aircraft this mod flew onto that square itself.</b> A player's own plane parked on a marked stand
- * has no booking and can never be claimed; if a player flies a fleet aircraft away, the booking is
- * released the first time anything looks at the stand and sees the aircraft elsewhere.
+ * has no booking and can never be claimed.
+ *
+ * <p><b>And it has to still be on the square.</b> A booking names a UUID, so resolving it answers
+ * "where is this aircraft now" and not "is this aircraft on that stand" — and the first version of
+ * this class asked only the first question, using the distance to the stand as a tie-break between
+ * candidates rather than as a test. That is how a fleet aircraft a player flew home and parked in
+ * their own hangar was towed back across the apron and flown away with its cargo: the booking was
+ * stale, and nothing had looked at that stand since. The test and the healing release both live in
+ * {@link StandOccupancy#parkedOn} now, so the claim and {@code isTaken} cannot come to disagree
+ * about what "parked here" means.
  *
  * <h2>Entities load late, and this is written so that it does not matter</h2>
  * The hard part of reuse is that {@code AutopilotSpawner#launchSortie} is synchronous and entity
@@ -73,6 +81,27 @@ import java.util.UUID;
  * {@code TESTING.md} reads before it polls anything; it would also introduce a window in which a
  * server shutdown loses a sortie silently, with nothing durable to recover it from. Trading a
  * guaranteed contract for an opportunistic one is the wrong way round.
+ *
+ * <h2>Two things this will not do, and one it cannot</h2>
+ * <b>It will not take an airframe a {@link Shuttle} owns.</b> A waiting shuttle's aircraft is
+ * parked, idle, empty and booked onto a stand for the whole turnaround — indistinguishable, by every
+ * test above, from a hulk nobody wants — so an ordinary {@code /autopilot flight} ordered out of the
+ * same field took it, and the schedule that owned it deferred until it gave up. It is asked about
+ * directly: see {@link AutopilotDispatcher#owns}.
+ *
+ * <p><b>It will not reach across the map.</b> The named claim below is deliberately not restricted
+ * to marked stands, and so carries {@link AutopilotConfig#STAND_REUSE_MAX_DISTANCE} of its own; the
+ * opportunistic one is bounded by construction, because every candidate has to be standing on one of
+ * this field's stands.
+ *
+ * <p><b>It cannot help a helipad, and that is a limitation rather than a feature.</b>
+ * {@code AutopilotSpawner#launchHelicopterSortie} asks for a claim off the pad square, but its only
+ * caller refuses the sortie first: {@code /autopilot heliflight} checks {@code Helipad#free}, which
+ * is false precisely when a machine is parked on the pad — which is precisely the machine a claim
+ * would re-task. So the rotorcraft branch is unreachable, and a helipad still silts up exactly as a
+ * field without stands does. Fixing it means moving that refusal after the claim, in the command,
+ * which is not this class's to do; it is written down here rather than left to be discovered,
+ * because the code reads as though reuse covers both kinds of field and it does not.
  *
  * <p>That argument used to end "and no dispatcher in this mod to own such a queue", and that half of
  * it is no longer true: {@link AutopilotDispatcher} is exactly such a queue, durable and serviced
@@ -118,13 +147,19 @@ public final class AircraftReuse {
         BlockPos bestStand = null;
         double bestDistance = Double.MAX_VALUE;
         for (BlockPos stand : stands) {
-            UUID booked = StandOccupancy.heldBy(level, field, stand);
-            // No booking means either an empty stand or a player's own aircraft standing on it. Both
-            // are the same answer here, and it is the answer that keeps this safe.
-            if (booked == null || !(level.getEntity(booked) instanceof PlaneEntity plane)) {
+            // Booked, resolvable, and -- the part that used to be missing -- still standing on the
+            // square it was booked onto. No booking at all means either an empty stand or a player's
+            // own aircraft standing on it, and both are the same answer here.
+            PlaneEntity plane = StandOccupancy.parkedOn(level, field, stand);
+            if (plane == null || !claimable(plane, wanted)) {
                 continue;
             }
-            if (!claimable(plane, wanted)) {
+            // Never an airframe a schedule owns. A shuttle's aircraft is parked, idle and booked
+            // onto a stand for the whole turnaround, which is exactly the shape of everything above,
+            // so an ordinary /autopilot flight out of the same field would take it -- and on a
+            // dimension running the full four shuttles that is the normal case, not the edge. The
+            // shuttle would then defer, and defer, and (before this) pause.
+            if (AutopilotDispatcher.owns(level, plane.getUUID())) {
                 continue;
             }
             // Nearest to where it is going, so the shortest tow across the apron wins. Only a
@@ -186,6 +221,17 @@ public final class AircraftReuse {
         if (!(level.getEntity(airframe) instanceof PlaneEntity plane) || !claimable(plane, wanted)) {
             return null;
         }
+        // At this field, and this method says so itself rather than trusting that its caller does.
+        // Not being restricted to a marked stand is what makes this claim useful -- an arrival that
+        // found no free stand stops on the runway and writes no booking -- but it is also the thing
+        // that leaves it with no bound at all, and the one it had lived in AutopilotDispatcher: the
+        // safety was outside the method that performs the claim, so any second caller would have
+        // silently inherited a claim that reaches across the loaded world. The dispatcher's own test
+        // is tighter and is still made; this is the floor, not a replacement for it.
+        if (AutopilotMath.horizontalDistance(plane.position(), spawn)
+            > AutopilotConfig.STAND_REUSE_MAX_DISTANCE) {
+            return null;
+        }
         // Same check as above and for the same reason: moving an airframe into another airframe is
         // the one outcome this must not produce. The candidate itself is excluded, which covers the
         // case where it is already standing on the square it is about to depart from.
@@ -194,15 +240,19 @@ public final class AircraftReuse {
         }
         // Whichever stand it was booked onto, if any. There may be none - an aircraft that stopped
         // on the runway never wrote one - and that is not a failure here, only nothing to release.
-        BlockPos held = plane.blockPosition();
+        // Every one of them, not the first: one aircraft holding two stands is supposed to be
+        // impossible (AutopilotSavedData#bookStand sweeps it), and releasing only one here is
+        // exactly how it would stop being impossible again.
+        BlockPos held = null;
         for (BlockPos stand : stands) {
             if (airframe.equals(StandOccupancy.heldBy(level, field, stand))) {
                 StandOccupancy.release(level, field, stand);
-                held = stand;
-                break;
+                if (held == null) {
+                    held = stand;
+                }
             }
         }
-        return new Claimed(plane, held);
+        return new Claimed(plane, held == null ? plane.blockPosition() : held);
     }
 
     /** Whether this parked aircraft may be re-tasked as {@code wanted}. */

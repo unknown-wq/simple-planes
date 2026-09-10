@@ -45,9 +45,11 @@ public class LiquidEngineUpgrade extends EngineUpgrade {
     public final SimpleContainer container = new SimpleContainer(2);
 
     /**
-     * The fuel tank, and the {@code Storage<FluidVariant>} other mods reach it through — see
-     * {@link PlaneFluidTank}, and {@code SimplePlanesMod} for how a pipe or tank beside a parked
-     * aircraft finds it.
+     * The fuel tank — see {@link PlaneFluidTank}. This is the aircraft's own handle on it, with
+     * both halves of the storage: {@link #tickInputSlot} fills a bucket from it as well as into it.
+     * Other mods never see this object. A pipe or tank beside the aircraft is given the guarded view
+     * in {@link LiquidEngineStorage}, which accepts fuel only while the aircraft is parked and hands
+     * none back at all; {@code SimplePlanesMod} is where that lookup is registered.
      */
     public final PlaneFluidTank fluidTank =
         new PlaneFluidTank(SimplePlanesConfig.LIQUID_ENGINE_CAPACITY.get(), this::updateClient);

@@ -2981,7 +2981,9 @@ weaker one. It follows that the named claim is *not* restricted to aircraft on a
 that is the fix for a real failure: an arrival that finds no free stand stops on the runway and
 writes no booking, and a shuttle that could not pick its own aircraft up from there would be
 stranded for good by one busy field. The aircraft still has to be **at** the field — half the runway
-length plus 96 blocks from the centre — so nothing is dragged back across the map.
+length plus 96 blocks from the centre — so nothing is dragged back across the map, and the claim
+itself refuses anything more than 256 blocks from the departure spot so that the bound does not
+depend on its caller making it.
 
 ### Unattended operation, which is the hard part
 
@@ -3027,21 +3029,33 @@ does not advance it at all.
 ### Deferred, paused, and how a player finds out
 
 A due departure that cannot be flown is **deferred**, never skipped and never retried in silence: the
-reason is written into the record where `/autopilot shuttle list` shows it, the owner is told, and
-after 3 consecutive failures (30 seconds apart) the shuttle **pauses**. A paused shuttle keeps its
-record and its reason, holds nothing, retries nothing, and stays in the listing until somebody stops
-it — visibility being the thing that matters when the alternative is a schedule that quietly did
-nothing for six hours.
+reason is written into the record where `/autopilot shuttle list` shows it, and the owner is told —
+for the first 3 failures, after which the shuttle goes quiet and the listing carries the reason and
+the retry count. **A deferral never pauses the shuttle.** Every condition that reaches it is
+transient by construction (the slots are full, somebody is aboard, another flight has the airframe),
+and pausing after three of them meant ninety seconds of a busy evening ended the schedule for good,
+with nothing able to resume it. What is bounded instead is the cost of retrying: the interval grows
+from 30 seconds with the failure count to a ceiling of 5 minutes, so a condition nobody clears settles
+at one attempt every five minutes and the shuttle departs on its own within one interval of the
+problem being fixed.
+
+**Pausing** is kept for the faults a player has to act on — the field is gone, the aircraft is gone,
+the aircraft is somewhere the schedule cannot fly it from, or servicing it threw an exception. A
+paused shuttle keeps its record and its reason, holds nothing, retries nothing, does not count
+against the 4-shuttle cap (it uses neither a chunk hold nor an autopilot slot; up to 4 paused records
+are kept beside the running ones), stops owning its airframe so reuse may re-task it, and stays in
+the listing until somebody stops it — visibility being the thing that matters when the alternative is
+a schedule that quietly did nothing for six hours.
 
 | What happens | What the shuttle does |
 |---|---|
 | destination has no free stand, so the arrival stops on the runway | counts as arrived — the leg is over and the aircraft is at the field. The turnaround starts, the reason goes on the listing, and the next departure lifts it off the runway, which is the only thing that ever clears it |
-| an airfield is renamed or removed under it | pauses within a second. A rename is a removal: a schedule records names, not references, and `AirfieldBrowser.rename` re-files the field under a new key |
+| an airfield is renamed or removed under it | pauses within a second **of the aircraft being on the ground**. A rename is a removal: a schedule records names, not references, and `AirfieldBrowser.rename` re-files the field under a new key. A leg already in the air is left to finish first — pausing the schedule would not have stopped it, and the aircraft would have landed owned by nothing |
 | the aircraft is destroyed mid-leg | pauses after 10 seconds of not resolving. A flying aircraft renews its own ticket every 5 ticks, so not finding it means it is gone rather than far away |
 | the aircraft is flown away, or a leg ends at neither field | pauses, naming the coordinates it is at |
-| the aircraft is busy on another `/autopilot flight`, or has somebody aboard | defers |
+| the aircraft is busy on another flight, or has somebody aboard | defers. `/autopilot flight` will not take it: the reuse claim asks the dispatcher whether a schedule owns the airframe before claiming one |
 | all 24 autopilot slots are in use | defers |
-| the airframe cannot be found on a cold field | waits 100 ticks for the chunk load, then defers |
+| the airframe cannot be found on a cold field | waits 100 ticks for the chunk load, then force-loads the field and defers; after 3 further attempts it pauses, because an airframe that is not there after all that is gone |
 | both fields are in different dimensions | cannot be created — `SavedData` is per dimension, so a field in another one is simply not found |
 | a shuttle between a field and itself | refused at creation |
 | the turnaround is 0, or a week | refused by the argument type: 10…3600 seconds |
@@ -3052,10 +3066,17 @@ cannot park is one aircraft on a runway every turnaround for ever.
 
 ### Cost
 
-The state machine runs every 20 ticks and is a comparison of a stored game time against the clock —
-no airfield is walked and no entity search is run. A dimension with no schedules costs one map lookup
-and an `isEmpty`. The ticket renewal runs every 5 ticks and is one `addTicketWithRadius` per waiting
-schedule. The standing cost is the chunk hold: **9 chunks per waiting shuttle, at most 4 shuttles**.
+The state machine runs every 20 ticks and is a comparison of a stored game time against the clock; on
+the tick a departure is due it is that plus one `getEntity`. A dimension with no schedules costs one
+map lookup and an `isEmpty`. The ticket renewal runs every 5 ticks and is one `addTicketWithRadius`
+per waiting schedule. The standing cost is the chunk hold: **9 chunks per waiting shuttle, at most 4
+shuttles**.
+
+One path is much more expensive and is fenced off rather than described away: making the whole
+departure field resident is a blocking `getChunk` per chunk of the strip and per stand — around 120
+of them on a 180-block field — and it is reached **only when the airframe cannot be resolved without
+it**, which is the first departure after a restart. A waiting shuttle has held its own aircraft's
+chunk for the whole turnaround, so the normal departure walks no field at all.
 
 ---
 
@@ -3211,10 +3232,15 @@ schedule. The standing cost is the chunk hold: **9 chunks per waiting shuttle, a
   first firm landing. Upgrades and their contents are kept, which is the point. An airframe carrying
   anything at all — a player, or livestock a large airframe collected while parked — is never
   claimed.
-* **Only an aircraft with a stand booking is ever claimed.** That is the fleet identity: bookings are
-  written in exactly two places, both at the end of a flight this mod dispatched, so an aircraft with
-  one is an aircraft this mod parked there. A player's own plane on a marked stand has no booking and
-  cannot be taken.
+* **Only an aircraft with a stand booking, still standing on that stand, is ever claimed.** That is
+  the fleet identity: bookings are written in exactly two places, both at the end of a flight this mod
+  dispatched, so an aircraft with one is an aircraft this mod parked there. A player's own plane on a
+  marked stand has no booking and cannot be taken. The second half of the rule is not decoration — a
+  booking names a UUID, so resolving it says *where the aircraft is*, not *that it is here*, and a
+  claim that skipped the position check re-tasked a fleet aircraft a player had flown home and parked
+  in their own hangar. The aircraft has to be within half a stand's clearance of the square; where it
+  is not, the stale booking is released on the spot. An airframe a shuttle owns is left alone
+  regardless.
 * **Nothing re-parks an aircraft that stopped on the runway.** All three "cannot taxi in" outcomes
   end the flight where the aircraft is, and there is no retry when a stand later frees up.
   `/autopilot tower` shows the strip as free — because the *reservation* is — while an aircraft is
@@ -3259,16 +3285,17 @@ schedule. The standing cost is the chunk hold: **9 chunks per waiting shuttle, a
   an owning player is only an optional recipient for progress messages, and `AutopilotFeedback`
   no-ops when there is none.
 * **A paused shuttle does not resume itself, and there is no verb to resume it.** Every route into
-  the paused state is something a player has to act on — a field removed, an aircraft lost, three
-  failed departures — so the record stays with its reason, holds one of the 4 slots, and is removed
-  with `/autopilot shuttle stop <id>`. Recreating it is the resume, and the new shuttle's first
-  departure will build an aircraft if the old one is gone, which is a launch somebody asked for
-  rather than one the schedule invented.
-* **A shuttle's aircraft can be taken by `/autopilot flight`.** The ordinary reuse claim takes any
-  idle airframe with a stand booking at the field it is departing from, and it neither knows nor
-  cares that a schedule owns it. The shuttle notices at its next departure and defers while the
-  other sortie is flying; if that sortie ends somewhere else, the shuttle pauses naming where its
-  aircraft went. It is visible, but it is not prevented.
+  the paused state is now something a player has to act on — a field removed, an aircraft lost, an
+  aircraft somewhere else, an exception — because a departure that merely could not be flown is
+  retried instead of counted towards a pause. The record stays with its reason, does not hold one of
+  the 4 running slots, and is removed with `/autopilot shuttle stop <id>`. Recreating it is the
+  resume, and the new shuttle's first departure will build an aircraft if the old one is gone, which
+  is a launch somebody asked for rather than one the schedule invented.
+* **Helicopter reuse is unreachable.** `AutopilotSpawner.launchHelicopterSortie` asks for a claim off
+  the pad square, but `/autopilot heliflight` refuses the sortie first when `Helipad.free` is false —
+  and it is false precisely because of the machine parked on the pad that the claim would re-task. So
+  a helipad silts up exactly as a field with no marked stands does. Fixing it means moving that
+  refusal to after the claim, in the command.
 * **Nothing holds a chunk across a restart, so the first departure after one is the slow one.** The
   hold is re-established on the first tick after load and the airframe deserialises a tick or two
   later; a departure due inside that window has 100 ticks to find it. On a server that comes back up

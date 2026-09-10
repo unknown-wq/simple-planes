@@ -31,6 +31,13 @@ import xyz.przemyk.simpleplanes.datapack.PlaneLiquidFuelReloadListener;
  * <p><b>Two ways in, one of them transactional.</b> The engine's own burn and the input slot write
  * the fields directly; a foreign transfer goes through {@link #insert}/{@link #extract}. They never
  * interleave: both run on the server thread, and a transaction is never open across a tick.
+ *
+ * <p><b>This object is the aircraft's own tank, not the port other mods get.</b> It is deliberately
+ * a full read/write storage, because the aircraft itself needs both halves: the input slot fills a
+ * bucket from it through {@link #extract}. It must therefore never be handed to foreign code as it
+ * is — extraction from a tank in flight is an engine cut-out and a dead pilot. What a neighbouring
+ * pipe is offered is the guarded, insert-only view built in {@code LiquidEngineStorage}, which is
+ * also where the conditions for touching this tank from outside are written down.
  */
 public class PlaneFluidTank extends SingleVariantStorage<FluidVariant> {
 

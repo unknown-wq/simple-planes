@@ -539,7 +539,9 @@ public final class AirfieldBrowser {
                 "Re-surveyed %s: the centreline moved %s blocks onto the middle of the strip."
                     + " Everything an arrival is flown to moves with it.",
                 name, String.format("%.0f", moved)).withStyle(ChatFormatting.GREEN));
-        AirfieldReport.report(output, level, fresh);
+        // Passing the answer we already have rather than letting the report measure the strip a
+        // second time; it is null here, because a strip whose surface will not do returned above.
+        AirfieldReport.report(output, level, fresh, null, surface);
         AirfieldReport.highlight(level, fresh);
         return true;
     }

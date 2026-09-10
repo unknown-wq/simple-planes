@@ -8,6 +8,8 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 import java.util.ArrayList;
@@ -79,13 +81,24 @@ import java.util.UUID;
  * departure is judged to have failed.
  *
  * <h2>Cost</h2>
- * The state machine runs every {@link AutopilotConfig#SHUTTLE_CHECK_INTERVAL} ticks and is a
- * comparison of a stored game time against the clock — no airfield is walked and no entity search is
- * run. A dimension with no schedules costs one map lookup and an {@code isEmpty}. The ticket renewal
- * runs every {@link AutopilotConfig#SHUTTLE_HOLD_INTERVAL} ticks and is one
- * {@code addTicketWithRadius} per waiting schedule.
+ * A dimension with no schedules costs one map lookup and an {@code isEmpty}, every
+ * {@link AutopilotConfig#SHUTTLE_CHECK_INTERVAL} ticks. With schedules, the state machine is a
+ * comparison of a stored game time against the clock, and on the tick a departure is due it is that
+ * plus one {@code getEntity}. The ticket renewal runs every
+ * {@link AutopilotConfig#SHUTTLE_HOLD_INTERVAL} ticks and is one {@code addTicketWithRadius} per
+ * waiting schedule.
+ *
+ * <p><b>One path is much more expensive than that, and it is fenced off rather than described
+ * away.</b> {@code AutopilotSpawner#loadAirfield} makes a whole field resident with a blocking
+ * {@code getChunk} per chunk of the strip and per stand — on a 180-block field, something like 120
+ * of them. This class used to call it on every service tick a departure was due, and again on every
+ * retry, for a field whose aircraft was already loaded and resolvable. It is now reached only when
+ * the airframe cannot be found without it: the first departure after a restart, where the field
+ * genuinely is cold and the alternative is building a second aircraft. See {@link #serviceWaiting}.
  */
 public final class AutopilotDispatcher {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("simpleplanes-autopilot");
 
     private AutopilotDispatcher() {}
 
@@ -93,6 +106,21 @@ public final class AutopilotDispatcher {
         ServerTickEvents.END_LEVEL_TICK.register(AutopilotDispatcher::onLevelTick);
     }
 
+    /**
+     * The level tick, and the one place in this class that must not be allowed to throw.
+     *
+     * <p>Everything below it loads chunks, resolves entities and spawns aircraft, on a field nobody
+     * is watching, hours into a run. An exception escaping here does not stop a shuttle — it stops
+     * the <em>level tick</em>, and a schedule nobody asked for taking the world down with it is a
+     * far worse outcome than any fault it could be reporting. So each schedule's work is fenced
+     * separately: a shuttle that throws is logged with its id and paused, the rest of the dimension
+     * carries on, and the tick returns.
+     *
+     * <p>Paused rather than retried, and this is the one place where that is the mild answer: an
+     * exception is a defect, the next tick would hit it again a second later, and an hour of the
+     * same stack trace once a second is how a log becomes useless. The record and its reason stay in
+     * {@code /autopilot shuttle list}.
+     */
     private static void onLevelTick(ServerLevel level) {
         long now = level.getGameTime();
         boolean hold = now % AutopilotConfig.SHUTTLE_HOLD_INTERVAL == 0;
@@ -107,14 +135,40 @@ public final class AutopilotDispatcher {
         if (hold) {
             // Read-only pass over the live collection: renewing a ticket does not change a shuttle.
             for (Shuttle shuttle : data.shuttles()) {
-                hold(level, shuttle);
+                try {
+                    hold(level, shuttle);
+                } catch (Exception e) {
+                    LOGGER.error("Shuttle {} in {}: could not renew its chunk hold",
+                        shuttle.id(), level.dimension().identifier(), e);
+                }
             }
         }
         if (service) {
             // Copied, because servicing rewrites the map it is walking.
             for (Shuttle shuttle : data.shuttleList()) {
-                service(level, data, shuttle, now);
+                try {
+                    service(level, data, shuttle, now);
+                } catch (Exception e) {
+                    LOGGER.error("Shuttle {} in {}: failed while being serviced; pausing it",
+                        shuttle.id(), level.dimension().identifier(), e);
+                    fail(level, data, shuttle, e);
+                }
             }
+        }
+    }
+
+    /**
+     * Pauses a shuttle that threw, without giving the pause a chance to throw as well.
+     *
+     * <p>{@link #pause} removes a chunk ticket, writes saved data and talks to a player, all of
+     * which is more than a handler for an unknown fault should be trusting. If even that fails there
+     * is nothing left to do but keep the tick alive; the error above it has already been logged.
+     */
+    private static void fail(ServerLevel level, AutopilotSavedData data, Shuttle shuttle, Exception cause) {
+        try {
+            pause(level, data, shuttle, "an internal error while servicing it: " + cause);
+        } catch (Exception e) {
+            LOGGER.error("Shuttle {}: could not even be paused", shuttle.id(), e);
         }
     }
 
@@ -168,6 +222,17 @@ public final class AutopilotDispatcher {
         if (shuttle.state() == Shuttle.State.PAUSED) {
             return;
         }
+        if (shuttle.state() == Shuttle.State.FLYING) {
+            // Deliberately no "do both fields still exist" test here. It used to run for every
+            // state, which meant a rename made mid-leg paused the schedule while its aircraft was
+            // still in the air: the leg went on flying, nothing was waiting for it at the far end,
+            // and it landed owned by nothing. Pausing it did not stop it and could not. A leg in the
+            // air is finished first and judged afterwards -- serviceFlying and #arrived both work
+            // from where the aircraft actually ends up, and both already refuse a field that is not
+            // one of this shuttle's two, which is what a rename produces.
+            serviceFlying(level, data, shuttle, now);
+            return;
+        }
         // Both ends have to still exist, and this is checked every second rather than only at a
         // departure, so a player who removes or renames an airfield finds out what it did to the
         // shuttle immediately instead of a turnaround later. A rename is a removal as far as this is
@@ -180,11 +245,7 @@ public final class AutopilotDispatcher {
                 + "\" no longer exists (removed, or renamed under it)");
             return;
         }
-        if (shuttle.state() == Shuttle.State.FLYING) {
-            serviceFlying(level, data, shuttle, now);
-        } else {
-            serviceWaiting(level, data, shuttle, a, b, now);
-        }
+        serviceWaiting(level, data, shuttle, a, b, now);
     }
 
     /**
@@ -215,16 +276,34 @@ public final class AutopilotDispatcher {
             return;
         }
 
-        // Make the field resident before looking. In the normal case this changes nothing -- the
-        // hold above has kept the aircraft's own chunk loaded for the whole turnaround -- and the
-        // case it is here for is the first departure after a restart, where nothing has been loaded
-        // by anyone and the stands' entities are still on disk.
-        AutopilotSpawner.loadAirfield(level, from);
+        // Look before loading, not after. In the normal case the hold has kept the aircraft's own
+        // chunk resident for the whole turnaround, so it resolves here and the field is never walked
+        // -- which is the point: loadAirfield is a blocking getChunk per chunk of the strip plus one
+        // per stand, roughly 120 of them on a 180-block field, and it used to run on every service
+        // tick a departure was due and again on every retry. It is only needed when the aircraft
+        // cannot be found, which is the first departure after a restart, where nothing has been
+        // loaded by anyone and the stands' entities are still on disk.
         PlaneEntity plane = resolve(level, airframe);
+        if (plane == null) {
+            AutopilotSpawner.loadAirfield(level, from);
+            plane = resolve(level, airframe);
+        }
         if (plane == null) {
             if (now - shuttle.nextDeparture() < AutopilotConfig.SHUTTLE_WAKE_TICKS) {
                 // Still inside the window the chunk load is allowed to take. Not a failure yet, and
                 // deliberately not reported: a normal restart passes through here for a tick or two.
+                return;
+            }
+            // Past the wake window, having just force-loaded the whole field, and the airframe is
+            // still not in the level. The first few of these are deferred, because a server coming
+            // back up under chunk-load pressure can take longer than the window; past that the
+            // honest reading is that the aircraft is gone, which is a fault a player has to act on
+            // and not a condition that clears itself. Retrying it for ever would also mean loading
+            // an entire airfield, on a blocking getChunk per chunk, every five minutes for the rest
+            // of the world's life.
+            if (shuttle.misses() + 1 > AutopilotConfig.SHUTTLE_QUIET_MISSES) {
+                pause(level, data, shuttle, "its aircraft could not be found at " + from.name()
+                    + " after " + (shuttle.misses() + 1) + " attempts; it is gone");
                 return;
             }
             defer(level, data, shuttle, now, "its aircraft could not be found at " + from.name()
@@ -237,10 +316,11 @@ public final class AutopilotDispatcher {
         }
         PlaneAutopilot flying = plane.getAutopilot();
         if (flying != null && flying.isActive()) {
-            // Somebody else is using it. /autopilot flight will claim an idle airframe off a stand
-            // if a sortie happens to be ordered out of this field, and that claim does not know or
-            // care that a schedule owns the aircraft. Transient, so it is deferred: the other
-            // sortie will end, and if it ends somewhere else the position check above catches it.
+            // Somebody else is using it -- a player who climbed in and switched the autopilot on,
+            // or anything else that starts a flight on an existing airframe. It is no longer
+            // /autopilot flight: the opportunistic reuse claim now asks #owns first and leaves a
+            // schedule's aircraft alone. Transient either way, so it is deferred: that flight will
+            // end, and if it ends somewhere else the position check below catches it.
             defer(level, data, shuttle, now, "aircraft #" + plane.getId()
                 + " is flying another autopilot flight");
             return;
@@ -352,22 +432,43 @@ public final class AutopilotDispatcher {
     }
 
     /**
-     * A departure that could not be flown this time. Deferred, not skipped and not silently retried:
-     * the reason is stored where {@code /autopilot shuttle list} shows it, the owner is told, and
-     * after {@link AutopilotConfig#SHUTTLE_MAX_MISSES} consecutive failures the shuttle pauses
-     * instead of going round again for the rest of the session.
+     * A departure that could not be flown this time: try again later, remember why, and say so
+     * until saying so stops being news.
+     *
+     * <p><b>This no longer gives up.</b> It used to pause the shuttle for good after
+     * three consecutive failures, which read as "a thing that runs unattended must not retry for
+     * ever" — but every condition that reaches this method is transient by construction. The
+     * autopilot slots are full and whatever is using them will land; somebody is sitting in the
+     * aircraft and will get out; another sortie is flying the airframe and will finish. Three
+     * failures thirty seconds apart is ninety seconds of a busy evening, and on a dimension running
+     * the full {@link AutopilotConfig#MAX_SHUTTLES} schedules the slots being full is the ordinary
+     * case; a shuttle that stopped there stayed stopped, because {@code PAUSED} does not clear
+     * itself and there is no verb to clear it. The permanent answer to a temporary problem was the
+     * defect, not the retrying.
+     *
+     * <p>What is bounded instead is the cost of retrying. The interval grows with the miss count to
+     * {@link AutopilotConfig#SHUTTLE_MAX_BACKOFF} times {@link AutopilotConfig#SHUTTLE_RETRY_TICKS},
+     * so a condition nobody clears settles at one attempt every five minutes; and the report stops
+     * after {@link AutopilotConfig#SHUTTLE_QUIET_MISSES}, so a stuck shuttle is not still telling a
+     * player about it at midnight. Neither of those hides anything: the reason and the attempt count
+     * are in the record, {@code /autopilot shuttle list} prints both, and the shuttle departs on its
+     * own within one interval of whatever was wrong being fixed.
+     *
+     * <p>{@link #pause} is still there and is still reached — by the faults that are <em>not</em>
+     * transient: the field is gone, the aircraft is gone, the aircraft is somewhere else.
      */
     private static void defer(ServerLevel level, AutopilotSavedData data, Shuttle shuttle, long now,
                               String problem) {
-        if (shuttle.misses() + 1 >= AutopilotConfig.SHUTTLE_MAX_MISSES) {
-            pause(level, data, shuttle, problem + "; gave up after "
-                + AutopilotConfig.SHUTTLE_MAX_MISSES + " attempts");
-            return;
+        int misses = shuttle.misses() + 1;
+        long wait = (long) AutopilotConfig.SHUTTLE_RETRY_TICKS
+            * Math.min(misses, AutopilotConfig.SHUTTLE_MAX_BACKOFF);
+        data.putShuttle(shuttle.deferred(now + wait, problem));
+        if (misses <= AutopilotConfig.SHUTTLE_QUIET_MISSES) {
+            report(level, shuttle, "Shuttle " + shuttle.id() + " could not depart " + shuttle.from()
+                + ": " + problem + ". Retrying in " + wait / 20 + "s"
+                + (misses == AutopilotConfig.SHUTTLE_QUIET_MISSES
+                    ? ", and quietly after this; /autopilot shuttle list keeps the reason." : "."));
         }
-        Shuttle updated = shuttle.deferred(now + AutopilotConfig.SHUTTLE_RETRY_TICKS, problem);
-        data.putShuttle(updated);
-        report(level, shuttle, "Shuttle " + shuttle.id() + " could not depart " + shuttle.from()
-            + ": " + problem + ". Retrying in " + AutopilotConfig.SHUTTLE_RETRY_TICKS / 20 + "s.");
     }
 
     /** Stops a shuttle for good, keeping the record and the reason so a player can see both. */
@@ -407,6 +508,39 @@ public final class AutopilotDispatcher {
             return;
         }
         finish(level, data, shuttle, airfield, plane, level.getGameTime(), problem);
+    }
+
+    /**
+     * Whether a schedule in this dimension owns this airframe, and so nothing else may re-task it.
+     *
+     * <p>Asked by {@link AircraftReuse} before it takes an airframe off a stand. A waiting shuttle's
+     * aircraft passes every test that class makes — parked, idle, empty, booked onto a stand, of the
+     * right type — so without this an ordinary {@code /autopilot flight} out of the same field flew
+     * away with it, and the schedule that owned it could only watch: it defers while the other
+     * sortie is in the air, and if that sortie ends anywhere else it pauses naming a field its
+     * aircraft is not at. On a dimension running the full {@link AutopilotConfig#MAX_SHUTTLES} that
+     * is the ordinary case rather than a corner of it.
+     *
+     * <p><b>A paused schedule owns nothing.</b> It will never fly again without a player stopping
+     * and recreating it, and until they do, its airframe is an idle aircraft parked on a stand like
+     * any other — which is precisely what reuse is for. Holding an airframe out of the fleet on
+     * behalf of a schedule that cannot use it is how a field silts up.
+     *
+     * <p>Cheap by construction: no entity is resolved and nothing is loaded, just a UUID compared
+     * against at most {@link AutopilotConfig#MAX_SHUTTLES} records, and short-circuited on the
+     * common case of a dimension with no schedules at all.
+     */
+    public static boolean owns(ServerLevel level, UUID airframe) {
+        AutopilotSavedData data = AutopilotSavedData.get(level);
+        if (!data.hasShuttles()) {
+            return false;
+        }
+        for (Shuttle shuttle : data.shuttles()) {
+            if (shuttle.state() != Shuttle.State.PAUSED && airframe.equals(shuttle.aircraftId())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The shuttle whose aircraft this is and which believes it is in the air, or null. */
@@ -456,9 +590,29 @@ public final class AutopilotDispatcher {
                 return refusal.getString();
             }
         }
-        if (data.shuttleList().size() >= AutopilotConfig.MAX_SHUTTLES) {
-            return "Too many shuttles in this dimension (" + data.shuttleList().size() + "/"
+        // The cap is on schedules that are actually running. It used to count stored records, which
+        // meant a paused one -- holding no chunk ticket, flying nothing, and unable to run again --
+        // occupied a slot in a cap whose whole justification is resident chunks and autopilot slots;
+        // a player whose four shuttles had all paused had to delete the records that said what went
+        // wrong before they could create a fifth. Paused records are bounded separately, because a
+        // record nobody stops is written to disk for ever.
+        int running = 0;
+        int paused = 0;
+        for (Shuttle shuttle : data.shuttles()) {
+            if (shuttle.state() == Shuttle.State.PAUSED) {
+                paused++;
+            } else {
+                running++;
+            }
+        }
+        if (running >= AutopilotConfig.MAX_SHUTTLES) {
+            return "Too many shuttles running in this dimension (" + running + "/"
                 + AutopilotConfig.MAX_SHUTTLES + "). Stop one with /autopilot shuttle stop <id>.";
+        }
+        if (paused >= AutopilotConfig.MAX_PAUSED_SHUTTLES) {
+            return "There are " + paused + " paused shuttles in this dimension, which is as many as "
+                + "are kept. /autopilot shuttle list shows why each of them stopped; clear one with "
+                + "/autopilot shuttle stop <id>.";
         }
         data.putShuttle(Shuttle.created(data.nextShuttleId(), fieldA, fieldB, delaySeconds * 20,
             type, owner == null ? null : owner.getUUID(), level.getGameTime()));
@@ -506,7 +660,9 @@ public final class AutopilotDispatcher {
     public static List<String> describe(ServerLevel level) {
         List<Shuttle> all = AutopilotSavedData.get(level).shuttleList();
         List<String> lines = new ArrayList<>();
-        lines.add(all.size() + "/" + AutopilotConfig.MAX_SHUTTLES + " shuttles in this dimension.");
+        long paused = all.stream().filter(shuttle -> shuttle.state() == Shuttle.State.PAUSED).count();
+        lines.add((all.size() - paused) + "/" + AutopilotConfig.MAX_SHUTTLES + " shuttles running in "
+            + "this dimension" + (paused == 0 ? "." : ", and " + paused + " paused."));
         long now = level.getGameTime();
         for (Shuttle shuttle : all) {
             lines.add("  shuttle " + shuttle.id() + ": " + shuttle.fieldA() + " <-> " + shuttle.fieldB()
@@ -514,7 +670,11 @@ public final class AutopilotDispatcher {
                 + (shuttle.legs() == 1 ? " leg flown, " : " legs flown, ") + aircraftOf(level, shuttle));
             lines.add("    " + switch (shuttle.state()) {
                 case WAITING -> "waiting at " + shuttle.from() + ", next departure to " + shuttle.to()
-                    + " in " + TowerWatch.clock(Math.max(0, shuttle.nextDeparture() - now));
+                    + " in " + TowerWatch.clock(Math.max(0, shuttle.nextDeparture() - now))
+                    // A retried departure looks exactly like a turnaround from here, and the count
+                    // is the only thing that tells one from the other: a shuttle that has failed
+                    // forty times is stuck, even though it is still trying.
+                    + (shuttle.misses() > 0 ? " (retry " + shuttle.misses() + ")" : "");
                 case FLYING -> "leg " + (shuttle.legs() + 1) + " in the air, " + shuttle.from()
                     + " to " + shuttle.to();
                 case PAUSED -> "PAUSED - /autopilot shuttle stop " + shuttle.id() + " to remove it";

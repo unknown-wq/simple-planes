@@ -334,7 +334,7 @@ have been flown, which aircraft, where it is in the cycle, when the next departu
 due, and the last thing that went wrong.
 
 ```
-2/4 shuttles in this dimension.
+1/4 shuttles running in this dimension, and 1 paused.
   shuttle 1: airfield-1 <-> airfield-2, 60s turnaround, 7 legs flown, plane #214
     waiting at airfield-1, next departure to airfield-2 in 0:41
   shuttle 2: airfield-3 <-> airfield-4, 120s turnaround, 2 legs flown, plane #88
@@ -342,19 +342,26 @@ due, and the last thing that went wrong.
     last problem: airfield "airfield-4" no longer exists (removed, or renamed under it)
 ```
 
-**When something goes wrong** the shuttle either *defers* the departure (tries again in
-30 seconds, up to three times) or *pauses* for good. A paused shuttle stays in the list
-with its reason until you stop it; nothing is retried in silence.
+A departure being retried shows as `(retry N)` beside the countdown, which is the only
+thing that tells a stuck shuttle from one that is simply between legs.
+
+**When something goes wrong** the shuttle either *defers* the departure or *pauses* for
+good. A deferral is retried for as long as it takes: 30 seconds the first time, growing
+with the failure count to one attempt every 5 minutes, and reported for the first three
+failures before it goes quiet — the reason and the retry count stay in the listing. It
+never gives up on a condition that can clear, because there is no verb to resume a shuttle
+that has. A pause is for something you have to deal with; a paused shuttle stays in the
+list with its reason until you stop it, and does not use one of the 4 running slots.
 
 | What happened | What the shuttle does |
 |---|---|
 | the destination had no free stand, so the aircraft stopped on the runway | counts as arrived; the next departure lifts it off the runway; the reason is on the listing |
-| an airfield is renamed or removed under it | pauses within a second, naming the field |
+| an airfield is renamed or removed under it | pauses within a second of the aircraft being on the ground; a leg already in the air is left to finish |
 | the aircraft is destroyed in flight | pauses, "its aircraft was lost in flight" |
 | the aircraft is flown away, or ends a leg at neither field | pauses, giving the coordinates it is at |
-| its aircraft is busy on another `/autopilot flight`, or somebody is sitting in it | defers |
+| somebody is sitting in it, or it is busy on another flight | defers. `/autopilot flight` will not take a shuttle's aircraft |
 | all 24 autopilot slots are in use | defers |
-| the aircraft cannot be found at all (a cold field just after a restart) | waits 5 seconds for the chunk to load, then defers |
+| the aircraft cannot be found at all (a cold field just after a restart) | waits 5 seconds for the chunk to load, then defers; pauses if it is still missing after 3 more tries |
 
 `stop` removes the schedule and drops the chunk hold. **The aircraft is left standing
 where it is** — it is not deleted, because it may be carrying cargo.
@@ -702,7 +709,7 @@ sleep and the aircraft freeze in mid-air.
 | Engagement radius | 40-block sphere (about 35 blocks on the ground from 18 blocks up) |
 | Arrow muzzle velocity | 3.0 blocks/tick — a fully drawn bow |
 | Maximum airspace deviation | 60° |
-| Shuttles per dimension | 4 |
+| Shuttles per dimension | 4 running, plus up to 4 paused records |
 | Shuttle turnaround | 10…3600 seconds |
 
 **Note on helicopter speed.** The argument accepts up to 2.00, but the aircraft runs

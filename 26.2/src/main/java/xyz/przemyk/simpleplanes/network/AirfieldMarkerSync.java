@@ -6,18 +6,22 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import xyz.przemyk.simpleplanes.autopilot.Airfield;
 import xyz.przemyk.simpleplanes.autopilot.AirfieldBrowser;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotSavedData;
 import xyz.przemyk.simpleplanes.autopilot.Helipad;
+import xyz.przemyk.simpleplanes.autopilot.StandOccupancy;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.ToDoubleFunction;
 
 /**
  * Sends each player the registered fields around them, so the world overlay can draw what already
@@ -37,8 +41,9 @@ import java.util.UUID;
  * payload, so all of them are covered by one rule that cannot be forgotten; and a world where nothing
  * has changed sends nothing at all, which is the normal case. The cost of the rule is one rebuild per
  * player per second over the fields within {@link #MARKER_RADIUS} — a handful of records and, for
- * each marked stand, the same occupancy question the ground handling already asks every time it picks
- * one.
+ * each marked stand it can see into, the same occupancy question the ground handling already asks
+ * every time it picks one. Those rebuilds are phased per player rather than all run on the same
+ * tick; see {@link #due}.
  *
  * <p>A player is also sent the fields when they join, before any comparison, because an empty client
  * cache and an empty payload are indistinguishable by value and a joining player must be told either
@@ -54,10 +59,15 @@ public final class AirfieldMarkerSync {
      * <p>Comfortably past the far render distance, so a marker is on the client before the ground
      * under it is, and small enough that a world with airfields scattered over thousands of blocks
      * sends each player only their own corner of it.
+     *
+     * <p>It is several times the distance <em>entities</em> are loaded to, and that is deliberate
+     * rather than overlooked: where a runway is drawn is a question about the terrain, and what is
+     * standing on its stands is a question about entities. The second one has no answer at this
+     * range and is sent as no answer — see {@link #marker}.
      */
     private static final double MARKER_RADIUS = 512.0;
 
-    /** How often the payload is rebuilt and compared, in ticks. */
+    /** How often each player's payload is rebuilt and compared, in ticks. */
     private static final int POLL_TICKS = 20;
 
     /** What each player was last sent, so an unchanged rebuild sends nothing. */
@@ -76,12 +86,33 @@ public final class AirfieldMarkerSync {
     }
 
     private static void tick(ServerLevel level) {
-        if (level.getServer().getTickCount() % POLL_TICKS != 0 || level.players().isEmpty()) {
+        if (level.players().isEmpty()) {
             return;
         }
+        int now = level.getServer().getTickCount();
         for (ServerPlayer player : List.copyOf(level.players())) {
-            send(player);
+            if (due(player, now)) {
+                send(player);
+            }
         }
+    }
+
+    /**
+     * Whether this player's turn in the poll comes round on this tick.
+     *
+     * <p>Every player is still rebuilt once per {@link #POLL_TICKS}; what this spreads is
+     * <em>which</em> tick. Testing the server tick alone put every player in every dimension on the
+     * same one, so a rebuild's whole cost — an entity search and a scan of the live autopilots per
+     * marked stand, for every field near every player — arrived as one spike a second while the
+     * other nineteen ticks did nothing. The work is unchanged; the phase is per player, so it lands
+     * spread across the second instead.
+     *
+     * <p>Phased by identity rather than by a counter, so a player keeps their slot across a
+     * relog and two players do not migrate onto the same tick.
+     */
+    private static boolean due(ServerPlayer player, int tick) {
+        int phase = Math.floorMod(player.getUUID().hashCode(), POLL_TICKS);
+        return (tick + phase) % POLL_TICKS == 0;
     }
 
     /** Rebuilds this player's markers and sends them if they are not what the player already has. */
@@ -108,42 +139,122 @@ public final class AirfieldMarkerSync {
         }
         double x = player.getX();
         double z = player.getZ();
-        List<AirfieldMarkersPacket.Runway> runways = new ArrayList<>();
+        List<Airfield> nearAirfields = new ArrayList<>();
         for (Airfield airfield : data.airfieldList()) {
             if (near(airfield.centre().x, airfield.centre().z, x, z)) {
-                runways.add(marker(level, airfield));
+                nearAirfields.add(airfield);
             }
         }
-        List<AirfieldMarkersPacket.Pad> pads = new ArrayList<>();
-        for (Helipad pad : data.helipadList()) {
-            if (near(pad.centre().getX() + 0.5, pad.centre().getZ() + 0.5, x, z)) {
-                pads.add(new AirfieldMarkersPacket.Pad(pad.name(), pad.centre(), pad.radius()));
+        List<Helipad> nearPads = new ArrayList<>();
+        for (Helipad helipad : data.helipadList()) {
+            if (near(helipad.centre().getX() + 0.5, helipad.centre().getZ() + 0.5, x, z)) {
+                nearPads.add(helipad);
             }
+        }
+        // Capped before the markers are built, not after: the occupancy questions are the expensive
+        // part of a rebuild and there is no point asking them about a field that will not be sent.
+        List<AirfieldMarkersPacket.Runway> runways = new ArrayList<>();
+        for (Airfield airfield : closest(nearAirfields,
+            field -> distanceSq(field.centre().x, field.centre().z, x, z))) {
+            runways.add(marker(level, airfield));
+        }
+        List<AirfieldMarkersPacket.Pad> pads = new ArrayList<>();
+        for (Helipad helipad : closest(nearPads,
+            field -> distanceSq(field.centre().getX() + 0.5, field.centre().getZ() + 0.5, x, z))) {
+            pads.add(new AirfieldMarkersPacket.Pad(helipad.name(), helipad.centre(), helipad.radius()));
         }
         return new AirfieldMarkersPacket(List.copyOf(runways), List.copyOf(pads));
     }
 
-    private static boolean near(double fieldX, double fieldZ, double playerX, double playerZ) {
-        double dx = fieldX - playerX;
-        double dz = fieldZ - playerZ;
-        return dx * dx + dz * dz <= MARKER_RADIUS * MARKER_RADIUS;
+    /**
+     * The nearest {@link AirfieldMarkersPacket#MAX_FIELDS} of these, or all of them when there are
+     * no more than that.
+     *
+     * <p>The packet's list codec is a sized one, and a sized list codec refuses an oversized list on
+     * encode as firmly as on decode: building a payload with a sixty-fifth field does not truncate
+     * it, it throws {@code EncoderException} out of the network pipeline. Nothing limits how many
+     * airfields a world may register or how close together they may be, so a player standing among
+     * more than sixty-four of them would have hit that once a second for as long as they stood
+     * there. The bound belongs here, where there is something sensible to do about it.
+     *
+     * <p>Nearest first, because if a player really is inside that many fields, the ones under their
+     * feet are the ones worth drawing. The sort only runs in the case that needs it.
+     */
+    private static <T> List<T> closest(List<T> fields, ToDoubleFunction<T> distanceSq) {
+        if (fields.size() <= AirfieldMarkersPacket.MAX_FIELDS) {
+            return fields;
+        }
+        fields.sort(Comparator.comparingDouble(distanceSq));
+        return fields.subList(0, AirfieldMarkersPacket.MAX_FIELDS);
     }
 
+    private static boolean near(double fieldX, double fieldZ, double playerX, double playerZ) {
+        return distanceSq(fieldX, fieldZ, playerX, playerZ) <= MARKER_RADIUS * MARKER_RADIUS;
+    }
+
+    private static double distanceSq(double fieldX, double fieldZ, double playerX, double playerZ) {
+        double dx = fieldX - playerX;
+        double dz = fieldZ - playerZ;
+        return dx * dx + dz * dz;
+    }
+
+    /**
+     * One field's marker, with each of its stands called taken, free, or unknown.
+     *
+     * <h2>Why unknown is a state and not a guess</h2>
+     * Occupancy is answered by an entity search and a booking register, and both of them are only
+     * meaningful where the square's entities are loaded — which is out to simulation distance, a
+     * fraction of {@link #MARKER_RADIUS}. Beyond it the answer is "taken", and that is right for the
+     * caller it was written for: an aircraft deciding where to taxi must not be sent at a square
+     * nobody can see into. It is quite wrong for a picture. Asked once a second about every field
+     * within half a kilometre, it painted every stand of every distant field orange, and they turned
+     * cyan one field at a time as the player walked up — so the overlay's least trustworthy colour
+     * was also its most common one.
+     *
+     * <p>So the two questions are separated at the point where they differ. Where the square is
+     * loaded, the ground handling's own answer is used unchanged — a marker that disagrees with
+     * where an aircraft will actually be sent is worse than no marker. Where it is not, nothing is
+     * asked at all and the stand is sent as unknown, for the overlay to draw as its own colour. The
+     * alternative — drawing it free — would be the same lie pointing the other way, and the one
+     * that gets a player to fly somewhere expecting a space.
+     *
+     * <p>It costs nothing to ask: a stand nobody can see is a stand nobody has to run an entity
+     * search or a scan of the live autopilots for, which is most of the poll's cost on a big world.
+     */
     private static AirfieldMarkersPacket.Runway marker(ServerLevel level, Airfield airfield) {
         List<BlockPos> stands = airfield.parkingSpots();
         int occupied = 0;
+        int unknown = 0;
         for (int i = 0; i < stands.size(); i++) {
             BlockPos spot = stands.get(i);
+            // Exactly the predicate StandOccupancy tests before it believes an entity search:
+            // "have this chunk's entities been deserialised". Where they have not, there is nothing
+            // to ask and nothing honest to say.
+            if (!level.areEntitiesLoaded(ChunkPos.pack(spot))) {
+                unknown |= 1 << i;
+                continue;
+            }
             // The same question the ground handling asks when it picks a stand, rather than a
             // second opinion of our own: a marker that disagrees with where an aircraft will
             // actually be sent is worse than no marker.
+            //
+            // Asked in two halves rather than through Airfield#standFree(airfield, ...), because
+            // that one finishes with StandOccupancy#isTaken, and isTaken is not a question: it
+            // stamps the confirmation clock and releases a booking whose clock has run out. This
+            // poll runs once a second for every player near a field, so a feature that only draws
+            // was writing to persisted saved data on that cadence -- and, with POLL_TICKS and
+            // EMPTY_CONFIRM_TICKS both 20 ticks off the same server tick, it was also the thing
+            // deciding when a booking died, at the earliest instant the rule allows, whether or not
+            // anything had looked at the field for a reason. StandOccupancy#looksTaken is the same
+            // rule with nothing written.
             Vec3 position = new Vec3(spot.getX() + 0.5, spot.getY() + 1.0, spot.getZ() + 0.5);
-            if (!Airfield.standFree(level, airfield, position, spot, null)) {
+            if (!Airfield.standFree(level, position, spot, null)
+                || StandOccupancy.looksTaken(level, airfield.name(), spot)) {
                 occupied |= 1 << i;
             }
         }
         return new AirfieldMarkersPacket.Runway(airfield.name(), airfield.thresholdA(),
-            airfield.thresholdB(), airfield.width(), stands, occupied,
+            airfield.thresholdB(), airfield.width(), stands, occupied, unknown,
             AirfieldBrowser.isUsable(airfield));
     }
 }
