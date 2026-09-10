@@ -46,7 +46,8 @@ import java.util.List;
  * /autopilot route &lt;from&gt; &lt;to&gt; [speed]
  * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed] [delay &lt;seconds&gt;]
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt; [speed]
- * /autopilot survey &lt;threshold1&gt; &lt;threshold2&gt;
+ * /autopilot survey &lt;corner1&gt; &lt;corner2&gt;
+ * /autopilot debug [true|false]
  * /autopilot airfields [info|show|resurvey|remove|rename|park|unpark] …
  * /autopilot tower [&lt;airfield&gt;]
  * /autopilot shuttle add &lt;fromAirfield&gt; &lt;toAirfield&gt; &lt;seconds&gt; [type &lt;airframe&gt;]
@@ -173,9 +174,20 @@ public final class AutopilotCommand {
                             .then(aircraftTypeArgument(context -> inbound(context, requestedSpeed(context))))))));
 
             root.then(Commands.literal("survey")
-                .then(Commands.argument("threshold1", BlockPosArgument.blockPos())
-                    .then(Commands.argument("threshold2", BlockPosArgument.blockPos())
+                .then(Commands.argument("corner1", BlockPosArgument.blockPos())
+                    .then(Commands.argument("corner2", BlockPosArgument.blockPos())
                         .executes(AutopilotCommand::survey))));
+
+            // debug [true|false]
+            //
+            // Per player, because everything it unmutes already goes to one player — whoever ordered
+            // the flight — so a server-wide switch would silence or unsilence other people's flights
+            // along with your own. Not persisted: it is a debug flag, and one that survived a restart
+            // would be a trap.
+            root.then(Commands.literal("debug")
+                .executes(context -> debug(context, null))
+                .then(Commands.argument("on", BoolArgumentType.bool())
+                    .executes(context -> debug(context, BoolArgumentType.getBool(context, "on")))));
 
             root.then(Commands.literal("airfields")
                 .executes(AutopilotCommand::airfields)
@@ -731,14 +743,34 @@ public final class AutopilotCommand {
         return 1;
     }
 
+    /**
+     * Turns routine autopilot progress on or off for the player who typed it, or says which it is.
+     *
+     * <p>What it governs is {@link AutopilotFeedback#progress}: arrival plans and replans, taxi and
+     * vacate lines, shuttle legs turning over. Failures, aircraft lost and finished legs are reports
+     * and are never muted by anything.
+     */
+    private static int debug(CommandContext<CommandSourceStack> context, @Nullable Boolean on)
+        throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        if (on != null) {
+            AutopilotFeedback.setVerbose(player, on);
+        }
+        boolean verbose = AutopilotFeedback.verbose(player);
+        context.getSource().sendSuccess(() -> Component.literal(verbose
+            ? "Autopilot progress on: arrival plans, taxi and shuttle legs will be reported to you."
+            : "Autopilot progress off. Failures and finished legs are still reported."), false);
+        return verbose ? 1 : 0;
+    }
+
     private static int survey(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         CommandSourceStack source = context.getSource();
         // getLoadedBlockPos is correct here and is deliberately kept: a survey measures real blocks —
         // surface heights, width, slope, roughness — so surveying unloaded ground would silently
         // register a runway made of nothing. Refusing with "That position is not loaded" is the right
         // answer; go and stand on the runway.
-        BlockPos first = BlockPosArgument.getLoadedBlockPos(context, "threshold1");
-        BlockPos second = BlockPosArgument.getLoadedBlockPos(context, "threshold2");
+        BlockPos first = BlockPosArgument.getLoadedBlockPos(context, "corner1");
+        BlockPos second = BlockPosArgument.getLoadedBlockPos(context, "corner2");
         // The return value is the refusal, exactly as helipadSurvey reads it: a strip whose surface
         // will not do registers nothing, and a command that answers 1 for that tells a command block,
         // an `execute if` and every datapack chain hanging off it that an airfield now exists.

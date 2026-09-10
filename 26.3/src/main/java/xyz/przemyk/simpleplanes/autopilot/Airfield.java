@@ -5,7 +5,6 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SnowLayerBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -20,9 +19,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A surveyed runway: two thresholds on the centreline plus a measured width. Everything else
+ * A surveyed runway: two thresholds on the centreline plus the strip's width. Everything else
  * (heading, length, slope, designators) is derived, so a stored airfield stays consistent even if
  * the constants change.
+ *
+ * <p>A survey run by this build takes all of that from the box the player marked out — see
+ * {@link #footprint} — so its thresholds lie on a world axis. An airfield saved by an earlier build
+ * may be diagonal; it loads and flies exactly as saved. See {@link #isAxisAligned()}.
  *
  * <p>Both thresholds are stored at the surface block the aircraft should touch, so
  * {@code threshold.y} is the runway elevation at that end.
@@ -1283,38 +1286,132 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
-     * Surveys a runway from two clicked points on its two ends. The width is measured outwards from
-     * the centreline: the runway is considered to continue sideways for as long as the surface stays
-     * within one block of the centreline elevation.
+     * The runway a pair of clicked corners marks out.
      *
-     * <p><b>The clicked points are not taken as the centreline.</b> They used to be, and that is the
-     * whole of the "the aircraft takes off from the exact block I right-clicked and lands on it"
-     * report: a player marking a strip clicks something they can see and stand on, which is an edge
-     * or a corner, and every number the arrival is flown to — the lineup, the aim point, the glide
-     * slope, the lateral offset, the landing gates — hangs off the threshold. Measured on the rig
-     * with both ends clicked on the left edge of a 13-wide strip, the whole take-off roll and the
-     * touchdown were at x = -5.5 against a strip running from -6.0 to 7.0: 6 blocks off the middle,
-     * with the outboard wing over the drop-off, and the aircraft tracking its centreline perfectly
-     * the whole way (lat = -0.2). See {@link #centreOnStrip}.
+     * @param thresholdA the end of the centreline nearest the first click
+     * @param thresholdB the end of the centreline nearest the second click
+     * @param width      the strip's width in whole blocks, taken from the selection
      */
-    public static Airfield survey(Level level, String name, BlockPos clickedA, BlockPos clickedB) {
-        BlockPos[] thresholds = centreOnStrip(level,
-            snapToSurface(level, clickedA), snapToSurface(level, clickedB));
-        BlockPos a = thresholds[0];
-        BlockPos b = thresholds[1];
-        int width = measureWidth(level, a, b);
-        // Both approach funnels are counted here, while the chunks are loaded, and stored. This is
-        // the only moment the numbers can be trusted: a survey requires a loaded position, whereas
-        // an arriving aircraft asks the question from hundreds of blocks away. See bestEnd.
-        Airfield airfield = new Airfield(name, a, b, width);
+    public record Footprint(BlockPos thresholdA, BlockPos thresholdB, int width) {}
+
+    /**
+     * Narrowest strip the survey will register, in blocks. A selection this thin cannot be a runway
+     * footprint anybody meant — it is two clicks down one line, which is how the tool used to be
+     * driven — so it is widened rather than refused, and this is the only number in the geometry that
+     * does not come from the selection.
+     */
+    private static final int MIN_MEASURED_WIDTH = 3;
+
+    /**
+     * Turns two clicked corners into a runway: the axis-aligned box they span, laid out along
+     * whichever of its two sides is longer.
+     *
+     * <p><b>The selection is the runway.</b> Origin, length, width and orientation all come from the
+     * box and from nothing else: the thresholds are the middle blocks of its two short edges, the
+     * width is its short span, and the heading is therefore always a multiple of 90 degrees. What the
+     * player marks out is what they get, and the client preview can draw it exactly because this is a
+     * pure function of the two positions with no terrain in it.
+     *
+     * <p><b>What this replaces.</b> The survey used to take the two clicks as the two ends of the
+     * centreline and then measure the width outwards from it against the terrain. Clicking two
+     * opposite corners — the natural gesture, and the one {@code HelipadToolItem} has always used —
+     * therefore made the corner-to-corner diagonal the runway axis: a 19x27 selection registered as a
+     * strip 32 long on a heading of 139/319 degrees, laid diagonally across the ground that was
+     * marked and running off it at both ends. The width came from the terrain walk, which on flat or
+     * uniform ground simply ran out at its probe ceiling and reported
+     * {@code SURVEY_MAX_WIDTH / 2 * 2 + 1} = 25 whatever was selected. Neither number was the
+     * player's.
+     *
+     * <p><b>Spans are inclusive block counts</b> — a click on x=3016 and one on x=3034 select the 19
+     * blocks 3016..3034 — but the thresholds sit at the centres of the first and last of those
+     * blocks, so {@link #length()}, which is the threshold-to-threshold roll an aircraft actually
+     * has, is one block less than the footprint. An even width puts the stored centreline half a
+     * block towards the lower edge, because a threshold is a block and not a line.
+     *
+     * <p>A square selection is laid out along X, arbitrarily but predictably.
+     */
+    public static Footprint footprint(BlockPos cornerA, BlockPos cornerB) {
+        int minX = Math.min(cornerA.getX(), cornerB.getX());
+        int maxX = Math.max(cornerA.getX(), cornerB.getX());
+        int minZ = Math.min(cornerA.getZ(), cornerB.getZ());
+        int maxZ = Math.max(cornerA.getZ(), cornerB.getZ());
+        int spanX = maxX - minX + 1;
+        int spanZ = maxZ - minZ + 1;
+        boolean alongX = spanX >= spanZ;
+        int width = Math.max(MIN_MEASURED_WIDTH, alongX ? spanZ : spanX);
+        BlockPos low;
+        BlockPos high;
+        if (alongX) {
+            int centreZ = minZ + (spanZ - 1) / 2;
+            low = new BlockPos(minX, cornerA.getY(), centreZ);
+            high = new BlockPos(maxX, cornerB.getY(), centreZ);
+        } else {
+            int centreX = minX + (spanX - 1) / 2;
+            low = new BlockPos(centreX, cornerA.getY(), minZ);
+            high = new BlockPos(centreX, cornerB.getY(), maxZ);
+        }
+        // The click order is kept, so "threshold 1" is the end the player marked first and the
+        // designators do not swap between one survey of a strip and the next.
+        boolean firstIsLow = alongX
+            ? cornerA.getX() <= cornerB.getX()
+            : cornerA.getZ() <= cornerB.getZ();
+        return firstIsLow
+            ? new Footprint(low.atY(cornerA.getY()), high.atY(cornerB.getY()), width)
+            : new Footprint(high.atY(cornerA.getY()), low.atY(cornerB.getY()), width);
+    }
+
+    /**
+     * Surveys a runway from two clicked corners of the strip.
+     *
+     * <p>The geometry is {@link #footprint}'s and comes from the selection alone; the terrain is read
+     * only to put each threshold on the surface of its own column and to count the two approach
+     * funnels. Those counts are taken here, while the chunks are loaded, and stored: this is the only
+     * moment they can be trusted, because an arriving aircraft asks the question from hundreds of
+     * blocks away. See {@link #bestEnd}.
+     */
+    public static Airfield survey(Level level, String name, BlockPos cornerA, BlockPos cornerB) {
+        Footprint footprint = footprint(cornerA, cornerB);
+        BlockPos a = snapToSurface(level, footprint.thresholdA());
+        BlockPos b = snapToSurface(level, footprint.thresholdB());
+        Airfield airfield = new Airfield(name, a, b, footprint.width());
         // requiresStands = true: a strip surveyed by this build is not a finished airfield until a
         // stand is marked beside it. Whether that sticks is decided by the caller — re-surveying an
         // airfield that is already registered keeps whatever the registered one had, so correcting a
         // threshold on an old field cannot turn it into one that refuses sorties. See
         // AirfieldReport#surveyAndRegister.
-        return new Airfield(name, a, b, width, List.of(),
+        return new Airfield(name, a, b, footprint.width(), List.of(),
             countApproachObstacles(level, airfield.endA()),
             countApproachObstacles(level, airfield.endB()), true);
+    }
+
+    /**
+     * Re-reads the terrain under an airfield whose geometry is already settled: the thresholds are
+     * re-snapped to the surface of their own columns and both approach funnels are recounted.
+     *
+     * <p>Nothing about the footprint moves. Since the survey takes its geometry from the selection
+     * rather than from the ground, there is no measurement left for a re-survey to correct — what it
+     * is for now is a strip whose surroundings have changed, so that {@code bestEnd} stops preferring
+     * an end that has since had a hill built off it. To change the shape of a runway, mark it again.
+     */
+    public static Airfield remeasure(Level level, Airfield airfield) {
+        BlockPos a = snapToSurface(level, airfield.thresholdA());
+        BlockPos b = snapToSurface(level, airfield.thresholdB());
+        Airfield moved = new Airfield(airfield.name(), a, b, airfield.width());
+        return new Airfield(airfield.name(), a, b, airfield.width(), airfield.parkingSpots(),
+            countApproachObstacles(level, moved.endA()),
+            countApproachObstacles(level, moved.endB()), airfield.requiresStands());
+    }
+
+    /**
+     * True when this airfield runs along a world axis, which is every airfield surveyed by this build.
+     *
+     * <p>An airfield saved by an earlier one can be diagonal — the survey took the two clicks as the
+     * two ends of the centreline, so two corner clicks stored the diagonal — and it is loaded and
+     * flown exactly as saved. This is how {@code airfields info} spots one and says so; nothing
+     * reinterprets a stored threshold on its own.
+     */
+    public boolean isAxisAligned() {
+        return thresholdA.getX() == thresholdB.getX() || thresholdA.getZ() == thresholdB.getZ();
     }
 
     /** Moves a clicked position onto the terrain surface, so a click on a wall still works. */
@@ -1325,251 +1422,6 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         }
         // surfaceHeight is the first free block; the runway surface is the block below it.
         return new BlockPos(pos.getX(), surface - 1, pos.getZ());
-    }
-
-    /** Narrowest cross-section that is still worth believing, in blocks. */
-    private static final int MIN_MEASURED_WIDTH = 3;
-
-    /**
-     * How far the strip reaches to either side of one point, in whole blocks.
-     *
-     * @param left          blocks of strip found to the left of the probed point
-     * @param right         blocks of strip found to its right
-     * @param leftBounded   whether the walk to the left stopped at an edge rather than running out of
-     *                      probe range. Kept because {@code left == limit} is ambiguous on its own —
-     *                      an edge exactly {@code limit} blocks out and ground that carries on past
-     *                      the probe produce the same count, and only one of them is a measurement.
-     * @param rightBounded  the same, to the right
-     */
-    private record CrossSection(int left, int right, boolean leftBounded, boolean rightBounded) {
-        /** How far the probed point is to the right of the middle of what was found. */
-        double offsetFromMiddle() {
-            return (right - left) / 2.0;
-        }
-
-        int width() {
-            return left + right + 1;
-        }
-
-        /** True when neither side found an edge, so this says nothing about where the strip ends. */
-        boolean unbounded() {
-            return !leftBounded && !rightBounded;
-        }
-    }
-
-    /**
-     * How far the strip reaches to either side of {@code point}, by elevation first and by surface
-     * material only where elevation found nothing.
-     *
-     * <h2>Why there are two rules and why this is the order</h2>
-     * The elevation walk — the strip continues sideways for as long as the surface stays within a
-     * block of {@code reference} — is the whole rule and stays the whole rule wherever it works. It
-     * is what a raised strip, an embankment, a plinth or a runway cut into a slope reads as, and it
-     * is what every airfield that surveys correctly today is measured by.
-     *
-     * <p>It reads nothing at all on the case this exists for: a runway <em>painted</em> onto a field,
-     * a strip of concrete or gravel or smooth stone laid flush with the ground it sits in. There the
-     * probe walks off the runway and out across the field without ever seeing a change, so the survey
-     * cannot tell where the strip ends. That was silent and it was wrong in three places at once —
-     * the thresholds stayed on whatever corner block was clicked, the width came back as the probe
-     * ceiling rather than a measurement, and {@link #centrelineOffset} read zero, so {@code airfields
-     * info} did not even say the field needed re-surveying. Measured before this change on a 25-wide
-     * smooth-stone strip flush on a stone plateau, both ends clicked on the {@code z=20} edge of a
-     * strip running {@code z=20..44}: thresholds stored at {@code z=20}, no correction printed, the
-     * whole take-off roll at {@code z=18.7..19.1} — <em>off the strip</em> — and the touchdown at
-     * {@code z=21}, one block inside the near edge. Where the surrounding field does happen to have
-     * an edge within probe range the answer was worse than useless rather than merely absent: the
-     * same strip on a narrower plateau stored {@code z=24}, having centred the runway on the
-     * <em>plateau</em>.
-     *
-     * <p><b>Material is consulted only when elevation is unbounded on both sides</b>, i.e. only when
-     * the terrain has said nothing whatsoever about where the strip ends. That ordering is the whole
-     * of the safety argument: a genuinely raised strip never reaches the material walk, so no survey
-     * that works today can change its answer. The two are never blended and never minimised together
-     * — a naturally patchy surface, grass beside dirt beside coarse dirt, would collapse the strip to
-     * a block or two if material were allowed to override an edge the terrain really has.
-     *
-     * <p><b>A material answer that is not credible is thrown away</b> and the elevation answer is kept
-     * exactly as it is today. Two ways it can fail: uniform ground — a superflat world, a plateau of
-     * one block — walks to the limit on both sides and has found no edges either, and a patch narrower
-     * than {@value #MIN_MEASURED_WIDTH} blocks is not a runway. Both give back the unbounded
-     * elevation reading, which centres nothing and leaves the clicked line alone. Nothing here invents
-     * a centreline out of ground that has none.
-     *
-     * @param limit how far to probe on each side. {@link #measureWidth} uses half
-     *              {@link AutopilotConfig#SURVEY_MAX_WIDTH}, because it probes from the middle;
-     *              {@link #centreOnStrip} uses the whole of it, because it probes from wherever the
-     *              player clicked and that may be one full width away from the far edge.
-     */
-    private static CrossSection crossSection(Level level, Vec3 point, double heading,
-                                             double reference, int limit) {
-        CrossSection byHeight = walkOut(point, heading, limit,
-            probe -> levelWith(level, probe, reference));
-        if (!byHeight.unbounded()) {
-            return byHeight;
-        }
-        Block surface = surfaceBlock(level, point);
-        if (surface == null) {
-            return byHeight;
-        }
-        CrossSection byMaterial = walkOut(point, heading, limit,
-            probe -> surfaceBlock(level, probe) == surface);
-        if (byMaterial.unbounded() || byMaterial.width() < MIN_MEASURED_WIDTH) {
-            return byHeight;
-        }
-        return byMaterial;
-    }
-
-    /** Whether the column at {@code probe} is still the same strip as the point walked out from. */
-    @FunctionalInterface
-    private interface StripTest {
-        boolean sameStrip(Vec3 probe);
-    }
-
-    /**
-     * Walks out to both sides of {@code point}, perpendicular to {@code heading}, stopping on each
-     * side at the first column {@code test} rejects.
-     *
-     * <p>Probes one column past {@code limit} purely to find out <em>why</em> the walk stopped, and
-     * still reports at most {@code limit} blocks either way. Without that extra probe a strip whose
-     * edge sits exactly on the limit is indistinguishable from ground that carries on for ever, and
-     * telling those two apart is the entire precondition for consulting the surface material.
-     */
-    private static CrossSection walkOut(Vec3 point, double heading, int limit, StripTest test) {
-        int right = 0;
-        boolean rightBounded = false;
-        for (int offset = 1; offset <= limit + 1; offset++) {
-            if (!test.sameStrip(AutopilotMath.pointAlong(point, heading + 90.0, offset))) {
-                rightBounded = true;
-                break;
-            }
-            right = Math.min(offset, limit);
-        }
-        int left = 0;
-        boolean leftBounded = false;
-        for (int offset = 1; offset <= limit + 1; offset++) {
-            if (!test.sameStrip(AutopilotMath.pointAlong(point, heading - 90.0, offset))) {
-                leftBounded = true;
-                break;
-            }
-            left = Math.min(offset, limit);
-        }
-        return new CrossSection(left, right, leftBounded, rightBounded);
-    }
-
-    /**
-     * The block an aircraft would stand on in this column, or null where there is nothing to read.
-     *
-     * <p>One block below {@link TerrainScanner#surfaceHeight}, which reports the first <em>free</em>
-     * block — the same convention {@link #snapToSurface} uses to turn a click into a threshold, so the
-     * material compared here is the material of the surface the runway is made of.
-     */
-    private static @Nullable Block surfaceBlock(Level level, Vec3 probe) {
-        int surface = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
-        if (surface == TerrainScanner.UNKNOWN_HEIGHT) {
-            return null;
-        }
-        return level.getBlockState(BlockPos.containing(probe.x, surface - 1, probe.z)).getBlock();
-    }
-
-    /**
-     * Moves two clicked end points sideways onto the middle of the strip they are standing on, and
-     * returns them as thresholds.
-     *
-     * <p><b>Each end is centred on its own cross-section, so the clicked heading is a starting guess
-     * rather than the answer.</b> The obvious alternative — shift both ends by one common amount, so
-     * that the direction the player indicated is preserved exactly — was tried first and is wrong on
-     * the case that matters most. Clicking a corner is the normal thing to do, and the two corners
-     * that are easiest to reach are usually on opposite sides of the strip; a common shift averages
-     * those two offsets to about zero and leaves the centreline running diagonally across the runway,
-     * which is exactly the arrival the report complains about. Centring the ends independently turns
-     * the same two clicks into the true axis. Measured on a 160x13 strip with the near-left and
-     * far-right corners clicked: the clicked heading is 4.3 degrees off the strip, the common shift
-     * leaves it there, and independent centring produces 000/180 with both thresholds on the middle.
-     *
-     * <p>The cost of independence is that the survey may return a slightly different heading from
-     * the one clicked, and therefore different designators. That is a correction, not a surprise —
-     * the strip's own edges are better evidence of which way it runs than two clicks are.
-     *
-     * <p><b>Ground the survey cannot tell from the strip is left alone.</b> The cross-section looks
-     * for an edge in elevation and, only where the terrain has none to offer, in the surface material
-     * — so a runway painted flush onto a field is centred on its own paint, and ground that is
-     * uniform in both, a superflat world or a plateau of one block, produces no edges either way, an
-     * offset of zero and the clicked line kept unchanged. See {@link #crossSection}. Nothing here
-     * invents a centreline out of ground that has none.
-     */
-    private static BlockPos[] centreOnStrip(Level level, BlockPos clickedA, BlockPos clickedB) {
-        BlockPos a = clickedA;
-        BlockPos b = clickedB;
-        for (int pass = 0; pass < AutopilotConfig.SURVEY_CENTRING_PASSES; pass++) {
-            double heading = AutopilotMath.headingTo(surfacePoint(a), surfacePoint(b));
-            BlockPos movedA = centreEnd(level, a, heading);
-            BlockPos movedB = centreEnd(level, b, heading);
-            if (movedA.equals(a) && movedB.equals(b)) {
-                break;
-            }
-            a = movedA;
-            b = movedB;
-        }
-        return new BlockPos[] {a, b};
-    }
-
-    /** One end moved onto the middle of its own cross-section, re-snapped to the surface there. */
-    private static BlockPos centreEnd(Level level, BlockPos end, double heading) {
-        Vec3 point = surfacePoint(end);
-        CrossSection section = crossSection(level, point, heading, point.y,
-            AutopilotConfig.SURVEY_MAX_WIDTH);
-        int offset = (int) Math.round(section.offsetFromMiddle());
-        if (offset == 0) {
-            return end;
-        }
-        Vec3 moved = AutopilotMath.pointAlong(point, heading + 90.0, offset);
-        return snapToSurface(level,
-            new BlockPos((int) Math.floor(moved.x), end.getY(), (int) Math.floor(moved.z)));
-    }
-
-    /** The point an aircraft touches at a threshold block: the centre of its top face. */
-    private static Vec3 surfacePoint(BlockPos threshold) {
-        return new Vec3(threshold.getX() + 0.5, threshold.getY() + 1.0, threshold.getZ() + 0.5);
-    }
-
-    /**
-     * How far the stored centreline of this airfield lies from the middle of the strip underneath
-     * it, in blocks — 0 on a runway surveyed since the survey started centring, and up to half the
-     * runway width on one surveyed before it. Measures live terrain, so it is only meaningful with
-     * the runway's chunks loaded and it is deliberately not stored.
-     *
-     * <p>Deliberately the same {@link #crossSection} the survey itself centres on, so this reports
-     * exactly the correction {@code /autopilot airfields resurvey} would apply and never advertises
-     * one the survey would then decline to make. That includes the material rule: a field painted
-     * flush on a plain used to read 0 here — no edges, nothing to say — while sitting on the corner
-     * of its own strip, which is the worst answer available, since it is both wrong and silent.
-     */
-    public double centrelineOffset(Level level) {
-        double heading = AutopilotMath.headingTo(pointA(), pointB());
-        double offsetA = crossSection(level, pointA(), heading, pointA().y,
-            AutopilotConfig.SURVEY_MAX_WIDTH).offsetFromMiddle();
-        double offsetB = crossSection(level, pointB(), heading, pointB().y,
-            AutopilotConfig.SURVEY_MAX_WIDTH).offsetFromMiddle();
-        return Math.max(Math.abs(offsetA), Math.abs(offsetB));
-    }
-
-    private static int measureWidth(Level level, BlockPos a, BlockPos b) {
-        Vec3 centreA = surfacePoint(a);
-        Vec3 centreB = surfacePoint(b);
-        double heading = AutopilotMath.headingTo(centreA, centreB);
-        Vec3 middle = new Vec3((centreA.x + centreB.x) * 0.5, (centreA.y + centreB.y) * 0.5, (centreA.z + centreB.z) * 0.5);
-        // Half the maximum on each side, because this probes from the middle of a centreline that
-        // centreOnStrip has already put there. Before that it probed from wherever the player
-        // clicked, which is why an edge click on a 25-wide strip used to report a width of 13: one
-        // side found nothing and the other hit the limit halfway across.
-        return Math.max(MIN_MEASURED_WIDTH, crossSection(level, middle, heading, middle.y,
-            AutopilotConfig.SURVEY_MAX_WIDTH / 2).width());
-    }
-
-    private static boolean levelWith(Level level, Vec3 probe, double reference) {
-        int height = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
-        return height != TerrainScanner.UNKNOWN_HEIGHT && Math.abs(height - reference) <= 1.0;
     }
 
     /**

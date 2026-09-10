@@ -402,7 +402,7 @@ public final class AutopilotDispatcher {
         // autopilot and carries its own bubble.
         release(level, shuttle);
         data.putShuttle(shuttle.departed(plane.getUUID(), now));
-        report(level, shuttle, "Shuttle " + shuttle.id() + ": plane #" + plane.getId()
+        progress(level, shuttle, "Shuttle " + shuttle.id() + ": plane #" + plane.getId()
             + " departing " + from.name() + " for " + to.name() + ".");
     }
 
@@ -426,7 +426,7 @@ public final class AutopilotDispatcher {
         // chatter. It is the line that says the cycle is still turning: the arrival report beside it
         // is about one flight, and a shuttle that has quietly stopped between legs looks exactly
         // like one whose next departure has not come round yet.
-        report(level, shuttle, "Shuttle " + shuttle.id() + ": plane #" + plane.getId() + " down at "
+        progress(level, shuttle, "Shuttle " + shuttle.id() + ": plane #" + plane.getId() + " down at "
             + airfield + (problem.isEmpty() ? "" : " (" + problem + ")") + ", leaving for "
             + updated.to() + " in " + updated.delayTicks() / 20 + "s.");
     }
@@ -748,5 +748,19 @@ public final class AutopilotDispatcher {
 
     private static void report(ServerLevel level, Shuttle shuttle, String message) {
         AutopilotFeedback.report(owner(level, shuttle), message);
+    }
+
+    /**
+     * A leg of the cycle turning over, which is only news to somebody watching for it.
+     *
+     * <p>A shuttle runs unattended and for ever, so one line per departure and one per arrival is a
+     * feed that never ends and that nobody asked to start — the schedule was set up once, days ago.
+     * What a player has to see is the schedule going wrong, and that is {@link #defer} and
+     * {@link #pause}, both of which still report. The rest is {@code /autopilot shuttle list}, which
+     * shows every shuttle's state and reason on demand, and {@code /autopilot debug true} for anybody
+     * who wants to watch a cycle live.
+     */
+    private static void progress(ServerLevel level, Shuttle shuttle, String message) {
+        AutopilotFeedback.progress(owner(level, shuttle), message);
     }
 }

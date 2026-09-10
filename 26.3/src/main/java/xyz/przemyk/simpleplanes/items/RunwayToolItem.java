@@ -24,8 +24,8 @@ import xyz.przemyk.simpleplanes.autopilot.AutopilotOutput;
 import java.util.function.Consumer;
 
 /**
- * Runway survey tool. Mark the two thresholds of a strip and it measures the runway, reports its
- * characteristics and registers it as a named airfield the autopilot can land at.
+ * Runway survey tool. Mark two opposite corners of a strip and it registers that rectangle as a
+ * named airfield the autopilot can land at.
  *
  * <p>The tool has two modes, because an apron only means anything next to a runway that has already
  * been surveyed — it is the second half of the same job, not a separate one, so it did not deserve a
@@ -33,7 +33,8 @@ import java.util.function.Consumer;
  *
  * <p><b>Survey mode</b> (the default):
  * <ul>
- *   <li>right-click a block — mark the first threshold, then the second (which runs the survey)</li>
+ *   <li>right-click a block — mark one corner of the runway, then the opposite one (which runs
+ *       the survey)</li>
  *   <li>sneak + right-click a block — cancel a half-marked runway</li>
  * </ul>
  *
@@ -85,7 +86,7 @@ public class RunwayToolItem extends Item {
 
         if (context.isSecondaryUseActive()) {
             stack.remove(AutopilotComponents.RUNWAY_ANCHOR);
-            AutopilotFeedback.info(player, "Runway marking cancelled.");
+            AutopilotFeedback.overlay(player, "Runway marking cancelled");
             return InteractionResult.CONSUME;
         }
 
@@ -93,8 +94,11 @@ public class RunwayToolItem extends Item {
         BlockPos anchor = stack.get(AutopilotComponents.RUNWAY_ANCHOR);
         if (anchor == null) {
             stack.set(AutopilotComponents.RUNWAY_ANCHOR, clicked);
-            AutopilotFeedback.info(player, "Threshold 1 at " + clicked.toShortString()
-                + ". Now mark the far end of the runway.");
+            // The action bar, not chat: this is one half of a gesture the player is in the middle of
+            // making, it is replaced by its own second half a moment later, and the preview on the
+            // ground is already showing them the corner and the rectangle it would make.
+            AutopilotFeedback.overlay(player, "Corner 1 at " + clicked.toShortString()
+                + " - now mark the opposite corner");
             return InteractionResult.CONSUME;
         }
 
@@ -103,22 +107,26 @@ public class RunwayToolItem extends Item {
             return InteractionResult.CONSUME;
         }
 
-        double length = Math.sqrt(anchor.distSqr(clicked));
+        // The long side of the marked box, which is what the runway will be laid out along. Measured
+        // the same way Airfield#footprint measures it, so the tool never refuses a selection the
+        // survey would have accepted or the other way about.
+        int spanX = Math.abs(anchor.getX() - clicked.getX()) + 1;
+        int spanZ = Math.abs(anchor.getZ() - clicked.getZ()) + 1;
+        int length = Math.max(spanX, spanZ);
         if (length < 20) {
-            AutopilotFeedback.warn(player, "That runway is only " + (int) length
-                + " blocks long; mark at least 20 blocks apart.");
+            AutopilotFeedback.warn(player, "That runway is only " + length
+                + " blocks long; mark corners at least 20 blocks apart.");
             return InteractionResult.CONSUME;
         }
 
         Airfield surveyed = AirfieldReport.surveyAndRegister(
             AutopilotOutput.toPlayer(player), serverLevel, anchor, clicked);
         // A strip whose surface will not do registers nothing, and nothing is said about it here.
-        // The report went to this same player a line ago and it says the part that varies — which
-        // block is in the way and where it is, or that the ground is too uneven, or that the strip
-        // is not loaded — and then "Nothing was registered. Clear the strip and mark both ends
-        // again." A second line here repeated that word for word and named the cover rule as the
-        // reason whichever rule had actually refused the strip, so a player turned away for
-        // roughness was told to clear grass that was not there.
+        // The refusal went to this same player a line ago and it is one line: the part that varies —
+        // which block is in the way and where it is, or that the ground is too uneven, or that the
+        // strip is not loaded — and what to do about it. A second line here repeated that and named
+        // the cover rule as the reason whichever rule had actually refused the strip, so a player
+        // turned away for roughness was told to clear grass that was not there.
         //
         // The tool stays in survey mode with no anchor set, so the next click starts the same job
         // again on the cleared strip — putting it into parking mode here would be offering to finish
@@ -137,8 +145,8 @@ public class RunwayToolItem extends Item {
         // marked, or one from before the rule, leaves the tool exactly where the player left it.
         if (surveyed.standsMissing()) {
             stack.set(AutopilotComponents.PARKING_MODE, true);
-            AutopilotFeedback.warn(player, "Parking mode: now right-click beside the runway to mark"
-                + " where aircraft park. " + surveyed.name() + " is not usable until you do.");
+            AutopilotFeedback.warn(player, surveyed.name() + " has no stand yet and cannot fly until"
+                + " it has one: right-click beside the runway to mark where aircraft park.");
         }
         return InteractionResult.CONSUME;
     }
@@ -182,9 +190,12 @@ public class RunwayToolItem extends Item {
             // A half-marked runway means nothing in parking mode, and leaving it set would make the
             // next survey click finish a runway the player has forgotten they started.
             stack.remove(AutopilotComponents.RUNWAY_ANCHOR);
-            AutopilotFeedback.info(player, parking
-                ? "Parking mode: right-click to mark where aircraft park, sneak + right-click to remove."
-                : "Survey mode: right-click both ends of a runway.");
+            // A mode-switch confirmation is transient status about the item in hand, so it goes to
+            // the action bar, where it replaces itself and leaves chat alone. The tooltip on the
+            // item says the same thing for anyone who looks later.
+            AutopilotFeedback.overlay(player, parking
+                ? "Parking mode: right-click a stand, sneak + right-click to remove"
+                : "Survey mode: right-click two opposite corners of a runway");
             return InteractionResult.CONSUME;
         }
         AirfieldBrowser.list(AutopilotOutput.toPlayer(player), serverLevel, player.position(),

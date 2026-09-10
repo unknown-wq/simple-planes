@@ -193,6 +193,12 @@ public class PlaneAutopilot {
         this.arrival = null;
         this.replans = 0;
         this.corridorReplannedFor = null;
+        // Re-tasking an airframe reuses the object (AutopilotSpawner takes a parked aircraft rather
+        // than building one), so the previous sortie's leg has to be forgotten here or its landing
+        // would be reported again at the end of this one.
+        this.announcedArrival = null;
+        this.arrivalAnnouncements = 0;
+        this.landedSummary = null;
         this.departureEnd = null;
         this.departurePlan = null;
         this.departureHoldTicks = 0;
@@ -224,7 +230,7 @@ public class PlaneAutopilot {
         departurePlan = resolveDeparture(plane, flightPlan);
         departureEnd = departurePlan == null ? null : departurePlan.end();
         if (departureEnd != null) {
-            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " departure from "
+            AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " departure from "
                 + departureEnd.airfield().name() + ": " + departurePlan.describe().getString() + ".");
             // Always through PARKED, even with no delay ordered: this is where the runway is asked
             // for, and a zero delay simply means the first tick asks for it.
@@ -800,7 +806,7 @@ public class PlaneAutopilot {
             }
             return;
         }
-        AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " cleared to taxi at "
+        AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " cleared to taxi at "
             + airfield + "/" + departureEnd.designator() + " after " + modeTicks / 20
             + "s on the parking spot.");
         setMode(plane, AutopilotMode.TAXI);
@@ -878,7 +884,7 @@ public class PlaneAutopilot {
         cmdHeading = runwayHeading;
         double headingError = Math.abs(AutopilotMath.angleDelta(plane.getYRot(), runwayHeading));
         if (headingError <= AutopilotConfig.TAXI_ALIGNED_ERROR) {
-            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " lined up on "
+            AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " lined up on "
                 + departureEnd.airfield().name() + "/" + departureEnd.designator() + ", departing.");
             setMode(plane, AutopilotMode.TAKEOFF);
         } else if (modeTicks > AutopilotConfig.TAXI_TIMEOUT) {
@@ -1405,21 +1411,82 @@ public class PlaneAutopilot {
     }
 
     /**
-     * Records the arrival plan and says so, once, when it is taken. Reported rather than whispered:
-     * "why is it circling" is precisely the question a headless log has to be able to answer, and
-     * the reason phrase is the answer. A replan says what made it replan, which is the other half —
-     * a plan that changes for no stated reason is indistinguishable from one that was never made.
+     * How the landing read, kept from the moment of touchdown until the aircraft is on its stand, so
+     * that the leg is announced in one line instead of three. Null until it lands.
+     */
+    private @Nullable String landedSummary;
+
+    /**
+     * What the last announced arrival plan was, as end + reason + trigger, so the same decision is
+     * not announced twice. Deliberately without the range: the range is the only part that always
+     * differs and the only part nobody acts on.
+     */
+    private @Nullable String announcedArrival;
+
+    /**
+     * How many arrival decisions this flight has announced, so that it stops after
+     * {@link AutopilotConfig#ARRIVAL_QUIET_REPLANS} of them. Counts announcements rather than
+     * replans: a decision that was dropped as a repeat said nothing and so costs nothing.
+     */
+    private int arrivalAnnouncements;
+
+    /**
+     * Records the arrival plan and says so, once, when it is taken.
+     *
+     * <p><b>Progress rather than a report.</b> "Why is it circling" is a real question and the reason
+     * phrase is its answer, but this is not where a player wants that answer by default. An aircraft
+     * holding for a busy runway replans every time the runway ahead of it frees up and fills again —
+     * once per landing in front of it, per holding aircraft — so four machines in the circuit produce
+     * a screenful of lines whose only varying content is a range. The live version of the same
+     * information is on the tower board, which is a display and not a feed; this line is for the
+     * player who asked to watch a flight decide, with {@code /autopilot debug true}.
+     *
+     * <p>Repeats are dropped even then. A replan that reaches the same end, for the same reason, off
+     * the same trigger has nothing new to say. That alone does not bound it, because the reason
+     * really does alternate — holding, then a real approach, then holding again as the runway in
+     * front empties and fills — so the announcements also stop after
+     * {@link AutopilotConfig#ARRIVAL_QUIET_REPLANS}, the way a repeatedly deferred shuttle stops.
+     * The last one says so, and the plan itself stays visible on {@code /autopilot tower}.
+     *
+     * <p>The trigger is dropped when the reason already carries it — "holding, runway busy (the
+     * runway is busy)" said one thing twice.
      */
     private void commitArrival(PlaneEntity plane, ArrivalPlan planned, @Nullable String trigger) {
         arrival = planned;
         nextArrivalCheck = ticks + AutopilotConfig.ARRIVAL_RECHECK_INTERVAL;
         plannedObstacles = landingAirfield.approachObstacles(plane.level(), planned.end());
+        String reason = planned.reason();
+        String key = planned.end().designator() + "|" + reason + "|" + trigger;
+        if (key.equals(announcedArrival)) {
+            return;
+        }
+        announcedArrival = key;
+        if (arrivalAnnouncements >= AutopilotConfig.ARRIVAL_QUIET_REPLANS) {
+            return;
+        }
+        arrivalAnnouncements++;
         double range = AutopilotMath.horizontalDistance(plane.position(), planned.end().threshold());
-        AutopilotFeedback.report(owner, "Plane #" + plane.getId()
+        boolean saidTwice = trigger != null && sameThing(reason, trigger);
+        AutopilotFeedback.progress(owner, "Plane #" + plane.getId()
             + (trigger == null ? " arrival at " : " replanning the arrival at ")
-            + landingAirfield.name() + "/" + planned.end().designator() + ": " + planned.reason()
+            + landingAirfield.name() + "/" + planned.end().designator() + ": " + reason
             + ", decided " + Math.round(range) + " blocks out"
-            + (trigger == null ? "" : " (" + trigger + ")") + ".");
+            + (trigger == null || saidTwice ? "" : " (" + trigger + ")") + "."
+            + (arrivalAnnouncements == AutopilotConfig.ARRIVAL_QUIET_REPLANS
+                ? " Quietly from here; /autopilot tower keeps the plan." : ""));
+    }
+
+    /**
+     * Whether a replan trigger says what the plan's own reason already says.
+     *
+     * <p>Only one pair does, and it is the pair that fires most: {@code the runway is busy} against
+     * {@code holding, runway busy}. Matched on the words rather than on the enum because the reason
+     * is a translated phrase — {@code ArrivalPlan#describe} — and the trigger is not, so there is no
+     * shared token to compare and no honest way to compare the two after translation. In another
+     * language the parenthetical simply comes back, which is the safe direction to fail in.
+     */
+    private static boolean sameThing(String reason, String trigger) {
+        return reason.contains("runway busy") && trigger.contains("runway is busy");
     }
 
     /** The cruise speed this flight was ordered to fly, or the default for a plan-less aircraft. */
@@ -1765,21 +1832,27 @@ public class PlaneAutopilot {
                 // that has parked itself on the very lip of a 183-block one; the percentage says
                 // which, and it is what the aim point is tuned against.
                 long used = Math.round(100.0 * along / Math.max(landingEnd.length(), 1.0E-3));
-                AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " landed at "
-                    + landingAirfield.name() + "/" + landingEnd.designator() + ", " + where
-                    // "the N-block runway" rather than "a N-block runway": the indefinite article
-                    // would need a/an chosen from how the number is pronounced ("an 18-block", "a
-                    // 183-block"), which is not a rule worth writing.
-                    + " (" + down + (down == 1 ? " block" : " blocks") + " down the "
-                    + Math.round(landingEnd.length()) + "-block runway, " + used + "% used).");
-                // The landing line is printed either way and is unchanged, because it is the
-                // assertion every arrival in this feature is regressed against. What follows it is
-                // the new half: leaving the strip. Only a real landing earns it — an aircraft that
-                // came to rest in the water or fifty blocks off the centreline is not going to taxi
-                // anywhere, and asking it to would turn a clean failure report into a hang.
+                // Kept for the line that ends the leg, so landing and parking are one line rather
+                // than two. "the N-block runway" rather than "a N-block runway": the indefinite
+                // article would need a/an chosen from how the number is pronounced ("an 18-block",
+                // "a 183-block"), which is not a rule worth writing.
+                landedSummary = "Plane #" + plane.getId() + " landed at "
+                    + landingAirfield.name() + "/" + landingEnd.designator() + ", "
+                    + down + (down == 1 ? " block" : " blocks") + " down the "
+                    + Math.round(landingEnd.length()) + "-block runway (" + used + "% used)";
+                // Only a real landing earns a taxi in — an aircraft that came to rest in the water
+                // or fifty blocks off the centreline is not going to taxi anywhere, and asking it to
+                // would turn a clean failure report into a hang.
+                //
+                // The landing is announced here as a report only when nothing further is going to
+                // happen to it. When the taxi in starts, the line that announces the leg is the one
+                // printed when it parks, and printing this one as well would be the three-line
+                // arrival this is meant to stop being.
                 if (beginTaxiIn(plane)) {
+                    AutopilotFeedback.progress(owner, landedSummary + " at " + where + ".");
                     return;
                 }
+                AutopilotFeedback.report(owner, landedSummary + " at " + where + ".");
             } else {
                 AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " did not land at "
                     + landingAirfield.name() + "/" + landingEnd.designator() + ": came to rest "
@@ -1844,7 +1917,7 @@ public class PlaneAutopilot {
         clearOfRunway = false;
         taxiInStalledTicks = 0;
         Vec3 stand = taxi.stand().position();
-        AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " vacating "
+        AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " vacating "
             + landingAirfield.name() + "/" + landingEnd.designator() + ", taxiing to the stand at "
             + Math.round(stand.x) + ", " + Math.round(stand.y) + ", " + Math.round(stand.z)
             + " via " + taxiInRoute.size() + (taxiInRoute.size() == 1 ? " leg." : " legs."));
@@ -1893,7 +1966,7 @@ public class PlaneAutopilot {
             && !landingAirfield.isOnStrip(plane.position(), AutopilotConfig.RUNWAY_CLEAR_MARGIN)) {
             clearOfRunway = true;
             RunwayOccupancy.release(plane.level(), landingAirfield.name(), plane);
-            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " is clear of "
+            AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " is clear of "
                 + landingAirfield.name() + "/" + landingEnd.designator() + " after " + modeTicks
                 + " ticks, " + Math.round(distance) + " blocks still to taxi.");
         }
@@ -1958,10 +2031,18 @@ public class PlaneAutopilot {
             if (standTarget.marked() != null) {
                 StandOccupancy.take(plane.level(), landingAirfield.name(), standTarget.marked(), plane);
             }
-            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " parked at "
+            // One line for the whole leg. Landing, vacating and parking were three reports for what
+            // a player watches as a single event, and the two in the middle were the ones nobody
+            // could act on. What is left names the landing, so an arrival is still greppable, and
+            // says where the aircraft now is, which is where they go to fly it again. The stand
+            // block and the taxi time are detail and went with the detail.
+            AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " on the stand at "
                 + landingAirfield.name() + ", " + where + " (stand "
                 + (standTarget.marked() == null ? "?" : standTarget.marked().toShortString())
                 + ", " + modeTicks + " ticks from the runway).");
+            AutopilotFeedback.report(owner, (landedSummary == null
+                ? "Plane #" + plane.getId() : landedSummary)
+                + ", parked at " + landingAirfield.name() + ", " + where + ".");
         } else {
             // Deliberately not "landed": the landing line has already been printed and was true. This
             // one is about the taxi, and an aircraft that stops short of its stand is still off the
@@ -2100,11 +2181,11 @@ public class PlaneAutopilot {
         if (goArounds == AutopilotConfig.MAX_GO_AROUNDS && landingEnd != null) {
             // Try the other direction once before giving up on a clean approach.
             landingEnd = landingEnd.opposite();
-            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " switching to runway " + landingEnd.designator() + ".");
+            AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " switching to runway " + landingEnd.designator() + ".");
         } else if (goArounds > AutopilotConfig.MAX_GO_AROUNDS) {
             // Out of patience: commit to the next approach even if it is untidy.
             gatesDisabled = true;
-            AutopilotFeedback.report(owner, "Plane #" + plane.getId() + " committing to the landing.");
+            AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " committing to the landing.");
         }
         setMode(plane, AutopilotMode.GO_AROUND);
     }

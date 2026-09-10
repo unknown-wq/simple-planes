@@ -617,7 +617,7 @@ public final class AutopilotSpawner {
             plane.setOldPosAndRot();
             // "Helicopter" or "Plane", the same two words every other report about an aircraft
             // uses, so a reader does not have to work out which kind of field this was.
-            AutopilotFeedback.report(owner,
+            AutopilotFeedback.progress(owner,
                 (type == AircraftType.HELICOPTER ? "Helicopter #" : "Plane #") + plane.getId()
                     + " taken from stand " + claimed.stand().toShortString() + " at " + field
                     + " and re-tasked; no new airframe built.");

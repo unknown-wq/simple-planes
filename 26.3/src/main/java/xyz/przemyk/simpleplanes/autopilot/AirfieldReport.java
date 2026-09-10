@@ -18,7 +18,7 @@ public final class AirfieldReport {
     private AirfieldReport() {}
 
     /**
-     * Surveys the strip between two thresholds, registers it and reports it.
+     * Surveys the strip spanned by two opposite corners, registers it and says so in one line.
      *
      * <p>Re-surveying a strip <em>replaces</em> the airfield that is already there rather than
      * registering a second one beside it. Marking the same runway twice is the normal way to correct
@@ -65,12 +65,15 @@ public final class AirfieldReport {
 
         String surface = airfield.surfaceProblem(level);
         if (surface != null) {
-            reportCentring(output, first, second, airfield);
-            report(output, level, airfield, null, surface, false);
-            output.warn(existing == null
-                ? "  Nothing was registered. Clear the strip and mark both ends again."
-                : "  Nothing was changed; " + existing.name() + " is still registered exactly as it"
-                    + " was. Clear the strip and mark both ends again.");
+            // One line, and it is the one blocking thing plus what to do about it. This used to be
+            // eleven: a heading that said the strip was not usable, every measurement that had
+            // passed, the refusal itself, and then a third sentence saying nothing had been
+            // registered — three phrasings of one fact, with the only actionable sentence buried in
+            // the middle of them.
+            output.warn((existing == null
+                ? "Not registered: "
+                : existing.name() + " unchanged: ") + surface
+                + ". Clear it and mark the two corners again.");
             return null;
         }
 
@@ -79,13 +82,43 @@ public final class AirfieldReport {
             airfield = airfield.withParkingSpots(List.of(derived));
         }
         data.put(airfield);
-        if (existing != null) {
-            output.line("Re-surveyed " + airfield.name() + ", replacing the previous measurement.");
-        }
-        reportCentring(output, first, second, airfield);
-        report(output, level, airfield, derived, null, true);
+        registered(output, airfield, derived, existing != null);
         highlight(level, airfield);
         return airfield;
+    }
+
+    /**
+     * The whole of what a successful registration says: one line.
+     *
+     * <p>It used to be fifteen — the measurements, the surface verdict, both approach counts, the
+     * preferred direction, and a four-line essay on how to move the stand — printed every time
+     * anybody marked a runway. All of it except the stand is already in
+     * {@code /autopilot airfields info}, which is where somebody who wants it goes and which this
+     * line names so that they know it is there. What stays here is what a player checks against what
+     * they just marked: the name, the two designators, the size, and where the aircraft will stand.
+     *
+     * <p>The two clauses that are not measurements are kept because they are refusals in waiting: a
+     * strip too short for a sortie, and a field with no stand, both mean the airfield exists and
+     * cannot be flown. Neither is discoverable anywhere the player is looking.
+     */
+    private static void registered(AutopilotOutput output, Airfield airfield,
+                                   @Nullable BlockPos derived, boolean replacing) {
+        StringBuilder line = new StringBuilder();
+        line.append("Airfield ").append(airfield.name())
+            .append(replacing ? " re-surveyed (" : " registered (")
+            .append(airfield.designators()).append("), ")
+            .append(String.format("%.0f", airfield.length())).append("x").append(airfield.width());
+        if (derived != null) {
+            line.append(", stand at ").append(derived.toShortString());
+        } else if (airfield.standsMissing()) {
+            line.append(", no stand yet");
+        }
+        if (!AirfieldBrowser.isUsable(airfield)) {
+            line.append(String.format(", TOO SHORT for a sortie (needs %.0f)",
+                AutopilotConfig.MIN_USABLE_RUNWAY_LENGTH));
+        }
+        line.append(". /autopilot airfields info \"").append(airfield.name()).append("\"");
+        output.success(line.toString());
     }
 
     /**
@@ -139,33 +172,6 @@ public final class AirfieldReport {
     }
 
     /**
-     * Says so when the survey moved a threshold off the block that was clicked.
-     *
-     * <p>Silently relocating the thing the player just pointed at would be worse than the bug it
-     * fixes, and the number is the one that matters: half a runway width of correction is the
-     * difference between rolling down the middle and rolling along the edge. Nothing is printed when
-     * the clicks were already on the centreline, which is the case on any strip whose edges the
-     * survey cannot see (see {@code Airfield#centreOnStrip}).
-     */
-    private static void reportCentring(AutopilotOutput output, BlockPos first, BlockPos second,
-                                       Airfield airfield) {
-        // survey() keeps the order of the two clicks, and it only ever moves a threshold sideways,
-        // so this distance is the lateral correction and nothing else.
-        double moved = Math.max(horizontal(first, airfield.thresholdA()),
-            horizontal(second, airfield.thresholdB()));
-        if (moved >= 0.5) {
-            output.line(String.format("  centreline moved %.0f blocks: the thresholds are on the"
-                + " middle of the strip, not on the blocks that were clicked", moved));
-        }
-    }
-
-    private static double horizontal(BlockPos a, BlockPos b) {
-        double dx = a.getX() - b.getX();
-        double dz = a.getZ() - b.getZ();
-        return Math.sqrt(dx * dx + dz * dz);
-    }
-
-    /**
      * An already-registered airfield describing the same piece of ground as {@code surveyed}, or
      * null. "The same" is both thresholds landing within {@link #RESURVEY_TOLERANCE} of a registered
      * pair, in either order — the runway has two ends and which one is clicked first is arbitrary.
@@ -196,137 +202,6 @@ public final class AirfieldReport {
             index++;
         }
         return "airfield-" + index;
-    }
-
-    /**
-     * Everything the survey measured about a registered airfield, which is the point of the tool.
-     *
-     * <p><b>The surface answer is supplied by the caller rather than measured here</b>, and there is
-     * deliberately no overload that measures it. {@link Airfield#surfaceProblem(Level)} is the
-     * expensive question in this file — up to 325 heightmap lookups and some two thousand block
-     * reads, on the server thread — and every caller that prints a report has already had to ask it
-     * to decide whether there is an airfield to report at all. {@code resurvey} asked it and then
-     * called a convenience overload that asked it again: one command, two full scans of the strip.
-     *
-     * @param derivedStand   the stand {@link #deriveStand} just worked out, or null when every stand
-     *                       on this airfield was marked by hand — which is the case for a re-survey
-     *                       and for every caller outside {@code surveyAndRegister}
-     * @param surfaceProblem what {@link Airfield#surfaceProblem(Level)} told the caller about this
-     *                       strip, and null when it told them nothing
-     */
-    public static void report(AutopilotOutput output, Level level, Airfield airfield,
-                              @Nullable BlockPos derivedStand, @Nullable String surfaceProblem) {
-        report(output, level, airfield, derivedStand, surfaceProblem, true);
-    }
-
-    /**
-     * The whole report, for a strip that was registered and for one that was refused.
-     *
-     * @param surfaceProblem what {@link Airfield#surfaceProblem(Level)} said about this strip, or
-     *                       null when it said nothing. Passed in rather than measured here because
-     *                       the caller that refuses a strip has already asked, and asking costs a few
-     *                       thousand block reads.
-     * @param registered     whether the airfield this describes is actually in the registry. A
-     *                       refused strip prints the same measurements — they are what tells the
-     *                       player whether the thing they marked was the thing they meant — under a
-     *                       heading that does not claim it was registered, and without the parking
-     *                       lines, which are about an airfield that exists.
-     */
-    private static void report(AutopilotOutput output, Level level, Airfield airfield,
-                               @Nullable BlockPos derivedStand, @Nullable String surfaceProblem,
-                               boolean registered) {
-        RunwayEnd endA = airfield.endA();
-        RunwayEnd endB = airfield.endB();
-        // The counts the survey stored, which are the ones bestEnd will use for the rest of this
-        // airfield's life. Printing a freshly measured number here would let the report and the
-        // decision disagree.
-        int obstaclesA = airfield.hasSurveyedApproaches()
-            ? airfield.approachObstaclesA() : Airfield.countApproachObstacles(level, endA);
-        int obstaclesB = airfield.hasSurveyedApproaches()
-            ? airfield.approachObstaclesB() : Airfield.countApproachObstacles(level, endB);
-        RunwayEnd best = airfield.bestEnd(level);
-
-        if (registered) {
-            output.success("Airfield " + airfield.name() + " registered (" + airfield.designators() + ")");
-        } else {
-            output.warn("Not a usable runway (" + airfield.designators() + ", centred on "
-                + BlockPos.containing(airfield.centre()).toShortString() + "):");
-        }
-        output.line(String.format("  length %.0f, width %d, slope %.1f deg",
-            airfield.length(), airfield.width(), airfield.slopeDegrees()));
-        output.line(String.format("  threshold %s elevation %.0f, heading %03.0f deg",
-            endA.designator(), endA.elevation(), AutopilotMath.compassHeading(endA.landingHeading())));
-        output.line(String.format("  threshold %s elevation %.0f, heading %03.0f deg",
-            endB.designator(), endB.elevation(), AutopilotMath.compassHeading(endB.landingHeading())));
-        output.line(String.format("  surface roughness %.2f blocks (0 is perfectly flat, %.2f is the"
-            + " most this registers)", airfield.roughness(level), AutopilotConfig.RUNWAY_MAX_ROUGHNESS));
-        // Said on every report, pass or fail, in the same place and the same words, so that the line
-        // a player looks for after clearing a strip is the line that told them to clear it.
-        if (surfaceProblem == null) {
-            output.line("  surface: clear - nothing but air, snow or grass over the strip, across its"
-                + " whole width");
-        } else {
-            output.warn("  REFUSED: " + surfaceProblem);
-        }
-        output.line("  approach obstacles: " + endA.designator() + " -> " + obstaclesA
-            + ", " + endB.designator() + " -> " + obstaclesB
-            + " (of " + (AutopilotConfig.SURVEY_APPROACH_LENGTH / AutopilotConfig.SURVEY_APPROACH_STEP) + " samples)");
-        output.line("  preferred landing direction: " + best.designator());
-        if (!registered) {
-            // Deliberately nothing about parking here. Every one of those lines is advice about an
-            // airfield that exists, and this one does not.
-            reportLength(output, airfield);
-            return;
-        }
-        if (derivedStand != null) {
-            // Said out loud, and said as a derivation rather than as a decision. The square passed
-            // the same tests a stand marked by hand passes, so it is a stand and not a guess —
-            // but it is a stand the player did not choose, and the one thing the tests cannot check
-            // is whether it is where they wanted it. So the coordinate is printed, and so is the way
-            // to move it.
-            output.success("  stand derived at " + derivedStand.toShortString()
-                + ": level ground beside a threshold, checked exactly as a stand you mark yourself"
-                + " is checked. " + airfield.name() + " is ready to fly from.");
-            output.line("  Somewhere else would suit you better? Sneak + right-click that stand with"
-                + " the Runway Survey Tool in parking mode to drop it, then right-click where you"
-                + " want it — or /autopilot airfields unpark \"" + airfield.name() + "\" <x y z>.");
-        } else if (!airfield.parkingSpots().isEmpty()) {
-            output.line("  marked parking spots: " + airfield.parkingSpots().size());
-        } else if (airfield.standsMissing()) {
-            // The survey is not the end of the job any more, so it does not print as though it were.
-            // Two lines: what is missing, and how to supply it — in the same words the browser and a
-            // stopped arrival already use, with the command form alongside because this same report
-            // is what the headless rig reads.
-            //
-            // What the second line deliberately does not name is the mode-switch gesture. The tool
-            // puts itself into parking mode as soon as this report returns and announces it in the
-            // very next line of the same chat, so "sneak + right-click the air to put the tool into
-            // parking mode" was an instruction to toggle straight back out of the mode the following
-            // line says the player is now in. Stating the requirement rather than the gesture is
-            // right on both paths: on the tool path the next line tells the player they are already
-            // there, and on the command path — where this is also printed by resurvey — there need
-            // not be a tool in hand at all.
-            output.warn("  NOT FINISHED: no parking marked. A runway with nowhere to park is one an"
-                + " aircraft departs from a square nobody surveyed and lands on with nowhere to go,"
-                + " so sorties to and from " + airfield.name() + " are refused until a stand exists.");
-            output.line("  Next: mark a stand beside the runway with the Runway Survey Tool in"
-                + " parking mode, or: /autopilot airfields park \"" + airfield.name() + "\" <x y z>");
-        } else {
-            output.line("  no marked parking; departures use the apron derived from the survey");
-        }
-        reportLength(output, airfield);
-    }
-
-    /** The two length-and-slope warnings, which read the same whether or not the strip registered. */
-    private static void reportLength(AutopilotOutput output, Airfield airfield) {
-        if (!AirfieldBrowser.isUsable(airfield)) {
-            output.warn(String.format("  warning: only %.0f blocks long, and an aircraft needs %.0f"
-                    + " to land. Sorties into it will be refused.",
-                airfield.length(), AutopilotConfig.MIN_USABLE_RUNWAY_LENGTH));
-        }
-        if (Math.abs(airfield.slopeDegrees()) > 5) {
-            output.warn("  warning: steep slope.");
-        }
     }
 
     /** Marks one parking spot so a player can see where they just put it. */

@@ -143,7 +143,7 @@ public final class AirfieldBrowser {
         surfaceLine(output, level, airfield);
         thresholdLine(output, level, airfield, endA);
         thresholdLine(output, level, airfield, endB);
-        centrelineLine(output, level, airfield);
+        axisLine(output, airfield);
 
         output.component(AutopilotText.tr("detail.preferred", "  preferred landing direction %s",
             airfield.bestEnd(level).designator()));
@@ -229,7 +229,7 @@ public final class AirfieldBrowser {
      *       cause of is not.</li>
      * </ul>
      *
-     * <p>Silent when the thresholds are cold, for {@link #centrelineLine}'s reason: an airfield
+     * <p>Silent when the thresholds are cold: an airfield
      * nobody is standing near must not be accused on no evidence. And deliberately not in the list
      * rows — it is a few thousand block reads per airfield, and the list is a list.
      */
@@ -248,26 +248,27 @@ public final class AirfieldBrowser {
     }
 
     /**
-     * Whether this airfield's stored centreline is actually down the middle of its strip, and what
-     * to do about it if not.
+     * Whether this airfield runs along a world axis, and what to do about it if not.
      *
-     * <p>The survey only started centring the thresholds recently, and airfields already on disk
-     * were deliberately left exactly as they were saved — nothing reinterprets a stored threshold.
-     * The consequence is that an old airfield can sit half a runway width off its own strip with
-     * nothing anywhere saying so, and every arrival into it will fly that line perfectly. This is
-     * where it says so. The measurement is live, so it needs the runway's chunks loaded and it is
-     * silent when they are not: an unloaded strip reads as having no edges, and an airfield nobody
-     * is standing near must not be accused of being crooked on no evidence.
+     * <p>An earlier build took the two clicked blocks as the two ends of the centreline, so marking
+     * a strip the natural way — two opposite corners — stored the corner-to-corner diagonal as the
+     * runway: laid across the ground that was marked, running off it at both ends, on a heading that
+     * was not a multiple of 90. Airfields already on disk are left exactly as they were saved,
+     * because nothing here reinterprets a stored threshold. This is where one says so. Re-surveying
+     * will not fix it — the footprint is what it is — so the line asks for the one thing that will,
+     * which is marking the strip out again.
+     *
+     * <p>Reads no terrain, so unlike everything around it this is honest about an airfield nobody is
+     * standing near.
      */
-    private static void centrelineLine(AutopilotOutput output, Level level, Airfield airfield) {
-        double offset = airfield.centrelineOffset(level);
-        if (offset < 1.0) {
+    private static void axisLine(AutopilotOutput output, Airfield airfield) {
+        if (airfield.isAxisAligned()) {
             return;
         }
-        output.component(AutopilotText.tr("detail.off_centre",
-            "  centreline is %s blocks off the middle of the strip - run"
-                + " /autopilot airfields resurvey \"%s\" while standing near it",
-            String.format("%.0f", offset), airfield.name()).withStyle(ChatFormatting.YELLOW));
+        output.component(AutopilotText.tr("detail.off_axis",
+            "  stored diagonally, by a survey made before the tool took its geometry from the marked"
+                + " box - mark its two opposite corners again to straighten it")
+            .withStyle(ChatFormatting.YELLOW));
     }
 
     private static void parkingLines(AutopilotOutput output, Level level, Airfield airfield) {
@@ -473,19 +474,16 @@ public final class AirfieldBrowser {
      * Measures an already-registered airfield again from its own stored thresholds, keeping its name
      * and its parking spots.
      *
-     * <p><b>This exists because nothing else re-reads a stored threshold, and nothing else should.</b>
-     * The survey now puts the thresholds on the middle of the strip rather than on the blocks that
-     * were clicked, which moves the take-off lineup, the aim point, the glide slope and the landing
-     * gates together. Applying that to airfields already on disk on load would silently move every
-     * runway in every existing world, and this codebase has been bitten by silently reinterpreting
-     * persisted data before. So stored airfields keep exactly the geometry they were saved with, and
-     * this is the one command that changes it — deliberately, by name, from a player who asked.
+     * <p><b>The footprint does not move.</b> A survey takes its geometry from the box the player
+     * marked out rather than from the ground, so there is no measurement here for a re-survey to
+     * correct: what it re-reads is the terrain the footprint sits on — each threshold's surface
+     * elevation and both approach funnels — so that a field whose surroundings have changed stops
+     * preferring an end that has since had a hill built off it. To change a runway's shape, mark it
+     * out again with the tool; a selection landing within the re-survey tolerance of a registered
+     * pair replaces it.
      *
-     * <p>Re-clicking both ends with the survey tool already does the same thing, because a survey
-     * whose thresholds land within the re-survey tolerance of a registered pair replaces it. This
-     * only removes the need to be standing on the right blocks: the stored ones are the right blocks.
-     * It still needs the runway loaded, for the same reason {@code /autopilot survey} does — a survey
-     * of unloaded ground registers a runway made of nothing.
+     * <p>It still needs the runway loaded, for the same reason {@code /autopilot survey} does — a
+     * survey of unloaded ground registers a runway made of nothing.
      */
     public static boolean resurvey(AutopilotOutput output, ServerLevel level, String name) {
         AutopilotSavedData data = AutopilotSavedData.get(level);
@@ -508,15 +506,10 @@ public final class AirfieldBrowser {
                     + " force-load it, and try again.", name).withStyle(ChatFormatting.RED));
             return false;
         }
-        // The grandfathering comes across with the stands, for the reason
-        // AirfieldReport#surveyAndRegister carries it: Airfield#survey marks everything it measures
-        // requiresStands, so without this line correcting the centreline of a field that predates
-        // the rule would quietly convert it into one whose sorties are refused for want of a stand.
-        // Re-surveying is how a player fixes a runway, not how they opt into a new requirement, and
-        // a painted field is exactly the old field that now has a reason to be re-surveyed.
-        Airfield fresh = Airfield.survey(level, name, a, b)
-            .withParkingSpots(airfield.parkingSpots())
-            .withRequiredStands(airfield.requiresStands());
+        // Everything a human chose comes across untouched: the name, the stands, and whether this
+        // field is held to the stand rule. Re-surveying is how a player re-reads a runway, not how
+        // they opt into a requirement a field from before the rule never had.
+        Airfield fresh = Airfield.remeasure(level, airfield);
         // Refused for the same reason a fresh survey is refused, and with the same consequence as a
         // fresh survey has for an existing field: nothing is written and nothing is removed, so the
         // registered airfield is left exactly as it was saved. Re-measuring a strip that has had a
@@ -530,26 +523,11 @@ public final class AirfieldBrowser {
             return false;
         }
         data.put(fresh);
-        double moved = Math.max(distance(a, fresh.thresholdA()), distance(b, fresh.thresholdB()));
-        output.component(moved < 0.5
-            ? AutopilotText.tr("manage.resurveyed_unchanged",
-                "Re-surveyed %s; its centreline was already down the middle of the strip.", name)
-                .withStyle(ChatFormatting.GREEN)
-            : AutopilotText.tr("manage.resurveyed",
-                "Re-surveyed %s: the centreline moved %s blocks onto the middle of the strip."
-                    + " Everything an arrival is flown to moves with it.",
-                name, String.format("%.0f", moved)).withStyle(ChatFormatting.GREEN));
-        // Passing the answer we already have rather than letting the report measure the strip a
-        // second time; it is null here, because a strip whose surface will not do returned above.
-        AirfieldReport.report(output, level, fresh, null, surface);
+        output.component(AutopilotText.tr("manage.resurveyed",
+            "Re-surveyed %s. /autopilot airfields info \"%s\" for the detail.", name, name)
+            .withStyle(ChatFormatting.GREEN));
         AirfieldReport.highlight(level, fresh);
         return true;
-    }
-
-    private static double distance(BlockPos a, BlockPos b) {
-        double dx = a.getX() - b.getX();
-        double dz = a.getZ() - b.getZ();
-        return Math.sqrt(dx * dx + dz * dz);
     }
 
     /** Marks a parking spot, or explains why that place will not do. */
