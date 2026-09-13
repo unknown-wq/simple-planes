@@ -5,13 +5,13 @@ Neither needs compiling; drop it and Fabric API into `mods/`.
 
 | | 26.3 | 26.2 |
 |---|---|---|
-| File | `simpleplanes-26.3-5.3.12.jar` | `simpleplanes-26.2-5.3.10.jar` |
-| Minecraft | 26.3-pre-2 | 26.2 |
+| File | `simpleplanes-26.3-5.3.14.jar` | `simpleplanes-26.2-5.3.13.jar` |
+| Minecraft | 26.3-rc-2 | 26.2 |
 | Loader | Fabric, loader ≥ 0.19.5 | Fabric, loader ≥ 0.19.3 |
 | Java | 25 | 25 |
-| Requires | Fabric API 0.159.4+26.3 or newer | Fabric API 0.154.2+26.2 or newer |
+| Requires | Fabric API 0.160.4+26.3 or newer | Fabric API 0.154.2+26.2 or newer |
 | Source | `../26.3/` | `../26.2/` |
-| sha256 | `9e1c72890458e9c9b6ae6a4a38e6e48fa097bb6bcc98c76b9a8f0e2340196b8a` | `1c47da2b26e1a7ffab095b35a022e86415bbd784ca5f701d74e5784798cf47c9` |
+| sha256 | `01d289daa287953fd442538046b3c5e35ee3d4181d1ab6648a2c39210687fcb6` | `2a9b1a40a14f02b77327c2740d5fa410a13408efd5651c0dc9578f6070fc68c6` |
 
 The two jars carry the **same features** — 26.3 is a retarget, not a release, and its version number
 runs ahead only because each retarget gets its own so that no two different jars share one name.
@@ -19,8 +19,14 @@ The changelog below therefore describes both.
 
 ## About the 26.3 build
 
-Minecraft 26.3 is not out yet, so this build is for a pre-release: it tracks `26.3-pre-2`
-specifically and is not expected to load on the release when there is one.
+Minecraft 26.3 is not out yet. This build is compiled against `26.3-rc-2`, the newest thing Mojang
+has published — a release candidate, not the release.
+
+**It should load on 26.3 when the release lands, without a new jar.** The mod asks for
+`>=26.3-alpha.0 <26.4`, and that predicate was run through Fabric Loader's own version parser rather
+than reasoned about: it accepts `26.3-rc-2`, `26.3` and `26.3.1`, and rejects `26.4`. What a release
+cannot promise is the bytecode — a release is normally identical to its last candidate, but if Mojang
+changes anything after rc-2 this jar has to be rebuilt against the release.
 
 What it was checked with: a clean build with no errors or warnings, and autopilot sorties flown on a
 headless dedicated server — two aircraft departing one airfield seconds apart (the second held on the
