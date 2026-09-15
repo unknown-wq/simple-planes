@@ -4,8 +4,6 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.core.BlockPos;
@@ -13,7 +11,6 @@ import net.minecraft.world.phys.Vec3;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotConfig;
 import xyz.przemyk.simpleplanes.autopilot.RotorcraftConfig;
 import xyz.przemyk.simpleplanes.client.AirfieldMarkers;
-import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.network.AirfieldMarkersPacket;
 
 import java.util.ArrayList;
@@ -45,20 +42,28 @@ import java.util.List;
  * knows what is parked. Grey says so. See {@code AirfieldMarkersPacket.Runway#unknownStands}.
  *
  * <p>The <b>green, amber and red</b> shapes on top of all that are the selection the tool in hand
- * would mark if it were clicked now; see {@link ToolPreview}. That part, and only that part, depends
- * on what the player is holding.
+ * would mark if it were clicked now; see {@link ToolPreview}.
  *
- * <h2>When the registered fields are drawn</h2>
- * Never gated on the survey tool: a runway you cannot see is a runway you cannot taxi onto, line up
- * with or park on, and the client is sent the fields around it once a second whatever is in the
- * player's hand (see {@code AirfieldMarkerSync}). It is gated on <em>distance</em> instead, because
- * the other failure is as bad in the opposite direction — everything within the 512-block send
- * radius, shaded on the ground, permanently, is a mod painting on someone's world.
+ * <h2>When it is drawn: while a survey tool is in hand, and not otherwise</h2>
+ * All of it — the registered fields as well as the selection preview — appears when the player draws
+ * the Runway Survey Tool or the Helipad Marker and goes when they put it away. The condition is
+ * {@link ToolPreview#toolInHand()}, deliberately the same call the preview itself is built from
+ * rather than a second copy of the same test.
  *
- * <p>So by default a field is drawn within {@link AutopilotConfig#MARKER_DRAW_RADIUS} of the camera,
- * and that limit is lifted entirely while the player is riding an aircraft, which is exactly when
- * finding a strip from a distance is the point. The <b>Airfield Markers</b> key overrides it in
- * either direction — everything always, or nothing at all. See {@link Mode}.
+ * <p>It is the tool and not proximity that decides, because the tool is the player <em>asking</em>.
+ * Shading is not a subtle effect: a runway is up to two hundred blocks long and its patch is laid
+ * over ground the player also builds on, farms and flies between. Left on, it is a mod drawing on
+ * someone's world all the time; put behind the item that exists to mark airfields out, it is on
+ * exactly while it is being used, needs nothing configured and nothing remembered, and cannot
+ * surprise anyone who has never held the tool.
+ *
+ * <p>The client is sent the fields around it once a second whatever is in the player's hand (see
+ * {@code AirfieldMarkerSync}), so nothing has to be fetched when the tool comes out and the first
+ * frame with it in hand is already complete.
+ *
+ * <p>A distance limit survives on top of that, at {@link AutopilotConfig#MARKER_DRAW_RADIUS}. It is
+ * not a second opinion about what the player wants to see; it is there so the overlay and the tool
+ * agree about which fields are in play.
  *
  * <h2>What is built when</h2>
  * The registered fields change at most once a second and only when something about them actually
@@ -93,56 +98,14 @@ public final class AirfieldOverlayRenderer {
     private static final double STAND_HALF_SIZE = 1.5;
 
     /**
-     * How much of what the client knows about is drawn.
+     * How far from the camera a registered field is drawn, squared.
      *
-     * <p>Cycled with the <b>Airfield Markers</b> key (Options - Controls - Simple Planes, K by
-     * default), which is the only way to change it: a render preference belongs to the person
-     * looking at the screen, not to the world, so it is neither a command nor a server setting. It
-     * is deliberately not persisted between launches either — there is nowhere to persist a client
-     * preference in this mod (see {@code SimplePlanesConfig}), and since the default is the
-     * behaviour almost everyone wants, starting from it costs nothing.
+     * <p>Not a second opinion about what is worth seeing — the tool in hand has already settled
+     * that — but a guard against drawing a field the tool could not act on anyway. See
+     * {@link AutopilotConfig#MARKER_DRAW_RADIUS}.
      */
-    public enum Mode {
-        /**
-         * Fields within {@link AutopilotConfig#MARKER_DRAW_RADIUS} on foot, and everything the
-         * client has been sent while the player is in an aircraft. The default.
-         */
-        NEARBY("simpleplanes.markers.nearby"),
-        /** Everything the client has been sent, on foot as well. */
-        ALWAYS("simpleplanes.markers.always"),
-        /** Nothing but the tool preview, which the player asked for by holding the tool. */
-        OFF("simpleplanes.markers.off");
-
-        private final String messageKey;
-
-        Mode(String messageKey) {
-            this.messageKey = messageKey;
-        }
-
-        /** Translation key of the line put on the action bar when this mode is selected. */
-        public String messageKey() {
-            return messageKey;
-        }
-    }
-
-    private static final Mode[] MODES = Mode.values();
-
-    /**
-     * Client thread (the key handler) writes it, render thread reads it, so it is volatile; nothing
-     * else about it needs to be atomic, because a person cannot press a key twice in one frame.
-     */
-    private static volatile Mode mode = Mode.NEARBY;
-
-    public static Mode mode() {
-        return mode;
-    }
-
-    /** Advances to the next mode and returns it. */
-    public static Mode cycleMode() {
-        Mode next = MODES[(mode.ordinal() + 1) % MODES.length];
-        mode = next;
-        return next;
-    }
+    private static final double DRAW_RADIUS_SQ =
+        AutopilotConfig.MARKER_DRAW_RADIUS * AutopilotConfig.MARKER_DRAW_RADIUS;
 
     /**
      * One registered field's geometry together with where it is, so a frame can decide to leave it
@@ -157,11 +120,9 @@ public final class AirfieldOverlayRenderer {
     public static void register() {
         LevelRenderEvents.COLLECT_SUBMITS.register(context -> {
             ToolPreview.Preview preview = ToolPreview.current();
-            double radiusSq = drawRadiusSq();
-            // Mode OFF does not even rebuild: knownFields() is skipped, the generation counter stays
-            // where it is, and the geometry is built on the frame the player turns the overlay back
-            // on.
-            List<Field> knownFields = radiusSq > 0.0 ? knownFields() : List.of();
+            // With no survey tool out, knownFields() is not even called: the generation counter stays
+            // where it is and the geometry is built on the frame the player next draws the tool.
+            List<Field> knownFields = ToolPreview.toolInHand() ? knownFields() : List.of();
             if (knownFields.isEmpty() && preview.isEmpty()) {
                 return;
             }
@@ -175,7 +136,7 @@ public final class AirfieldOverlayRenderer {
             // concatenating them is a copy of everything on screen, per frame, to save a loop.
             collector.submitCustomGeometry(pose, RenderTypes.debugQuads(), (p, out) -> {
                 for (Field field : knownFields) {
-                    if (inRange(field, camera, radiusSq)) {
+                    if (inRange(field, camera)) {
                         GroundOverlay.fill(p, out, field.patches());
                     }
                 }
@@ -183,7 +144,7 @@ public final class AirfieldOverlayRenderer {
             });
             collector.submitCustomGeometry(pose, RenderTypes.lines(), (p, out) -> {
                 for (Field field : knownFields) {
-                    if (inRange(field, camera, radiusSq)) {
+                    if (inRange(field, camera)) {
                         GroundOverlay.lines(p, out, field.patches(), List.of());
                     }
                 }
@@ -193,39 +154,13 @@ public final class AirfieldOverlayRenderer {
     }
 
     /**
-     * How far out fields are drawn this frame, squared: 0 for none at all and
-     * {@link Double#POSITIVE_INFINITY} for everything the client has.
-     *
-     * <p>Riding an aircraft is what lifts the limit, rather than being airborne, because a plane
-     * still on its stand is about to need the picture and one that has just landed is taxiing by it.
-     * It is the aircraft and not the ground that decides: the whole reason the far limit is worth
-     * having is that from the air a runway is a thing you are looking for.
+     * Measured to the camera rather than to the player: the same point in first person, and in third
+     * person the camera is where the picture is actually being drawn from.
      */
-    private static double drawRadiusSq() {
-        return switch (mode) {
-            case OFF -> 0.0;
-            case ALWAYS -> Double.POSITIVE_INFINITY;
-            case NEARBY -> {
-                LocalPlayer player = Minecraft.getInstance().player;
-                yield player != null && player.getVehicle() instanceof PlaneEntity
-                    ? Double.POSITIVE_INFINITY
-                    : AutopilotConfig.MARKER_DRAW_RADIUS * AutopilotConfig.MARKER_DRAW_RADIUS;
-            }
-        };
-    }
-
-    /**
-     * Measured to the camera rather than to the player, which is the same point in first person and
-     * the right one in the two cases where it is not: a third-person camera is where the picture is
-     * being drawn from, and a spectator has no aircraft to lift the limit for them.
-     */
-    private static boolean inRange(Field field, Vec3 camera, double radiusSq) {
-        if (radiusSq == Double.POSITIVE_INFINITY) {
-            return true;
-        }
+    private static boolean inRange(Field field, Vec3 camera) {
         double dx = field.x() - camera.x;
         double dz = field.z() - camera.z;
-        return dx * dx + dz * dz <= radiusSq;
+        return dx * dx + dz * dz <= DRAW_RADIUS_SQ;
     }
 
     /**

@@ -216,13 +216,15 @@ authoritative here".
 All four are in the Simple Planes creative tab. The helipad marker is a separate item rather than a
 mode of the runway tool, and §4h argues why.
 
-**Neither survey tool has to be in hand for a registered field to be visible.** Runways, their
-stands and helipads are shaded on the ground whatever the player is holding; what the tool adds
-while it is held is the green/amber/red preview of the selection about to be made. How much of the
-world is shaded is a client-side setting on the **Airfield Markers** key (`K` by default):
-fields within `AutopilotConfig.MARKER_DRAW_RADIUS` on foot and everything the client has been sent
-while riding an aircraft, or all of them always, or none. See COMMANDS.md, "Seeing airfields in the
-world", and `AirfieldOverlayRenderer.Mode`.
+**Either survey tool in hand also shows the fields that are already registered.** Runways, their
+stands and helipads are shaded on the ground while the Runway Survey Tool or the Helipad Marker is
+held in either hand, and only then — the same condition the selection preview is built from
+(`ToolPreview.toolInHand()`), so the two can never disagree about it. The markers themselves are
+pushed to every client once a second regardless (`AirfieldMarkerSync`), so drawing the tool costs
+nothing and shows everything immediately; fields further than `AutopilotConfig.MARKER_DRAW_RADIUS`
+are left out, that number being the radius a parking click searches. Gating it on the item rather
+than on proximity or a setting is deliberate: the shading covers ground people build on, so it
+belongs to the moment someone asks for it. See COMMANDS.md, "Seeing airfields in the world".
 
 ### Plane Strike Tool
 

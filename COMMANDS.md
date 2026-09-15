@@ -474,10 +474,15 @@ The runway tool does the same job:
 
 ## Seeing airfields in the world
 
-Registered runways, their stands and registered helipads are **shaded on the ground**, and
-that has nothing to do with holding the survey tool — put the tool away and the airfield is
-still there. What the tool adds while it is in your hand is the green/amber/red preview of
-the selection you are about to make, which is a different thing.
+**Hold a survey tool and the fields around you are shaded on the ground. Put it away and
+they are gone.** Either tool does it — the Runway Survey Tool or the Helipad Marker — in the
+main hand or the off hand, and it shows every registered field nearby, not only the ones that
+tool marks. Nothing has to be turned on: the markers are pushed to you automatically, so the
+first frame with the tool out is already complete.
+
+That is the whole control. There is no key to press, no setting to find and nothing saved
+between sessions; the item in your hand is the switch, which is also why the shading is never
+painted over your world while you are doing something else.
 
 Reading the shapes:
 
@@ -489,24 +494,16 @@ Reading the shapes:
 | small **orange** square | a stand with an aircraft on it, or one on its way to it |
 | small **grey** square | a stand too far away for the server to see what is parked on it |
 | **violet** square, inside a wider violet outline | a helipad and the clearance its survey required |
+| **green / amber / red** shapes | not a registered field: the selection the tool would mark if you clicked now — green is accepted, amber accepted with a warning, red refused |
 
-**How much is drawn** is controlled by one key — **Airfield Markers**, `K` by default, under
-*Options → Controls → Simple Planes*. It cycles three settings and the action bar says which
-one you are on:
+Fields are drawn out to **256 blocks** (`AutopilotConfig.MARKER_DRAW_RADIUS`), which is the
+same distance a parking click will look for an airfield to put a stand on, so anything the
+tool in your hand can still act on is something you can still see.
 
-| Setting | What you see |
-|---|---|
-| nearby, and all of them while flying (**default**) | fields within 160 blocks while you are on foot; everything the client has been sent — up to 512 blocks — the moment you are sitting in an aircraft, taxiing included |
-| all of them, always | the 512-block set on foot as well |
-| off | nothing but the tool preview |
-
-The setting is yours alone: it is client-side, it changes nothing on the server, and it is
-not saved between launches — every session starts on the default. 160 blocks is
-`AutopilotConfig.MARKER_DRAW_RADIUS`; 512 is the radius the server sends fields to, which is
-further than they can usefully be drawn from anyway.
-
-If a field you expect is not drawn at all, it is not this: check you are in the dimension it
-was surveyed in, and that it is within 512 blocks.
+If a field you expect is missing with the tool out, check that you are in the dimension it
+was surveyed in, and that you are inside 512 blocks of it — that is how far the server sends
+markers at all. `/autopilot airfields` lists them with distance and bearing whatever you are
+holding.
 
 ---
 

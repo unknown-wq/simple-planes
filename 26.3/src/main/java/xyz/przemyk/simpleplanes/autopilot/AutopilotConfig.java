@@ -1271,23 +1271,21 @@ public final class AutopilotConfig {
 
     // ---- world overlay ----
     /**
-     * How far from a player on foot a registered field is still drawn on the ground, in blocks.
+     * How far from the camera a registered field is still shaded on the ground, in blocks.
      *
-     * <p>This is a <em>display</em> limit and has nothing to do with {@code AirfieldMarkerSync}'s
-     * 512-block send radius, which exists so a marker is already on the client before the terrain
-     * under it is. Drawing everything that arrives is what the overlay used to do, and on a world
-     * with several fields inside half a kilometre of each other it paints shapes across the
-     * landscape all day for someone who is not flying anything.
+     * <p>Whether the overlay is drawn at all is decided by the survey tool being in the player's
+     * hand, not by this — see {@code AirfieldOverlayRenderer}. This only stops a field being drawn
+     * that the tool in that hand could not do anything with anyway.
      *
-     * <p>160 rather than something round: it is comfortably outside the longest strip the survey
-     * will register end to end plus its stands, so a player standing at one threshold of their own
-     * airfield always has the whole of it drawn, and it is short enough that the neighbouring
-     * valley's airfield is not on screen while you build. Walking in from further away, the field
-     * appears while it is still a distant patch rather than underfoot.
+     * <p>Which is why it is 256 and not a rounder or smaller number: it mirrors
+     * {@code RunwayToolItem#PARKING_SEARCH_RADIUS}, the distance a parking click will look for an
+     * airfield to attach a stand to. Draw less than that and there is a band where the tool still
+     * acts on a field the player cannot see — the one contradiction between the picture and the
+     * click that would actually cost someone a misplaced stand.
      *
-     * <p>It does not apply in the air: a pilot gets everything the client has been sent. Finding the
-     * strip is the whole job then, and 512 blocks is roughly as far as the terrain is drawn anyway.
-     * See {@code AirfieldOverlayRenderer.Mode}.
+     * <p>It has nothing to do with {@code AirfieldMarkerSync}'s 512-block send radius, which is
+     * about having a marker on the client before the terrain under it. What arrives and is not
+     * within this is simply not drawn.
      */
-    public static final double MARKER_DRAW_RADIUS = 160.0;
+    public static final double MARKER_DRAW_RADIUS = 256.0;
 }

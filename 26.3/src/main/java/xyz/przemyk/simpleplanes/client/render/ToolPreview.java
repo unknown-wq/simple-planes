@@ -112,21 +112,55 @@ public final class ToolPreview {
         current = compute(minecraft);
     }
 
+    /**
+     * Whether either of the player's hands holds a tool this class previews for.
+     *
+     * <p>Public because the world overlay is drawn under the same condition — the registered fields
+     * are on screen while a survey tool is out and gone when it is put away — and that condition has
+     * to be <em>this</em> one rather than a second copy of it. A copy would be a place for the two
+     * to drift: add a third survey tool later, teach only one of them about it, and the player gets
+     * a preview shaded against fields that are not drawn, or fields drawn for a tool that will not
+     * act on them. See {@code AirfieldOverlayRenderer}.
+     *
+     * <p>Asked once per frame rather than cached per tick, because it is two {@code getItem} calls
+     * and a cache would be one more thing that can be stale.
+     */
+    public static boolean toolInHand() {
+        LocalPlayer player = Minecraft.getInstance().player;
+        return player != null && surveyTool(player) != null;
+    }
+
+    /**
+     * The survey tool the player is holding, or null if neither hand has one. The main hand wins,
+     * which is the hand {@code useOn} runs from first.
+     */
+    private static @Nullable ItemStack surveyTool(LocalPlayer player) {
+        ItemStack main = player.getMainHandItem();
+        if (isSurveyTool(main)) {
+            return main;
+        }
+        ItemStack off = player.getOffhandItem();
+        return isSurveyTool(off) ? off : null;
+    }
+
+    private static boolean isSurveyTool(ItemStack stack) {
+        return stack.getItem() instanceof RunwayToolItem || stack.getItem() instanceof HelipadToolItem;
+    }
+
     private static Preview compute(Minecraft minecraft) {
         LocalPlayer player = minecraft.player;
         Level level = minecraft.level;
         if (player == null || level == null) {
             return EMPTY;
         }
-        for (ItemStack stack : List.of(player.getMainHandItem(), player.getOffhandItem())) {
-            if (stack.getItem() instanceof RunwayToolItem) {
-                return runwayTool(level, stack, targeted(minecraft));
-            }
-            if (stack.getItem() instanceof HelipadToolItem) {
-                return helipadTool(level, stack, targeted(minecraft), player.blockPosition());
-            }
+        ItemStack tool = surveyTool(player);
+        if (tool == null) {
+            return EMPTY;
         }
-        return EMPTY;
+        if (tool.getItem() instanceof RunwayToolItem) {
+            return runwayTool(level, tool, targeted(minecraft));
+        }
+        return helipadTool(level, tool, targeted(minecraft), player.blockPosition());
     }
 
     /** The block the crosshair is on, or null when it is on an entity or on nothing. */
