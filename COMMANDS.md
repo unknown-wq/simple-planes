@@ -472,6 +472,44 @@ The runway tool does the same job:
 
 ---
 
+## Seeing airfields in the world
+
+Registered runways, their stands and registered helipads are **shaded on the ground**, and
+that has nothing to do with holding the survey tool — put the tool away and the airfield is
+still there. What the tool adds while it is in your hand is the green/amber/red preview of
+the selection you are about to make, which is a different thing.
+
+Reading the shapes:
+
+| Shape | What it is |
+|---|---|
+| long pale rectangle | a surveyed runway |
+| the same rectangle in **amber** | a runway shorter than 18 blocks, so sorties into it are refused |
+| small **cyan** square | a marked stand, free |
+| small **orange** square | a stand with an aircraft on it, or one on its way to it |
+| small **grey** square | a stand too far away for the server to see what is parked on it |
+| **violet** square, inside a wider violet outline | a helipad and the clearance its survey required |
+
+**How much is drawn** is controlled by one key — **Airfield Markers**, `K` by default, under
+*Options → Controls → Simple Planes*. It cycles three settings and the action bar says which
+one you are on:
+
+| Setting | What you see |
+|---|---|
+| nearby, and all of them while flying (**default**) | fields within 160 blocks while you are on foot; everything the client has been sent — up to 512 blocks — the moment you are sitting in an aircraft, taxiing included |
+| all of them, always | the 512-block set on foot as well |
+| off | nothing but the tool preview |
+
+The setting is yours alone: it is client-side, it changes nothing on the server, and it is
+not saved between launches — every session starts on the default. 160 blocks is
+`AutopilotConfig.MARKER_DRAW_RADIUS`; 512 is the radius the server sends fields to, which is
+further than they can usefully be drawn from anyway.
+
+If a field you expect is not drawn at all, it is not this: check you are in the dimension it
+was surveyed in, and that it is within 512 blocks.
+
+---
+
 ## Helipads
 
 A helipad is **not a short runway** — it has no heading, no centreline, and can be

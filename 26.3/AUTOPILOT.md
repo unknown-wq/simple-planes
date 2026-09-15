@@ -216,6 +216,14 @@ authoritative here".
 All four are in the Simple Planes creative tab. The helipad marker is a separate item rather than a
 mode of the runway tool, and §4h argues why.
 
+**Neither survey tool has to be in hand for a registered field to be visible.** Runways, their
+stands and helipads are shaded on the ground whatever the player is holding; what the tool adds
+while it is held is the green/amber/red preview of the selection about to be made. How much of the
+world is shaded is a client-side setting on the **Airfield Markers** key (`K` by default):
+fields within `AutopilotConfig.MARKER_DRAW_RADIUS` on foot and everything the client has been sent
+while riding an aircraft, or all of them always, or none. See COMMANDS.md, "Seeing airfields in the
+world", and `AirfieldOverlayRenderer.Mode`.
+
 ### Plane Strike Tool
 
 * **Right-click a block** — spawns an aircraft the configured distance away (default 400 blocks, on

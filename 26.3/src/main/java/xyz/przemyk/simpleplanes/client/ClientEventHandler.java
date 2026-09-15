@@ -9,9 +9,11 @@ import net.minecraft.client.CameraType;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.client.render.AirfieldOverlayRenderer;
 import xyz.przemyk.simpleplanes.entities.HelicopterEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.network.ChangeThrottlePacket;
@@ -43,6 +45,7 @@ public final class ClientEventHandler {
     public static KeyMapping pitchDown;
     public static KeyMapping yawRight;
     public static KeyMapping yawLeft;
+    public static KeyMapping airfieldMarkersKey;
 
     /**
      * 26.3 moved input off GLFW and onto SDL, so {@code org.lwjgl.glfw.GLFW} is no longer on the
@@ -64,6 +67,9 @@ public final class ClientEventHandler {
         pitchDown = bind("key.plane_pitch_down.desc", InputConstants.KEY_S);
         yawRight = bind("key.plane_yaw_right.desc", InputConstants.KEY_RIGHT);
         yawLeft = bind("key.plane_yaw_left.desc", InputConstants.KEY_LEFT);
+        // K is free in vanilla, and this is the one binding here that is useful on foot: it is how
+        // a player finds out the overlay is theirs to control without being told where to look.
+        airfieldMarkersKey = bind("key.airfield_markers.desc", InputConstants.KEY_K);
     }
 
     /**
@@ -112,6 +118,20 @@ public final class ClientEventHandler {
         LocalPlayer player = mc.player;
         if (player == null) {
             return;
+        }
+
+        // Outside the "is the player flying something" branch below, deliberately: the whole point
+        // of the airfield overlay is that it is there when you are on foot as well.
+        boolean cycledMarkers = false;
+        while (airfieldMarkersKey.consumeClick()) {
+            AirfieldOverlayRenderer.cycleMode();
+            cycledMarkers = true;
+        }
+        if (cycledMarkers) {
+            // The action bar rather than chat: it replaces itself, so cycling through the three
+            // modes leaves one line rather than three, and it is what says which mode you landed on.
+            player.sendOverlayMessage(
+                Component.translatable(AirfieldOverlayRenderer.mode().messageKey()));
         }
 
         if (player.getVehicle() instanceof PlaneEntity planeEntity) {

@@ -1268,4 +1268,26 @@ public final class AutopilotConfig {
 
     // ---- waypoints ----
     public static final double WAYPOINT_ARRIVAL_RADIUS = 30.0;
+
+    // ---- world overlay ----
+    /**
+     * How far from a player on foot a registered field is still drawn on the ground, in blocks.
+     *
+     * <p>This is a <em>display</em> limit and has nothing to do with {@code AirfieldMarkerSync}'s
+     * 512-block send radius, which exists so a marker is already on the client before the terrain
+     * under it is. Drawing everything that arrives is what the overlay used to do, and on a world
+     * with several fields inside half a kilometre of each other it paints shapes across the
+     * landscape all day for someone who is not flying anything.
+     *
+     * <p>160 rather than something round: it is comfortably outside the longest strip the survey
+     * will register end to end plus its stands, so a player standing at one threshold of their own
+     * airfield always has the whole of it drawn, and it is short enough that the neighbouring
+     * valley's airfield is not on screen while you build. Walking in from further away, the field
+     * appears while it is still a distant patch rather than underfoot.
+     *
+     * <p>It does not apply in the air: a pilot gets everything the client has been sent. Finding the
+     * strip is the whole job then, and 512 blocks is roughly as far as the terrain is drawn anyway.
+     * See {@code AirfieldOverlayRenderer.Mode}.
+     */
+    public static final double MARKER_DRAW_RADIUS = 160.0;
 }
