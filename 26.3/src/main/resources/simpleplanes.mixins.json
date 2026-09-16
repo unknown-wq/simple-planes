@@ -1,5 +1,5 @@
 {
-  "required": true,
+  "required": false,
   "package": "xyz.przemyk.simpleplanes.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [],
@@ -7,6 +7,6 @@
     "CameraMixin"
   ],
   "injectors": {
-    "defaultRequire": 1
+    "defaultRequire": 0
   }
 }

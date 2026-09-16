@@ -264,3 +264,47 @@ can be settled by a compiler and all of it wants a running game:
 * The shooter firing from the pilot's seat — `ClientPreAttackCallback` is a client input path.
 * The dispatcher and the scheduled shuttles over real wall-clock time.
 * The fuel gauges in the plane inventory screen.
+
+## Camera mixin re-aimed, access widener dropped
+
+This supersedes the two statements above that describe `CameraMixin` as injecting into
+`alignWithEntity` at `ordinal = 0`, and the ones that say all four access widener entries still
+resolve. Both were accurate when written; neither describes the tree any more.
+
+The injection moved off the private `Camera#alignWithEntity(float)` and onto the public
+`Camera#update(DeltaTracker)`, at `INVOKE` on `alignWithEntity(F)V` with `shift = AFTER`. That call
+is the only `invokevirtual alignWithEntity:(F)V` in the class (checked with `javap -c` against the
+26.3 jar), so the injection point carries no `ordinal`. `partialTicks` now comes from the public
+`getCameraEntityPartialTicks(DeltaTracker)` — the same pure getter `update` calls one instruction
+earlier to build the argument it passes in — instead of from the injected method's parameter.
+
+Behaviour is unchanged. The two injection points are separated only by the detached third-person
+zoom-out and the sleeping nudge, and the handler is unreachable in both cases: it returns early when
+the camera is not first-person, and a passenger cannot be asleep. `getGameTimeDeltaPartialTick` is a
+plain field read, so calling it a second time in the same frame returns the same float.
+
+`simpleplanes.accesswidener` is gone, along with `accessWidener` in `fabric.mod.json` and the `loom`
+block in `build.gradle`. Nothing needed it:
+
+| entry | callers in `26.3/src` |
+| --- | --- |
+| `Camera.move(FFF)V` | 0 |
+| `Camera.getMaxZoom(F)F` | 0 |
+| `Camera.setPosition(DDD)V` | was 2, both in `CameraMixin`; now 0 |
+| `ServerGamePacketListenerImpl.aboveGroundVehicleTickCount` | 0 |
+
+`setPosition(DDD)V` is `protected` in vanilla, not private, so `@Shadow protected abstract void
+setPosition(double, double, double)` reaches it from inside the merged class without widening
+anything. Verified by compiling the whole of `src/main/java` against
+`minecraft-merged-deobf-26.3.jar`, the jar with no access widener applied: `CameraMixin` compiles,
+and the only residual errors are unrelated members (`MenuScreens.register`, the `MenuType`
+constructor, `CreativeModeTab$Output`) that Fabric API's own classtweakers in `fabric-menu-api-v1`,
+`fabric-transitive-access-wideners-v1` and `fabric-creative-tab-api-v1` widen during a real build.
+
+`simpleplanes.mixins.json` now carries `"required": false` and `"defaultRequire": 0`, so if a later
+version moves the target the injection is skipped and the player gets the vanilla camera and a log
+line, rather than a mod that refuses to load.
+
+The javadoc on the mixin was also corrected: it claimed the camera rolls with the aircraft. It does
+not and never did on Fabric — the roll was a Forge `ViewportEvent.ComputeCameraAngles` hook dropped
+during the port. The mixin only moves the viewpoint.

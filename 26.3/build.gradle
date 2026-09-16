@@ -13,10 +13,6 @@ base {
 repositories {
 }
 
-loom {
-	accessWidenerPath = file("src/main/resources/simpleplanes.accesswidener")
-}
-
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	// Minecraft 26.1+ is unobfuscated and Yarn is discontinued: no mappings line is needed.
