@@ -3,13 +3,16 @@
 This file is for whoever writes the airliner's entity, physics and registration. It covers the render model
 only, which exists and compiles:
 
-| Layer | Class | Texture | Cubes |
-|---|---|---|---|
-| material (wood) | `client/render/models/AirlinerModel` | `state.materialTexture` (the block texture, tiled 16x16, same as `PlaneModel`) | 40 |
-| metal | `client/render/models/AirlinerMetalModel` | `simpleplanes:textures/plane_upgrades/airliner_metal.png` (256x256, new) | 41 |
-| fans (propeller slot) | `client/render/models/AirlinerFanModel` | same `airliner_metal.png` | 10 |
+| Layer | Class | Texture | Render type | Cubes |
+|---|---|---|---|---|
+| material, wooden version | `client/render/models/AirlinerModel` | `state.materialTexture` (the block texture, tiled 16x16, same as `PlaneModel`) | `entityCutoutCull` | 40 |
+| material, metal version | `client/render/models/AirlinerSkinModel` | `simpleplanes:textures/plane_upgrades/airliner_skin.png` (512x512, `AirlinerSkinModel.TEXTURE`) | `entityCutoutCull` | 40 |
+| metal | `client/render/models/AirlinerMetalModel` | `simpleplanes:textures/plane_upgrades/airliner_metal.png` (256x256) | `entityCutoutCull` | 51 (41 drawn: one logo of six is visible) |
+| fans (propeller slot) | `client/render/models/AirlinerFanModel` | same `airliner_metal.png` | `entityCutout` (default, two-sided) | 10 |
 
-That is 91 cubes in all. For comparison: starter plane 60, fighter 56, large plane 157, cargo plane 297.
+A material layer (either one), the metal layer and the fans make 91 drawn cubes. For comparison: starter
+plane 60, fighter 56, large plane 157, cargo plane 297. The two material layers are built by one shared
+class, `AirlinerAirframe` (package-private); see *Wood or metal*.
 
 Nothing is registered: there is no layer location, renderer, entity type or item. `PlaneRenderState`,
 `PlaneRenderer`, `PlanesModelLayers` and `SimplePlanesEntities` are untouched.
@@ -21,7 +24,7 @@ Nothing is registered: there is no layer location, renderer, entity type or item
 Model space is in pixels, where 1 px = 1/16 block. It uses the usual `ModelPart` convention: +Y points
 down and the nose points to -Z. +X is the aircraft's left side.
 
-- `AirlinerModel` hangs everything off the part `Airliner`, `AirlinerMetalModel` off `Metal` and
+- `AirlinerModel` and `AirlinerSkinModel` (both built by `AirlinerAirframe`) hang everything off the part `Airliner`, `AirlinerMetalModel` off `Metal` and
   `AirlinerFanModel` off `Fans`. All three are at `PartPose.offset(0, 24, 0)`, so their local frames match.
   In that local frame:
   - the ground contact (the bottom of every tyre) is at **y = 0**, which is absolute y = 24;
@@ -31,7 +34,7 @@ down and the nose points to -Z. +X is the aircraft's left side.
   - the middle of the length is at **z = -6**;
   - the wingtips are at x = ±83.7 (the wings have 5° dihedral), the winglet tips at y ≈ -32.
 - The wings, stabilisers and winglets are children with a dihedral roll: `wing_left`/`winglet_left` pivot at
-  (12, -14, 0) with `zRot = -AirlinerModel.WING_DIHEDRAL` (0.0873), `wing_right`/`winglet_right` at
+  (12, -14, 0) with `zRot = -AirlinerAirframe.WING_DIHEDRAL` (0.0873), `wing_right`/`winglet_right` at
   (-12, -14, 0) with `+WING_DIHEDRAL`; `stab_left`/`stab_right` pivot at (±6, -25, 0) with `∓STAB_DIHEDRAL`
   (0.1222).
 - The fans pivot at local (±32, -10, -24), the nacelle axis, 2 px behind the front of the intake ring.
@@ -133,23 +136,40 @@ The numbers come from the seated player model at 15/16 scale (hips 11.25 px abov
   windows.
 - Pilot's eye: inside the lower windscreen box `glass_lo` (entity y 1.875 to 2.066, z 4.0 to 4.69).
 
-### Seeing out of a closed cabin
+### Seeing out of a closed cabin: the render types
 
-The fuselage is closed, and the view out works the way the fighter's canopy does. All three layers use the
-default `EntityModel` render type, which in 26.2 is `RenderTypes::entityCutout` and culls back faces. Every
-eye is inside the main fuselage box `body` (and the pilot's also inside `glass_lo`), so every face of those
-boxes is a back face from the rider's point of view, and the riders see the world through the walls. The
-faces that still point into the cabin are either wanted or transparent:
+The fuselage is closed. Every eye is inside the main fuselage box `body` (and the pilot's also inside
+`glass_lo`), so the riders can only see out if the faces of those boxes are culled when seen from inside.
+
+**In 26.2 the default render type does not cull.** `EntityModel(ModelPart)` uses `RenderTypes::entityCutout`,
+whose pipeline `RenderPipelines.ENTITY_CUTOUT` (`pipeline/entity_cutout`) is built with `withCull(false)`
+and lights back faces separately (`PER_FACE_LIGHTING`). The culling variant is
+`RenderPipelines.ENTITY_CUTOUT_CULL` (`pipeline/entity_cutout_cull`), reached through
+`RenderTypes.entityCutoutCull`. An earlier version of this file said the default culls; it does not, and
+with it every rider would see nothing but the inside of the walls and the cockpit mask.
+
+So the layers that contain an eye are constructed with `super(root, RenderTypes::entityCutoutCull)`:
+
+- `AirlinerModel` and `AirlinerSkinModel` (the eyes are inside `body`);
+- `AirlinerMetalModel` (the pilot's eye is inside `glass_lo`).
+
+`AirlinerFanModel` keeps the default: no eye is inside it. No cube in any airliner layer has zero thickness,
+so nothing needs to stay two-sided. For the front faces that are visible from outside, culling changes
+nothing: the lighting of a front face is the same in both pipelines.
+
+With culling on, every face of the boxes around an eye is a back face, so the riders see the world through
+the walls. The faces that still point into the cabin are either wanted or transparent:
 
 - wanted: the ceiling (underside of the upper shoulder), the floor, the rear bulkhead (front face of the tail
   cone) and the instrument panel plus the nose ahead of the pilot, whose tops sit 2.9 px and 1.9 px below the
   pilot's eye so the view over the nose stays clear;
-- transparent (alpha 0 in `airliner_metal.png`): every face of the window belts, doors and tail emblem except
+- transparent (alpha 0 in `airliner_metal.png`): every face of the window belts, doors and logo plates except
   the outer one, the rear faces of both windscreen boxes (the cockpit is open to the cabin) and the bottom of
   `glass_hi`, which is the one windscreen face that points at the pilot if the seat ends up higher.
 
-The seat can rise to about y 0.63 (eye 2.25) before the top face of `glass_hi` blocks the pilot's view. Do not
-change these models to a no-cull render type, or the walls will close the view.
+The seat can rise to about y 0.63 (eye 2.25) before the top face of `glass_hi` blocks the pilot's view.
+Keep these three layers on `entityCutoutCull`; on `entityCutout` the walls close the view. `docs/airliner/airliner-culling.png` shows the pilot's and a passenger's view with the old default and with
+the fix.
 
 ## Animated parts: the fans
 
@@ -170,26 +190,117 @@ readable.
 The fans sit 2 px inside open intake rings (four `lip` cubes); the cowl's front face behind them is painted
 as the dark fan case.
 
+## Wood or metal: the two material layers
+
+The airliner comes in two finishes with the same airframe:
+
+- **wooden**: `AirlinerModel`, textured with the plane's material block texture, tiled like every other
+  plane (`LayerDefinition.create(mesh, 16, 16)`);
+- **metal**: `AirlinerSkinModel`, textured with its own `airliner_skin.png`, a white-and-aluminium airliner
+  livery: white upper fuselage and fin, a blue cheat line that continues the window belt's line round the
+  nose and the tail, an aluminium belly, wings and stabilisers, a grey radome, panel joints every block on
+  the fuselage, and flap and aileron lines, hinge lines and a leading-edge strip on the wings.
+
+**Structure.** A real skin cannot reuse the tiled layout: every face needs its own place in the texture. So
+the geometry lives once, in `AirlinerAirframe.create(UvLayout)`, and each material layer only supplies a
+table of `texOffs` per named cube:
+
+- `AirlinerModel` has `WOOD_UV`, small offsets into the tiled 16x16 block texture (the same values as
+  before, so the wooden airliner is unchanged cube for cube);
+- `AirlinerSkinModel` has `SKIN_UV`, the packed nets in the 512x512 skin, generated together with the
+  texture.
+
+The two layers therefore cannot drift apart: a box added or moved in `AirlinerAirframe` moves in both, and a
+cube missing from either table fails at bake time with "no texOffs for airliner cube ...". Mirrored
+right-hand wing and stabiliser steps reuse their left-hand twin's net. The metal layer and the fans are the
+same for both finishes, and so are the per-type translate, hitbox and seats.
+
+**Choosing in the renderer.** `PlaneRenderer` draws one body model with `state.materialTexture`. For the
+airliner, the entity work should:
+
+1. bake both layers, e.g. `AIRLINER_LAYER` (`AirlinerModel::createBodyLayer`) and `AIRLINER_SKIN_LAYER`
+   (`AirlinerSkinModel::createBodyLayer`);
+2. decide the finish per aircraft. The natural rule is by material: an airliner built from a metal block
+   (for example `iron_block`, or any block in a new tag such as `simpleplanes:airliner_metal_skin`) is
+   metal, anything else wooden. Put the result in the render state, e.g. a `boolean metalSkin` in
+   `PlaneRenderState`, filled in `extractRenderState`;
+3. draw `metalSkin ? skinModel : woodModel` with `metalSkin ? AirlinerSkinModel.TEXTURE : state.materialTexture`.
+   The least intrusive way is two protected hooks in `PlaneRenderer`, `bodyModel(state)` and
+   `bodyTexture(state)`, which default to today's `planeEntityModel` and `state.materialTexture`; an
+   `AirlinerRenderer` subclass overrides them. The rest of `submit()` stays shared.
+
+Registering the metal airliner as a second entity type is possible too, but it still needs step 3, because
+`PlaneRenderer` always passes `state.materialTexture` to the body model.
+
+## Airline logos
+
+The fin carries one of six **fictional** airline logos. The names and marks are invented for this model;
+none depicts or imitates a real airline or manufacturer.
+
+| index | name | tail |
+|---|---|---|
+| 0 | Terntide | navy, a white gliding tern and a pale-blue wave |
+| 1 | Glimmerwing | deep violet, two swept teal and green ribbons, a four-point star |
+| 2 | Pinewind | forest green, a white three-tier pine and a wind streak |
+| 3 | Puffcloud Express | sky blue, a big white cloud and two yellow speed lines |
+| 4 | Coralline | white, three coral, orange and red bands parallel to the swept leading edge |
+| 5 | Marigold Hop | marigold yellow, a rust six-petal flower |
+
+**Model.** `AirlinerMetalModel` has six parts `Tail/logo_0` to `logo_5`. Each is a pair of flush plates, one
+per side of the fin, covering its upper five steps (local y -76 to -47, z 50 to 79); texels outside the fin's
+outline are transparent, so the plate follows the swept, stepped fin exactly. The right-hand plate is the
+left one mirrored, so the marks face the nose on both sides. The API:
+
+- `AirlinerMetalModel.LOGO_COUNT` = 6;
+- `public void setLogo(int index)`: shows logo `index` (taken modulo `LOGO_COUNT`, so any int is safe) and
+  hides the others;
+- `setupAnim(state)` currently calls `setLogo(DEFAULT_LOGO)` (0).
+
+Because the logos are in the metal layer, the wooden and the metal airliner both carry them.
+`docs/airliner/airliner-logos.png` shows all six, and `docs/airliner/airliner-metal-sheet.png` the metal
+version.
+
+**Wiring (not done).** The logo belongs to the aircraft, not to the renderer:
+
+1. the entity rolls it once, when the airliner is first created (placed from the item), with
+   `random.nextInt(6)`, and saves it in its NBT (e.g. an int `"Logo"`), so a reload keeps it;
+2. it is synced to clients with a `SynchedEntityData` accessor, so every player sees the same tail;
+3. `PlaneRenderer.extractRenderState` copies it into a new `PlaneRenderState` field, e.g. `int airlinerLogo`;
+4. `AirlinerMetalModel.setupAnim` calls `setLogo(state.airlinerLogo)` in place of `setLogo(DEFAULT_LOGO)`.
+
+Two things to keep in mind:
+
+- do not call `setLogo` from `PlaneRenderer.submit()`. `submitModel` only queues the model; the queue is
+  flushed later, and `ModelFeatureRenderer` calls `setupAnim(state)` right before drawing each queued
+  instance. One model instance is shared by all airliners, so the logo must come from the state;
+- the entity is common code and must not reference `AirlinerMetalModel`, which is client-only (it extends
+  `EntityModel`). Give the entity its own constant equal to `LOGO_COUNT`; `setLogo` wraps anything larger.
+
 ## Textures
 
-- The material layer tiles the plane's material block texture at 1 texel per pixel, with
+- `AirlinerModel` tiles the plane's material block texture at 1 texel per pixel, with
   `LayerDefinition.create(mesh, 16, 16)`, exactly as `PlaneModel` does. The fuselage, nose, tail cone, wings,
   belly fairing, stabilisers and fin are material.
-- `airliner_metal.png` is new: 256x256 RGBA, a procedurally generated original texture made for this model
-  (its generator lives outside the repository; the Java files are the source of truth, so edit them
-  directly). It holds the UV net of every metal and fan cube:
+- `airliner_skin.png` is new: 512x512 RGBA, procedurally generated original work. It holds the net of every
+  airframe cube for `AirlinerSkinModel`, painted by model position (the white/blue/aluminium bands follow
+  the fuselage height, the panel joints its length).
+- `airliner_metal.png` is 256x256 RGBA, a procedurally generated original texture made for this model. It
+  holds the UV net of every metal and fan cube:
   - a black cockpit "mask" band with tinted windscreen and side panes;
   - the passenger window belt: white band, dark windows, blue cheat line;
   - door outlines (the inside of the outline is transparent, so the material shows through), with a window
     and the cheat line;
-  - a blue-and-white tail emblem (transparent outside the disc);
+  - the six airline logos (transparent outside the fin's outline);
   - blue nacelle cowls with a silver band, silver intake rings, dark fan case, exhaust and plug;
   - blue winglets with a white leading edge;
   - light-grey pylons, struts and APU cone, black tyres with hubs;
   - the instrument panel with coloured lights on the face towards the pilot;
   - the grey fan blades and the spinner.
-- Window belts, doors and the emblem are flush plates just outside the wooden skin
-  (`CubeDeformation` 0.05; 0.04 for the doors so they never overlap a belt end on the same plane).
+- Both generators live outside the repository; the `texOffs` in `AirlinerMetalModel`, `AirlinerFanModel`
+  and the `SKIN_UV` table in `AirlinerSkinModel` were written by them. Hand edits are fine, but a moved
+  `texOffs` needs the texture repainted to match.
+- Window belts, doors and logo plates are flush plates just outside the skin (`CubeDeformation` 0.05; 0.04
+  for the doors so they never overlap a belt end on the same plane).
 - `.mirror()` is used for every right-hand copy. It swaps the ±X images, so the right-hand plates show the
   same outer image as the left ones, still with the nose end first; the windows line up on both sides.
 - The existing `plane_metal.png` family could not be reused: no alpha channel and no glass, livery or tyre
@@ -197,7 +308,7 @@ as the dark fan case.
 
 ## Parts
 
-`AirlinerModel` > `Airliner`:
+`AirlinerModel` and `AirlinerSkinModel` > `Airliner` (built by `AirlinerAirframe`):
 
 - `Fuselage`: `body` (26 x 22 px, solid), upper and lower shoulders (24 wide), crown and keel (18 wide),
   giving a rounded cross-section; the belly fairing under the wing root.
@@ -213,7 +324,7 @@ as the dark fan case.
 - `Cabin`: both window belts, front and rear doors on both sides.
 - `engine_left`, `engine_right`: intake ring (4), cowl, exhaust, plug, pylon.
 - `winglet_left`, `winglet_right`: two cubes each, on the wing pivots.
-- `Tail`: the emblem on both sides of the fin, the APU cone.
+- `Tail`: the APU cone, and `logo_0` to `logo_5`, each a plate on both sides of the fin.
 - `Gear`: nose strut and twin nose tyres; two main struts, each with two tyres.
 
 ## Things the entity work will run into
@@ -228,8 +339,9 @@ as the dark fan case.
   the ground on take-off rotation; the physics should either limit pitch on the ground or accept it.
 - **Not checked in game.** The model has only been rendered outside the game, by baking the real
   `LayerDefinition`s and walking the `ModelPart`s under the same `PoseStack` transforms that `submit()`
-  uses, with `setupAnim` run on a real `PlaneRenderState` for the fans. The lighting in those renders is an
-  approximation.
+  uses, with `setupAnim` run on a real `PlaneRenderState` (fans, logo). The preview asks each model for its
+  real `RenderType` and culls only the layers whose type is `entity_cutout_cull`. The lighting in those
+  renders is an approximation.
 
 ## Limitations
 

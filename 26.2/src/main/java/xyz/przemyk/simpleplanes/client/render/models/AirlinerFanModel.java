@@ -40,11 +40,11 @@ public class AirlinerFanModel extends EntityModel<PlaneRenderState> {
     /** One fan disc, pivoted on the nacelle axis, 2 px behind the front of the intake lip. */
     private static void addFan(PartDefinition parent, String name, float x) {
         PartDefinition fan = parent.addOrReplaceChild(name, CubeListBuilder.create()
-                .texOffs(119, 14).addBox(-1.5F, -1.5F, -2.0F, 3.0F, 3.0F, 3.0F, new CubeDeformation(0.0F)),
+                .texOffs(243, 6).addBox(-1.5F, -1.5F, -2.0F, 3.0F, 3.0F, 3.0F, new CubeDeformation(0.0F)),
                 PartPose.offset(x, -10.0F, -24.0F));
         for (int i = 0; i < 4; i++) {
             fan.addOrReplaceChild("blades_" + i, CubeListBuilder.create()
-                    .texOffs(15, 15).addBox(-5.0F, -1.0F, -0.5F, 10.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
+                    .texOffs(147, 14).addBox(-5.0F, -1.0F, -0.5F, 10.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
                     PartPose.offsetAndRotation(0.0F, 0.0F, 0.0F, BLADE_PITCH, 0.0F, i * (float) Math.PI / 4.0F));
         }
     }
