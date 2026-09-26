@@ -544,10 +544,10 @@ public class PlaneEntity extends Entity {
         // autopilot: the warhead is a property of the flight, not a constant. An aircraft with no
         // flight plan — every plane a player ever built or flew — gets Blast.DEFAULT, which is
         // 4.0F with TNT block interaction and no fire, i.e. bit-for-bit what this line used to do.
-        Blast blast = Blast.DEFAULT;
+        Blast blast = warhead(Blast.DEFAULT);
         PlaneAutopilot engaged = getAutopilot();
         if (engaged != null && engaged.getPlan() != null) {
-            blast = engaged.getPlan().blast();
+            blast = warhead(engaged.getPlan().blast());
         }
         // Extension point: Blast#detonate runs the registered BlastGuards (see BlastGuard) and then the
         // explosion. It is the one path every blast of this mod takes, aircraft and missiles alike.
@@ -556,6 +556,11 @@ public class PlaneEntity extends Entity {
             return;
         }
         level().explode(this, getX(), getY(), getZ(), blast.power(), blast.fire(), blast.interaction());
+    }
+
+    /** The warhead this airframe carries when {@code asked} is ordered; only a drone differs. */
+    public Blast warhead(Blast asked) {
+        return asked;
     }
 
     protected void dropItem(ServerLevel serverLevel) {

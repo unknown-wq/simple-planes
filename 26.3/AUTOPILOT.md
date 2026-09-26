@@ -233,8 +233,9 @@ belongs to the moment someone asks for it. See COMMANDS.md, "Seeing airfields in
 * **Right-click the air** — status report: distance, warhead, run-in bearing and aircraft.
 * **Sneak + right-click the air** — cycle the spawn distance: 100 → 200 → 400 → 800, and the blast
   strength one step each time the distance wraps. See [The strike tool](#the-strike-tool).
-* **A plane item in the other hand** — that plane flies the strike instead of the tool's own
-  aircraft, and is used up (not in creative). See [Choosing the aircraft](#choosing-the-aircraft).
+* **A plane or a drone item in the other hand** — that plane or drone flies the strike instead of
+  the tool's own aircraft, and is used up (not in creative). See
+  [Choosing the aircraft](#choosing-the-aircraft).
 * `/autopilot tool <distance> [bearing] [blast] [blocks] [fire] [type <aircraft>]` — write the full
   set of settings, including "do not break blocks", "set fire", a pinned run-in bearing and the
   aircraft, onto the tool in hand. `/autopilot tool type <aircraft>` changes the aircraft alone.
@@ -242,8 +243,9 @@ belongs to the moment someone asks for it. See COMMANDS.md, "Seeing airfields in
 The aircraft is launched already at attack speed with a booster fitted, cruises the run-in at
 **100 blocks above the ground**, and only then dives — see [The attack run](#the-attack-run).
 It is the starter plane unless the tool says otherwise: `plane`, `large`, `cargo`, `fighter`,
-`airliner` or `random`. The quadcopter crane is peaceful and is never offered; helicopters and the
-airship cannot fly the run and are refused.
+`airliner`, `strike_drone`, `fpv_drone` or `random` (never a drone). The quadcopter crane is
+peaceful and is never offered; helicopters and the airship cannot fly the run and are refused, and
+neither can a drone fly a runway sortie — see [The drones](#the-drones).
 
 ### Route Wand
 
@@ -2791,6 +2793,10 @@ a repeatable test wants to do anyway.
 
 The defaults are exactly what a plane has always done, so `/autopilot strike <x y z>` is unchanged.
 
+**A drone (`type strike_drone`/`type fpv_drone`) ignores all three** and flies its own small fixed
+charge instead — see [The drones](#the-drones). `blocks` still applies to it (a no-block-damage tool
+stays one), `fire` never does.
+
 **Why 16 is the ceiling.** Not taste — cost. `ServerExplosion` casts 1352 rays and then drops every
 block it removed, so the work grows with the volume of the crater, and a bound is what stops a
 mistyped argument stalling the server or eating a build. 16 is four times TNT: a 32-block damage
@@ -2883,9 +2889,10 @@ hand overrides it) and in the launch message, which names the airframe that was 
 so a `random` strike says what it drew. `random` draws from `plane`, `large` and `cargo`, as on
 `route`.
 
-**Which aircraft.** `plane`, `large`, `cargo`, `fighter` and `airliner`, each flown into a target on
-the rig. Refused with a reason, by the command, by a plane in the other hand and by a stored value
-alike:
+**Which aircraft.** `plane`, `large`, `cargo`, `fighter`, `airliner`, `strike_drone` and `fpv_drone`,
+each flown into a target on the rig — the two drones are one-way munitions with their own fixed
+charge; see [The drones](#the-drones) below. Refused with a reason, by the command, by a plane (or a
+drone) in the other hand and by a stored value alike:
 
 | aircraft | why not |
 |---|---|
@@ -2915,6 +2922,83 @@ Measured on a superflat rig, bearing 0, ticks to impact and miss distance in blo
 The cargo plane's final is the longest and flattest, so it is the one that meets obstacles: at two
 superflat sites a floating structure in the dive corridor brought it down 73 and 119 blocks short,
 reproducibly, where the steeper airframes passed over. Pin a bearing over open ground.
+
+#### The drones
+
+`strike_drone` (fixed-wing) and `fpv_drone` (multirotor) are one-way munitions: `type strike_drone`
+and `type fpv_drone` on `strike`/`tool`, or the item (`simpleplanes:strike_drone`,
+`simpleplanes:fpv_drone`) in the other hand, the way a plane item is. `AircraftType#isDrone` marks
+them: `random` never draws one (it stays `plane`/`large`/`cargo` only), the runway commands
+(`route`/`flight`/`inbound`/`heliflight`.../`shuttle add`) refuse them with "a one-way munition and
+cannot land, use /autopilot strike ... or the Plane Strike Tool" (the same refusal `helicopter`
+gets, extended), and `DroneEntity#dropItem` is a no-op — nothing drops when one goes off, it is spent
+like the plane item a strike consumes.
+
+**The warhead is always the fixed charge**, never whatever the tool or the command asked for.
+`AircraftType#warhead`/`PlaneEntity#warhead` substitute `Blast#forDrone()` — `Blast.DRONE_POWER`
+(1.0F), `breaksBlocks` carried over from what was asked (a no-block-damage tool stays one), `fire`
+forced off — at the one place every warhead is read (`PlaneEntity#explode`, and
+`AutopilotSpawner#launchStrike`/the launch messages), so a drone cannot be made to carry the tool's
+16.0 or an incendiary charge by mistake. Verified: `/autopilot strike ... 16.0 true true type
+strike_drone` still launched with "Warhead: 1.0" and the crater diff below showed `fire 0`.
+
+**Picking 1.0.** Measured on the superflat rig with `/autopilot tooltest charge <pos> <power> true`
+(a bare `Blast` through the same `detonate` path, no aircraft) then `tooltest crater snapshot/diff`,
+counting blocks actually removed and the farthest one from the point:
+
+| Power | Blocks removed | Farthest | Fire |
+|---|---|---|---|
+| 0.5 | 1 | 0.71 | 0 |
+| **1.0** | **8** | **1.22** | **0** |
+| 1.5 | 8 | 1.22 | 0 |
+
+0.5 barely breaks the one block it lands on; 1.0 reliably takes the full 2×2×2 around the point
+(effective radius about a block, as asked) and 1.5 removes nothing more — the vanilla ray-cast
+threshold that 2×2×2 sits behind does not move again until well past 1.5. 1.0 is the cheapest power
+that reaches it, so `Blast.DRONE_POWER = 1.0F`. No fire at any of the three, which is expected:
+`forDrone()` sets `fire` to `false` unconditionally.
+
+**Flown into a target on the rig**, bearing 0, superflat, both with the tool's own defaults (4.0,
+breaks blocks, no fire — overridden to 1.0/no fire on launch as above):
+
+| Aircraft | 100 | 200 | 400 | 800 |
+|---|---|---|---|---|
+| `strike_drone` | 56 t, 4.7 off | 91 t, 5.8 off | 165 t, 5.6 off | 306 t, 5.1 off |
+| `fpv_drone` | 67 t, 1.2 off | 137 t, 1.2 off | 236 t, 0.6 off | 437 t, 1.3 off |
+
+Every run's crater diff: 4–8 blocks removed, farthest point 2.2–7 blocks from the *original target
+coordinate* (not the detonation point — see below), fire 0. `strike_drone` never reported "hit the
+target" (`STRIKE_DRONE_HIT_RADIUS` is 2.0, tighter than its miss); `fpv_drone` reported a hit on
+every one of the eight runs above.
+
+**Two different airframes for two different jobs, not a bug.** `strike_drone` flies the same
+fixed-wing dive law as the starter plane on a lighter frame (`ROTATION_SPEED_MULTIPLIER` 1.2), and
+its miss distance — 4.7 to 5.8 blocks — is the same few blocks the starter plane, `large` and
+`airliner` already show in the table above (compare: plane 5–6, large 5, airliner 5). That was
+always "close enough" for a 4.0–16.0 warhead with a multi-block crater; it is not close enough for a
+drone's ~1-block charge, so most `strike_drone` runs went off a few blocks from the clicked block
+without visibly touching it — every one of the four runs above crashed short by hitting the ground
+before closing the horizontal gap (`PlaneAutopilot#tickStrike`'s "committed" dive points the nose
+straight at the aim point, and a fast, low-drag airframe on the shared `STRIKE_DIVE_ANGLE` profile
+can reach the ground before it reaches the target under it). `fpv_drone` does not inherit that: its
+own `steer` closes on the aim point by velocity feedback (`FpvDroneEntity#control`) rather than a
+fixed dive angle, and it landed within 0.6–1.3 blocks on all four distances. **Recommendation:** use
+`fpv_drone` where the clicked block itself has to go; `strike_drone` is the fast, cheap, expendable
+option for a run where a few blocks either way does not matter — this is not a defect in
+`strike_drone` to fix, it is the same dive law every fixed-wing strike aircraft has always flown,
+now visible because the charge is small enough to show it.
+
+**Refusals reverified**, on every path: `strike`/`tool type quadcopter|crane` → "The quadcopter crane
+is peaceful..."; `strike`/`tool type helicopter` → "a rotorcraft does not answer it"; `route type
+strike_drone|fpv_drone` (and `flight`, `inbound`, `shuttle add`) → "a one-way munition and cannot
+land"; `route type helicopter` → the pre-existing rotorcraft refusal, unchanged. The strike aircraft
+list any of these refusals now names ends `..., random, strike_drone or fpv_drone.`
+
+**The five already-shipped types were rerun unaffected** at 200 blocks, bearing 0, same rig: `plane`
+96 t/6 off, `large` 96 t/5 off (needs 200 to push over, unaffected here), `cargo` 139 t/7 off (raised
+to 318, as documented), `fighter` 82 t/3 off, `airliner` 137 t/5 off (raised to 234) — every figure
+matches the table above exactly, confirming the `PlaneRenderer`/`PlaneEntity#warhead` refactor this
+feature needed changed nothing about how those five fly or explode.
 
 `status` is the one to watch while debugging. Per aircraft it prints:
 

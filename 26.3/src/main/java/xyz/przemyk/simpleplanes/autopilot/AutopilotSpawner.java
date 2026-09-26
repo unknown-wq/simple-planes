@@ -119,7 +119,8 @@ public final class AutopilotSpawner {
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
         // Powered by the autopilot, and never persisted: a strike aircraft is a one-shot weapon.
-        autopilot.start(plane, FlightPlan.strike(target, blast), true, false, owner);
+        // A drone carries its own fixed charge, whatever was ordered.
+        autopilot.start(plane, FlightPlan.strike(target, plane.warhead(blast)), true, false, owner);
         return plane;
     }
 

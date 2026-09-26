@@ -16,6 +16,7 @@ import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.container.PlaneWorkbenchContainer;
 import xyz.przemyk.simpleplanes.items.CraneRemoteItem;
 import xyz.przemyk.simpleplanes.items.DescriptionItem;
+import xyz.przemyk.simpleplanes.items.DroneItem;
 import xyz.przemyk.simpleplanes.items.HelipadToolItem;
 import xyz.przemyk.simpleplanes.items.ParachuteItem;
 import xyz.przemyk.simpleplanes.items.PlaneArmorItem;
@@ -107,6 +108,10 @@ public class SimplePlanesItems {
     public static final Supplier<PlaneItem> MINI_HELICOPTER_ITEM = register("mini_helicopter",
         properties -> new PlaneItem(properties, SimplePlanesEntities.MINI_HELICOPTER), new Item.Properties());
     public static final Supplier<QuadcopterItem> QUADCOPTER_ITEM = register("quadcopter", QuadcopterItem::new, new Item.Properties());
+    public static final Supplier<DroneItem> STRIKE_DRONE_ITEM = register("strike_drone",
+        properties -> new DroneItem(properties, SimplePlanesEntities.STRIKE_DRONE), new Item.Properties());
+    public static final Supplier<DroneItem> FPV_DRONE_ITEM = register("fpv_drone",
+        properties -> new DroneItem(properties, SimplePlanesEntities.FPV_DRONE), new Item.Properties());
     public static final Supplier<CraneRemoteItem> CRANE_REMOTE = register("crane_remote", CraneRemoteItem::new, new Item.Properties());
 
     public static final Supplier<ParachuteItem> PARACHUTE_ITEM = register("parachute", ParachuteItem::new, new Item.Properties());
@@ -141,6 +146,8 @@ public class SimplePlanesItems {
             output.accept(PLANE_WORKBENCH.get());
             output.accept(PARACHUTE_ITEM.get());
             output.accept(PLANE_STRIKE_TOOL.get());
+            output.accept(STRIKE_DRONE_ITEM.get());
+            output.accept(FPV_DRONE_ITEM.get());
             output.accept(ROUTE_WAND.get());
             output.accept(RUNWAY_TOOL.get());
             output.accept(HELIPAD_TOOL.get());

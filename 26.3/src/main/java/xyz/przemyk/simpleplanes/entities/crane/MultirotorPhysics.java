@@ -30,6 +30,10 @@ public final class MultirotorPhysics {
     public double mass = 1.0;
     /** Thrust ceiling; {@link #T_MAX} except under a test override. */
     public double tMax = T_MAX;
+    /** Drag coefficients; the crane's constants unless an airframe sets its own. */
+    public double dragHLin = DRAG_H_LIN;
+    public double dragHQuad = DRAG_H_QUAD;
+    public double dragV = DRAG_V;
 
     /** Attitude lag toward the commanded tilt, and the rate-limited yaw toward a heading. */
     public void attitude(double pitchCmd, double rollCmd, double yawCmd) {
@@ -69,9 +73,9 @@ public final class MultirotorPhysics {
     /** Drag as an acceleration, written into out. */
     public double[] drag(double[] out) {
         double vh = Math.sqrt(v[0] * v[0] + v[2] * v[2]);
-        double k = DRAG_H_LIN + DRAG_H_QUAD * vh;
+        double k = dragHLin + dragHQuad * vh;
         out[0] = -k * v[0];
-        out[1] = -DRAG_V * v[1];
+        out[1] = -dragV * v[1];
         out[2] = -k * v[2];
         return out;
     }
