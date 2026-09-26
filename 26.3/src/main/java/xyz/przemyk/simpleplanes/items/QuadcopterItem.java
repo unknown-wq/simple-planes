@@ -69,6 +69,8 @@ public class QuadcopterItem extends Item {
         } else {
             quadcopter.setQ(MathUtil.toQuaternionf(player.getYRot(), 0, 0));
         }
+        quadcopter.initAt(at, false);
+        quadcopter.setOwner(player.getUUID());
         if (!level.noCollision(quadcopter, quadcopter.getBoundingBox().inflate(-0.1D))) {
             return InteractionResult.FAIL;
         }

@@ -85,7 +85,8 @@ public class QuadcopterRenderer extends EntityRenderer<QuadcopterEntity, Quadcop
 
     @Override
     protected AABB getBoundingBoxForCulling(QuadcopterEntity entity, float partialTicks) {
-        return entity.getBoundingBox().expandTowards(0, -entity.getRopeLength() - 0.5, 0);
+        Vec3 hook = entity.hookWorld(partialTicks);
+        return entity.getBoundingBox().expandTowards(0, -entity.getRopeLength() - 0.5, 0).minmax(new AABB(hook, hook).inflate(0.5));
     }
 
     @Override
