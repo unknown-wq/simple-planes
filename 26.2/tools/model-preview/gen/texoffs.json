@@ -1,0 +1,78 @@
+{
+ "canopy_main": [
+  0,
+  0
+ ],
+ "canopy_mid": [
+  0,
+  69
+ ],
+ "canopy_top": [
+  74,
+  57
+ ],
+ "canopy_front": [
+  0,
+  97
+ ],
+ "intake": [
+  0,
+  33
+ ],
+ "missile": [
+  64,
+  33
+ ],
+ "nose_mid": [
+  84,
+  0
+ ],
+ "nose_tip": [
+  48,
+  97
+ ],
+ "pitot": [
+  112,
+  24
+ ],
+ "dash": [
+  94,
+  99
+ ],
+ "nose_strut": [
+  112,
+  38
+ ],
+ "main_strut": [
+  116,
+  0
+ ],
+ "nose_wheel": [
+  112,
+  14
+ ],
+ "main_wheel": [
+  30,
+  97
+ ],
+ "petal_h": [
+  74,
+  78
+ ],
+ "petal_v": [
+  74,
+  88
+ ],
+ "turbine": [
+  112,
+  31
+ ],
+ "flame_outer": [
+  94,
+  88
+ ],
+ "flame_core": [
+  84,
+  14
+ ]
+}

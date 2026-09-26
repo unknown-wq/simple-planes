@@ -1,0 +1,3 @@
+[{"models":[{"json":"fighter_idle.json"}],"out":"out/fp/eye.png","w":900,"h":600,"dir":[0,0,1],"eye":[0,1.656,0.125],"look":[0,-0.25,1],"fov":70},
+ {"models":[{"json":"fighter_idle.json"}],"out":"out/fp/eye_high.png","w":900,"h":600,"dir":[0,0,1],"eye":[0,1.78,0.125],"look":[0,-0.35,1],"fov":70},
+ {"models":[{"json":"fighter_idle.json"}],"out":"out/fp/eye_side.png","w":900,"h":600,"dir":[0,0,1],"eye":[0,1.656,0.125],"look":[1,-0.3,0.3],"fov":70}]

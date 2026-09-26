@@ -1,0 +1,4 @@
+[{"models":[{"json":"fighter_idle.json"}],"out":"out/close/nozzle_idle.png","w":900,"h":700,"dir":[-0.6,0.35,-1],"target":[0,1.0,-3.2],"dist":3.2,"fov":30},
+ {"models":[{"json":"fighter_full.json"}],"out":"out/close/nozzle_full.png","w":900,"h":700,"dir":[-0.6,0.35,-1],"target":[0,1.0,-3.4],"dist":3.4,"fov":30},
+ {"models":[{"json":"fighter_idle.json"}],"out":"out/close/cockpit.png","w":900,"h":700,"dir":[1,0.9,0.7],"target":[0,1.6,0.9],"dist":4.0,"fov":30},
+ {"models":[{"json":"fighter_idle.json"}],"out":"out/close/nose.png","w":900,"h":700,"dir":[0.8,0.2,1],"target":[0,1.0,2.6],"dist":3.5,"fov":30}]

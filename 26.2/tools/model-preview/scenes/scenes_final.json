@@ -1,0 +1,11 @@
+[{"models":[{"json":"final_t0.json"}],"out":"out/final_raw/fighter-front34.png","w":1200,"h":800,"dir":[0.9,0.55,1.1],"fit":0.72},
+ {"models":[{"json":"final_t0.json"}],"out":"out/final_raw/fighter-rear34.png","w":1200,"h":800,"dir":[-0.9,0.6,-1.1],"fit":0.72},
+ {"models":[{"json":"final_t0.json"}],"out":"out/final_raw/fighter-side.png","w":1200,"h":800,"dir":[1,0,0],"ortho":true},
+ {"models":[{"json":"final_t0.json"}],"out":"out/final_raw/fighter-top.png","w":1200,"h":800,"dir":[0,1,0],"ortho":true,"up":[0,0,1]},
+ {"models":[{"json":"final_t0.json"}],"out":"out/final_raw/fighter-front.png","w":1200,"h":800,"dir":[0,0,1],"ortho":true},
+ {"models":[{"json":"final_t0.json"}],"out":"out/final_raw/fighter-below34.png","w":1200,"h":800,"dir":[0.8,-0.35,0.9],"fit":0.72,"ground":false},
+ {"models":[{"json":"final_t1.json"}],"out":"out/final_raw/fighter-afterburner.png","w":1200,"h":800,"dir":[-0.7,0.4,-1],"target":[0,1.0,-3.0],"dist":4.2,"fov":30},
+ {"models":[{"json":"final_t0.json"}],"out":"out/final_raw/fighter-nozzle-idle.png","w":1200,"h":800,"dir":[-0.7,0.4,-1],"target":[0,1.0,-3.0],"dist":4.2,"fov":30},
+ {"models":[{"json":"final_t0.json"}],"out":"out/final_raw/fighter-cockpit-pov.png","w":1200,"h":800,"dir":[0,0,1],"eye":[0,1.6825,0.125],"look":[0,-0.25,1],"fov":70},
+ {"models":[{"json":"plane.json","offset":[-3.6,0,0]},{"json":"final_t0.json","offset":[3.4,0,0]}],"out":"out/final_raw/fighter-scale-vs-starter.png","w":1400,"h":800,"dir":[0.55,0.6,1.1],"fit":0.62},
+ {"models":[{"json":"plane.json","offset":[0,0,-4.8]},{"json":"final_t0.json","offset":[0,0,4.3]}],"out":"out/final_raw/fighter-scale-side.png","w":1400,"h":500,"dir":[1,0,0],"ortho":true,"margin":0.04}]

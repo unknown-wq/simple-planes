@@ -1,0 +1,2 @@
+[{"models":[{"json":"plane.json","offset":[-3.6,0,0]},{"json":"fighter_idle.json","offset":[3.4,0,0]}],"out":"out/scale/scale34.png","w":1400,"h":800,"dir":[0.55,0.6,1.1],"fit":0.62},
+ {"models":[{"json":"plane.json","offset":[0,0,-4.8]},{"json":"fighter_idle.json","offset":[0,0,4.3]}],"out":"out/scale/scale_side.png","w":1400,"h":500,"dir":[1,0,0],"ortho":true,"margin":0.04}]
