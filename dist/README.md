@@ -1,6 +1,6 @@
 # dist
 
-## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.7.jar`
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.8.jar`
 
 A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
 has had a full play-through yet; most of it was tested on a headless dedicated server, and the fighter
@@ -12,7 +12,7 @@ glass, the airliner cabin and the world-map tab also in a real client.
 | Loader | Fabric, loader ≥ 0.19.5 |
 | Java | 25 |
 | Requires | Fabric API 0.160.5+26.3 or newer |
-| sha256 | `c7eeb2f77c88aecfddc8b600c6a4a60dacd6b7191f5108f3aa45670acf1ce756` |
+| sha256 | `6044273e6f28fa9d81601475406477cedd702c75844f01454e672388cf799461` |
 
 What it adds on top of 5.3.14:
 
@@ -62,6 +62,15 @@ What it adds on top of 5.3.14:
 - Patrol drone: a recon quadcopter other mods fly on routes through `api/drone/PatrolDrones` (MineColonies
   barracks use it). Flies 20 blocks above ground, spots within 16 blocks, range up to 1000 blocks; air
   defence ignores it. `/drone` for operators.
+- Missiles: one per target; a second is fired only if the first was destroyed and the target survived.
+  Fuel equals the missile's maximum range, then it falls.
+- Fighter autopilot evades air-defence missiles (drag, then a hard break close in); a player flying an
+  aircraft a missile is locked on gets an action-bar warning and a beep. No flares.
+- Airfield taxi: planned ground routes around pits, water and other aircraft, holds with a reason,
+  nearest runway end, entry part-way down the runway. `/autopilot airfields oneway` restricts departures
+  to one end; arrivals land from either end when the runway is free. Taxi slopes must be slab ramps.
+- Airliners: taller fuselage, glazed windows seen from inside and out, cabin lining, longer roll-out on
+  landing, animated retracting landing gear (`/airliner gear`).
 - Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`, `/airdefence`, `/aviation`.
 
 Design and test reports are in `../26.3/design/` and `../26.3/MISSILES.md`. Checked here: a clean
@@ -75,6 +84,8 @@ silo placed; each merged feature was tested on its own branch (PRs #44–#49).
 On beta.6: a boot with no errors, a strike launched hostile, the dispatch list and a landing-zone search
 answering; the dispatch API and the hostile strikes were tested on their branches (PRs #50, #51).
 On beta.7: a clean build; the patrol drones were tested on their branch (PR #52).
+On beta.8: a clean build; missile fuel, fighter evasion, airfield taxi and the airliner changes were
+tested on their branches (PRs #53–#56).
 
 ## Stable builds
 
