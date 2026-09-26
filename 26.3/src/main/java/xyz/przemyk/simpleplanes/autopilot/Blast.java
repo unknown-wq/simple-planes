@@ -2,8 +2,13 @@ package xyz.przemyk.simpleplanes.autopilot;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.api.BlastGuards;
 
 /**
  * The warhead: how hard an autopilot aircraft goes off when it stops flying.
@@ -63,6 +68,20 @@ public record Blast(float power, boolean breaksBlocks, boolean fire) {
      */
     public Level.ExplosionInteraction interaction() {
         return breaksBlocks ? Level.ExplosionInteraction.TNT : Level.ExplosionInteraction.NONE;
+    }
+
+    /**
+     * Sets this blast off at {@code at}: the one path every explosion of this mod takes. The registered
+     * {@link BlastGuards} are consulted first and may weaken or suppress it.
+     *
+     * @return the blast actually applied, or {@code null} if a guard suppressed it.
+     */
+    public @Nullable Blast detonate(ServerLevel level, @Nullable Entity source, Vec3 at) {
+        Blast applied = BlastGuards.filter(level, source, at, this);
+        if (applied != null) {
+            level.explode(source, at.x, at.y, at.z, applied.power(), applied.fire(), applied.interaction());
+        }
+        return applied;
     }
 
     public boolean isDefault() {

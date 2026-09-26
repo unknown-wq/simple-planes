@@ -22,6 +22,7 @@ import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import xyz.przemyk.simpleplanes.autopilot.Blast;
 
 import java.util.Locale;
 
@@ -33,8 +34,9 @@ import java.util.Locale;
  * cube hitbox centred on it, as MISSILES-MODEL.md suggests. Impact and arrival are tested every tick on the
  * segment the nose swept, so neither depends on the hitbox.
  *
- * <p>Harmless by construction: nothing here creates an explosion, hurts an entity, sets a fire or changes a
- * block. Every way a flight can end goes through {@link #finish}, which makes a puff of particles and discards.
+ * <p>Every way a flight can end goes through {@link #finish}: a puff of particles, then, for an arrival or a
+ * terrain impact only, the tier's warhead through {@link Blast#detonate} (blast guards apply), unless the
+ * {@code simpleplanes:missile_explosions} game rule is off. Nothing else here hurts an entity or changes a block.
  */
 public class MissileEntity extends Entity {
 
@@ -300,13 +302,29 @@ public class MissileEntity extends Entity {
         setXRot((float) Math.toDegrees(-Math.asin(Mth.clamp(dir.y, -1.0, 1.0))));
     }
 
-    /** Ends the flight: a harmless puff at {@code at}, a report, and the entity is removed. */
+    /** Ends the flight: a puff at {@code at}, the warhead if the flight hit something, a report, and the entity is removed. */
     void finish(ServerLevel level, Outcome outcome, Vec3 at) {
         if (finished) return;
         finished = true;
         MissileFx.puff(level, at, tier());
-        MissileTracker.report(this, outcome, at);
+        String blast = detonate(level, outcome, at);
+        MissileTracker.report(this, outcome, at, blast);
         discard();
+    }
+
+    /** Sets the warhead off for an arrival or a terrain impact; returns the report's description of what happened. */
+    private String detonate(ServerLevel level, Outcome outcome, Vec3 at) {
+        if (outcome != Outcome.ARRIVED && outcome != Outcome.TERRAIN) return "none";
+        if (!level.getGameRules().get(Missiles.EXPLOSIONS)) return "inert";
+        Blast ordered = tier().warhead;
+        // a terrain hit lies on the block face; start the blast in the air cell in front of it
+        Vec3 centre = outcome == Outcome.TERRAIN ? at.subtract(dir.scale(0.05)) : at;
+        long t0 = System.nanoTime();
+        Blast applied = ordered.detonate(level, this, centre);
+        double ms = (System.nanoTime() - t0) / 1.0E6;
+        if (applied == null) return "suppressed";
+        return String.format(Locale.ROOT, "%s%.1f%s%s,%.1fms", applied.equals(ordered) ? "" : "guarded:", applied.power(),
+            applied.breaksBlocks() ? ",blocks" : "", applied.fire() ? ",fire" : "", ms);
     }
 
     public void abort() {
