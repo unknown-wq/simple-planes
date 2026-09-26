@@ -1,0 +1,12 @@
+# Generated or fetched by the preview tooling; never commit these.
+node_modules/
+# Mojang block textures are extracted from the Minecraft jar at use and must not be committed.
+tex/
+out/
+classes/
+dumper/*.class
+dumper/logs/
+# Dump files written next to the scripts (package files and scenes/ are tracked).
+/*.json
+!/package.json
+!/package-lock.json

@@ -1,16 +1,17 @@
 {
-  "name": "fighter",
+  "name": "model-preview",
   "version": "1.0.0",
-  "description": "",
+  "description": "Render Simple Planes models outside the game (see README.md)",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "LGPL-3.0-or-later",
   "dependencies": {
     "playwright": "^1.56.1",
     "three": "^0.170.0"
-  }
+  },
+  "private": true
 }

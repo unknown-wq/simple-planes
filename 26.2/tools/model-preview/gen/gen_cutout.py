@@ -7,6 +7,9 @@ Face rects for texOffs (u,v) and box (w,h,d), as verified from the real baked Mo
   east   (u+d+w,    v+d, d, h)      rear   (u+2d+w,  v+d, w, h)
 """
 import json, random, re, sys
+
+sys.exit('gen_cutout.py is the abandoned see-through canopy variant, kept for reference only. '
+         'Running it would overwrite fighter_metal.png and the fighter metal/exhaust models; use gen.py.')
 from PIL import Image
 
 REPO = '/home/user/simple-planes/26.2/src/main'
