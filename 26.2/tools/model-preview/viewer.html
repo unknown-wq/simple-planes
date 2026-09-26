@@ -1,0 +1,89 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#dfe7ee}canvas{display:block}</style></head>
+<body><script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const texCache = {};
+async function loadTex(key){
+  if(texCache[key]) return texCache[key];
+  const t = await new THREE.TextureLoader().loadAsync('/tex/'+key+'.png');
+  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps=false;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.flipY = false; t.colorSpace = THREE.SRGBColorSpace;
+  texCache[key]=t; return t;
+}
+async function buildLayer(layer, texOverride){
+  const pos=[], uv=[], nrm=[], idx=[];
+  let base=0;
+  for(const q of layer.quads){
+    const v=q.v; if(v.length<3) continue;
+    for(const p of v){ pos.push(p[0],p[1],p[2]); uv.push(p[3],p[4]); nrm.push(q.n[0],q.n[1],q.n[2]); }
+    idx.push(base,base+1,base+2, base,base+2,base+3); base+=4;
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
+  g.setAttribute('normal',new THREE.Float32BufferAttribute(nrm,3));
+  g.setIndex(idx);
+  const key = (texOverride && texOverride[layer.name]) || layer.texture;
+  const m=new THREE.MeshLambertMaterial({map:await loadTex(key), side:THREE.FrontSide, alphaTest:0.1});
+  const mesh=new THREE.Mesh(g,m); mesh.castShadow=true; mesh.receiveShadow=true; return mesh;
+}
+window.renderScene = async function(scene){
+  const W=scene.w||1200, H=scene.h||800;
+  const renderer=new THREE.WebGLRenderer({antialias:true, preserveDrawingBuffer:true});
+  renderer.setSize(W,H); renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+  document.body.innerHTML=''; document.body.appendChild(renderer.domElement);
+  const s=new THREE.Scene(); s.background=new THREE.Color(0xdfe7ee);
+  const root=new THREE.Group(); s.add(root);
+  const box=new THREE.Box3();
+  for(const m of scene.models){
+    const data = await (await fetch('/'+m.json)).json();
+    const grp=new THREE.Group(); grp.position.set(...(m.offset||[0,0,0]));
+    for(const L of data.layers){ if(m.skip && m.skip.includes(L.name)) continue; grp.add(await buildLayer(L, m.tex)); }
+    root.add(grp);
+  }
+  root.updateMatrixWorld(true); box.setFromObject(root);
+  const c=box.getCenter(new THREE.Vector3()), sz=box.getSize(new THREE.Vector3());
+  // ground with 1-block grid at entity y=0
+  if(scene.ground!==false){
+    const gsz=Math.ceil(Math.max(sz.x,sz.z)+6);
+    const gm=new THREE.Mesh(new THREE.PlaneGeometry(gsz*2,gsz*2), new THREE.MeshLambertMaterial({color:0xb9c7a4}));
+    gm.rotation.x=-Math.PI/2; gm.position.set(c.x,0,c.z); gm.receiveShadow=true; s.add(gm);
+    const grid=new THREE.GridHelper(gsz*2, gsz*2, 0x8a9a78, 0x9fb08c); grid.position.set(Math.round(c.x),0.002,Math.round(c.z)); s.add(grid);
+  }
+  s.add(new THREE.AmbientLight(0xffffff, 1.3));
+  const sun=new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(c.x+6,c.y+14,c.z+8); sun.target.position.copy(c);
+  sun.castShadow=true; sun.shadow.mapSize.set(4096,4096); const r=Math.max(sz.x,sz.z)+4;
+  Object.assign(sun.shadow.camera,{left:-r,right:r,top:r,bottom:-r,near:0.1,far:60}); sun.shadow.bias=-0.0005; sun.shadow.normalBias=0.01;
+  s.add(sun); s.add(sun.target);
+  const fill=new THREE.DirectionalLight(0xffffff,0.6); fill.position.set(c.x-8,c.y+3,c.z-6); s.add(fill);
+  const radius = sz.length()/2;
+  let cam;
+  const d = scene.dir; // direction from center to camera
+  const dir=new THREE.Vector3(...d).normalize();
+  if(scene.ortho){
+    const aspect=W/H; const half=(scene.fit||1.12)*radius;
+    cam=new THREE.OrthographicCamera(-half*aspect,half*aspect,half,-half,0.1,200);
+  } else {
+    cam=new THREE.PerspectiveCamera(scene.fov||28, W/H, 0.1, 200);
+  }
+  const dist = scene.ortho ? 50 : radius/Math.sin(THREE.MathUtils.degToRad((scene.fov||28)/2))*(scene.fit||1.0);
+  const tgt = scene.target ? new THREE.Vector3(...scene.target) : c;
+  cam.position.copy(tgt).addScaledVector(dir, scene.dist || dist);
+  if(scene.up) cam.up.set(...scene.up);
+  if(scene.eye){ cam.position.set(...scene.eye); cam.near=0.01; cam.updateProjectionMatrix(); cam.lookAt(new THREE.Vector3(...scene.eye).add(new THREE.Vector3(...scene.look))); }
+  else cam.lookAt(tgt);
+  cam.updateMatrixWorld(true);
+  if(scene.ortho){
+    // fit the projected model bbox with a margin
+    const inv=cam.matrixWorldInverse; let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+    for(const X of [box.min.x,box.max.x]) for(const Y of [box.min.y,box.max.y]) for(const Z of [box.min.z,box.max.z]){
+      const p=new THREE.Vector3(X,Y,Z).applyMatrix4(inv); x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);y0=Math.min(y0,p.y);y1=Math.max(y1,p.y);}
+    const m=scene.margin||0.08; let hw=(x1-x0)/2*(1+m*2), hh=(y1-y0)/2*(1+m*2); const cx=(x0+x1)/2, cy=(y0+y1)/2;
+    const aspect=W/H; if(hw/hh>aspect) hh=hw/aspect; else hw=hh*aspect;
+    Object.assign(cam,{left:cx-hw,right:cx+hw,top:cy+hh,bottom:cy-hh}); cam.updateProjectionMatrix();
+  }
+  renderer.render(s,cam);
+  return renderer.domElement.toDataURL('image/png');
+};
+window.ready=true;
+</script></body></html>
