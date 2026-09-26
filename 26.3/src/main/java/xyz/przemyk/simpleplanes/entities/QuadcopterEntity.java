@@ -9,6 +9,7 @@ import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.DamageTypeTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
 import net.minecraft.util.ProblemReporter;
@@ -19,7 +20,13 @@ import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.InterpolationHandler;
 import net.minecraft.world.entity.LinearInterpolationHandler;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -109,6 +116,8 @@ public class QuadcopterEntity extends Entity {
     public static final int IMPACT_COOLDOWN = 8;
     public static final float DEATH_BLAST = 1.5F;
     public static final int FALL_TIMEOUT = 1200;
+    /** CARRY gives up and sets the load down when it has not closed 0.5 b on the delivery point for this long. */
+    public static final int CARRY_STALL_TICKS = 200;
     public static final String LOAD_TAG = "crane-load";
 
     // Load rules (Q8): these constants and refusal() are the only place that decides what may be lifted.
@@ -116,7 +125,22 @@ public class QuadcopterEntity extends Entity {
         Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_liftable"));
     public static final TagKey<EntityType<?>> CRANE_NEVER = TagKey.create(Registries.ENTITY_TYPE,
         Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_never"));
-    public static final boolean ALLOW_HOSTILES = false;
+    /** Datapack mass multipliers (x0.5, x2, x4; several multiply). Shipped: hoglin and zoglin in x4. */
+    public static final TagKey<EntityType<?>> CRANE_MASS_HALF = TagKey.create(Registries.ENTITY_TYPE,
+        Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_mass_x0_5"));
+    public static final TagKey<EntityType<?>> CRANE_MASS_DOUBLE = TagKey.create(Registries.ENTITY_TYPE,
+        Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_mass_x2"));
+    public static final TagKey<EntityType<?>> CRANE_MASS_QUADRUPLE = TagKey.create(Registries.ENTITY_TYPE,
+        Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_mass_x4"));
+    /** Fabric's conventional boss tag (ender dragon, wither); read by id, no compile dependency. */
+    public static final TagKey<EntityType<?>> C_BOSSES = TagKey.create(Registries.ENTITY_TYPE,
+        Identifier.fromNamespaceAndPath("c", "bosses"));
+    /** Hostiles ({@code Enemy}) may be lifted; false restores the old rule, with {@link #CRANE_LIFTABLE} as the allow-list. */
+    public static final boolean ALLOW_HOSTILES = true;
+
+    /** Transient (never saved) follow-range modifier on a slung mob: range 0, so target goals find and keep nothing. */
+    public static final AttributeModifier SLUNG_BLIND = new AttributeModifier(
+        Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_slung"), -1.0, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL);
 
     public enum State { IDLE, TO_PICKUP, LOWER, ATTACH, WINCH_IN, CARRY, LOWER_LOAD, RELEASE, STOW, RETURN, LAND, OVERLOAD }
 
@@ -147,6 +171,8 @@ public class QuadcopterEntity extends Entity {
     private @Nullable UUID pickupId;
     private @Nullable Entity pendingLoad;
     private @Nullable UUID releasedLoad;
+    /** The entity on the hook, kept only to name why it was lost; not saved. */
+    private @Nullable Entity carried;
     private boolean rotorsOff;
     private boolean physInit;
     private boolean checkLoadAfterLoad;
@@ -157,6 +183,8 @@ public class QuadcopterEntity extends Entity {
     private int satTicks;
     private int impactCooldown;
     private int traceTick;
+    private int carryStall;
+    private double carryBest = Double.MAX_VALUE;
     private String loadName = "none";
 
     public QuadcopterEntity(EntityType<? extends QuadcopterEntity> entityType, Level level) {
@@ -315,7 +343,29 @@ public class QuadcopterEntity extends Entity {
 
     @Override
     protected boolean canAddPassenger(Entity passenger) {
-        return passenger == pendingLoad && getPassengers().isEmpty();
+        if (!getPassengers().isEmpty()) {
+            return false;
+        }
+        // a load converting on the hook (piglin zombifying, zombie drowning) hands over to its successor,
+        // which vanilla's ConversionType mounts at the same spot right after the old one dismounts
+        return passenger == pendingLoad || isCarrying() && carried != null && passenger != carried
+            && !carried.isPassenger() && passenger instanceof LivingEntity && passenger.distanceToSqr(carried) < 1.0;
+    }
+
+    @Override
+    protected void addPassenger(Entity passenger) {
+        super.addPassenger(passenger);
+        if (!level().isClientSide() && passenger instanceof Mob mob) {
+            setSlung(mob, true);
+        }
+    }
+
+    @Override
+    protected void removePassenger(Entity passenger) {
+        super.removePassenger(passenger);
+        if (!level().isClientSide() && passenger instanceof Mob mob) {
+            setSlung(mob, false);
+        }
     }
 
     @Override
@@ -375,6 +425,9 @@ public class QuadcopterEntity extends Entity {
             return;
         }
         checkLoad();
+        if (isCarrying() && getFirstPassenger() instanceof Mob mob) {
+            pacify(mob);
+        }
         tickStateMachine(level);
 
         if (rotorsOff || !ALWAYS_POWERED) {
@@ -386,7 +439,11 @@ public class QuadcopterEntity extends Entity {
             }
         } else {
             Vec3 t = target == null ? position() : target;
-            controller.control(phys, rope, t.x, t.y, t.z);
+            Entity load = getFirstPassenger();
+            boolean hanging = isCarrying() && load != null;
+            // near the ground a heavy load gets the ground assist; above its ceiling it cannot be held
+            phys.tMax = phys.tMaxBase * (hanging ? SlungLoad.assist(loadAgl()) : 1.0);
+            controller.control(phys, rope, t.x, hanging ? Math.min(t.y, ceilingY()) : t.y, t.z);
         }
         satTicks = controller.saturated ? satTicks + 1 : 0;
         physicsStep();
@@ -421,6 +478,7 @@ public class QuadcopterEntity extends Entity {
                 setCarrying(false);
                 CraneFeedback.report(this, "load lost: " + loadName + " did not come back with the save");
                 loadName = "none";
+                carried = null;
                 if (isCarryingState(state)) {
                     enter(State.STOW);
                 }
@@ -535,7 +593,8 @@ public class QuadcopterEntity extends Entity {
 
     private void clientTick() {
         propellerRotationOld = propellerRotationNew;
-        propellerRotationNew += (float) (0.6 + 4.0 * getThrust() / MultirotorPhysics.T_MAX);
+        // animation keeps its old scale (hover of an empty drone = 1/3 of the reference)
+        propellerRotationNew += (float) (0.6 + 4.0 * getThrust() / (3.0 * MultirotorPhysics.G));
         if (getTimeSinceHit() > 0) {
             setTimeSinceHit(getTimeSinceHit() - 1);
         }
@@ -580,32 +639,125 @@ public class QuadcopterEntity extends Entity {
 
     // ---- load rules ----
 
-    /** Why this entity cannot be lifted, or null if it can. */
+    /** Why this entity cannot be lifted, or null if it can. Every text is "cannot lift <name>: <reason>" or "too heavy: ...". */
     public static @Nullable String refusal(Entity entity) {
         String name = entity.getName().getString();
-        if (!(entity instanceof LivingEntity living) || !living.isAlive()) {
-            return "cannot lift " + name;
+        if (!(entity instanceof LivingEntity living)) {
+            return "cannot lift " + name + ": not a mob";
         }
-        if (entity instanceof QuadcopterEntity || entity instanceof PlaneEntity || entity.isSpectator()
-            || entity.isPassenger() || entity.isVehicle()) {
-            return "cannot lift " + name;
+        if (!living.isAlive()) {
+            return "cannot lift " + name + ": dead";
+        }
+        if (entity instanceof QuadcopterEntity || entity instanceof PlaneEntity) {
+            return "cannot lift " + name + ": aircraft";
+        }
+        if (entity.isSpectator()) {
+            return "cannot lift " + name + ": spectator";
+        }
+        Entity vehicle = entity.getVehicle();
+        if (vehicle != null) {
+            return "cannot lift " + name + ": riding " + vehicle.getName().getString();
+        }
+        if (entity.isVehicle()) {
+            return "cannot lift " + name + ": has a rider";
+        }
+        if (isBoss(entity)) {
+            return "cannot lift " + name + ": boss";
         }
         var type = entity.getType().builtInRegistryHolder();
-        if (type.is(CRANE_NEVER) || entity.getType() == EntityTypes.ENDER_DRAGON || entity.getType() == EntityTypes.WITHER) {
-            return "cannot lift " + name;
+        if (type.is(CRANE_NEVER)) {
+            return "cannot lift " + name + ": in tag simpleplanes:crane_never";
         }
         if (entity instanceof Enemy && !ALLOW_HOSTILES && !type.is(CRANE_LIFTABLE)) {
-            return "cannot lift " + name;
+            return "cannot lift " + name + ": hostile";
         }
         double m = massOf(entity);
-        if (m > SlungLoad.MAX_LOAD) {
-            return String.format(Locale.ROOT, "too heavy: %s is %.2f, limit %.2f", name, m, SlungLoad.MAX_LOAD);
+        double limit = SlungLoad.liftLimit(MultirotorPhysics.T_MAX);
+        if (m > limit) {
+            return String.format(Locale.ROOT, "too heavy: %s \u2248 %.2f, max %.2f (%.0f%% of capacity)", name, m, limit,
+                100 * m / SlungLoad.capacity(MultirotorPhysics.T_MAX));
         }
         return null;
     }
 
+    /** The four vanilla bosses always; {@code c:bosses} unless the type is also in {@link #CRANE_LIFTABLE}. */
+    public static boolean isBoss(Entity entity) {
+        EntityType<?> type = entity.getType();
+        var holder = type.builtInRegistryHolder();
+        return type == EntityTypes.ENDER_DRAGON || type == EntityTypes.WITHER || type == EntityTypes.WARDEN
+            || type == EntityTypes.ELDER_GUARDIAN || holder.is(C_BOSSES) && !holder.is(CRANE_LIFTABLE);
+    }
+
+    /**
+     * A slung mob does not fight. Two parts: {@link #SLUNG_BLIND} while it is a passenger (set and cleared in
+     * {@link #addPassenger}/{@link #removePassenger}, so every way off the hook clears it), and this, every tick
+     * from the crane's tick, which runs before the passenger's: the target is dropped and a creeper's fuse runs
+     * back down. A creeper lit by flint and steel ({@code isIgnited}) still explodes.
+     */
+    private static void pacify(Mob mob) {
+        mob.setTarget(null);
+        mob.getBrain().eraseMemory(MemoryModuleType.ATTACK_TARGET);
+        mob.getNavigation().stop();
+        if (mob instanceof Creeper creeper && !creeper.isIgnited()) {
+            creeper.setSwellDir(-1);
+        }
+    }
+
+    private static void setSlung(Mob mob, boolean slung) {
+        AttributeInstance range = mob.getAttribute(Attributes.FOLLOW_RANGE);
+        if (range == null) {
+            return;
+        }
+        if (slung && !range.hasModifier(SLUNG_BLIND.id())) {
+            range.addTransientModifier(SLUNG_BLIND);
+        } else if (!slung) {
+            range.removeModifier(SLUNG_BLIND.id());
+        }
+    }
+
+    /**
+     * Estimated mass in drone masses: bounding-box volume w^2 * h at the entity's current size (babies, slime
+     * size and the scale attribute follow), times (1 + knockback resistance) as a density proxy (iron golem and
+     * warden 1.0, ravager 0.75, hoglin 0.6, armour adds to players), times the datapack multiplier tags.
+     */
     public static double massOf(Entity entity) {
-        return SlungLoad.massOf(entity.getBbWidth(), entity.getBbHeight());
+        double density = 1.0;
+        if (entity instanceof LivingEntity living) {
+            AttributeInstance kbr = living.getAttribute(Attributes.KNOCKBACK_RESISTANCE);
+            density += kbr == null ? 0.0 : Mth.clamp(kbr.getValue(), 0.0, 1.0);
+        }
+        var type = entity.getType().builtInRegistryHolder();
+        if (type.is(CRANE_MASS_HALF)) {
+            density *= 0.5;
+        }
+        if (type.is(CRANE_MASS_DOUBLE)) {
+            density *= 2.0;
+        }
+        if (type.is(CRANE_MASS_QUADRUPLE)) {
+            density *= 4.0;
+        }
+        return SlungLoad.massOf(entity.getBbWidth(), entity.getBbHeight(), density);
+    }
+
+    /** "mass 10.58, 171% of capacity, max lift 0.48 b" for a load of mass m on this crane's rated thrust. */
+    public String describeLoad(double m) {
+        double h = SlungLoad.ceiling(m, phys.tMaxBase);
+        return String.format(Locale.ROOT, "mass %.2f, %.0f%% of capacity%s", m, 100 * m / SlungLoad.capacity(phys.tMaxBase),
+            Double.isInfinite(h) ? "" : String.format(Locale.ROOT, ", max lift %.1f b", Math.max(0.0, h)));
+    }
+
+    /** Max load-bottom height above ground for the current load; infinite when not limited or not carrying. */
+    public double liftCeiling() {
+        return isCarrying() ? SlungLoad.ceiling(rope.mass, phys.tMaxBase) : Double.POSITIVE_INFINITY;
+    }
+
+    /** Highest drone y that keeps a lift-limited load at its ceiling; infinite when not limited. */
+    public double ceilingY() {
+        double h = liftCeiling();
+        if (Double.isInfinite(h) || getFirstPassenger() == null) {
+            return Double.POSITIVE_INFINITY;
+        }
+        return getY() - loadAgl() + Math.max(0.0, h);
     }
 
     // ---- orders (remote item and /crane) ----
@@ -628,7 +780,7 @@ public class QuadcopterEntity extends Entity {
         pickupId = mob.getUUID();
         rotorsOff = false;
         enter(State.TO_PICKUP);
-        CraneFeedback.report(this, "picking up " + mob.getName().getString());
+        CraneFeedback.report(this, "picking up " + mob.getName().getString() + " (" + describeLoad(massOf(mob)) + ")");
         return null;
     }
 
@@ -750,6 +902,10 @@ public class QuadcopterEntity extends Entity {
         controller.vMax = CraneController.V_MAX;
         controller.vzMax = CraneController.VZ_MAX;
         switch (next) {
+            case CARRY -> {
+                carryBest = Double.MAX_VALUE;
+                carryStall = 0;
+            }
             case LOWER -> lowerStart = null;
             case STOW -> {
                 rope.targetLength = SlungLoad.L_MIN;
@@ -777,23 +933,43 @@ public class QuadcopterEntity extends Entity {
         }
         Entity load = getFirstPassenger();
         if (load == null || !load.isAlive()) {
+            String why;
+            if (load != null) {
+                why = " died";
+            } else if (carried != null && carried.isRemoved()) {
+                // a creeper that exploded, a mob discarded on peaceful, /kill
+                Entity.RemovalReason reason = carried.getRemovalReason();
+                why = " was removed (" + (reason == null ? "unknown" : reason.name().toLowerCase(Locale.ROOT)) + ")";
+            } else {
+                why = " let go";
+            }
+            carried = null;
             setCarrying(false);
             rope.mass = 0;
             phys.mass = 1;
-            CraneFeedback.report(this, "load lost: " + loadName + (load == null ? " let go" : " died"));
+            CraneFeedback.report(this, "load lost: " + loadName + why);
             loadName = "none";
             delivery = null;
             if (isCarryingState(state)) {
                 enter(State.STOW);
             }
+        } else if (load != carried) {
+            String was = loadName;
+            load.addTag(LOAD_TAG);
+            attachMass(load);
+            CraneFeedback.report(this, "load changed: " + was + " is now " + loadName + " (" + describeLoad(rope.mass) + ")");
         }
     }
 
     private void tickStateMachine(ServerLevel level) {
         stateTicks++;
-        if (isCarrying() && isCarryingState(state) && state != State.OVERLOAD
+        // a lift-limited load (finite ceiling) sinking while saturated is settling onto its ceiling, not overloaded
+        if (isCarrying() && isCarryingState(state) && state != State.OVERLOAD && Double.isInfinite(liftCeiling())
             && satTicks >= OVERLOAD_TICKS && phys.v[1] < OVERLOAD_VY) {
             CraneFeedback.report(this, "overloaded: thrust saturated and sinking, lowering " + loadName);
+            enter(State.OVERLOAD);
+        } else if (isCarrying() && isCarryingState(state) && state != State.OVERLOAD && liftCeiling() < 0) {
+            CraneFeedback.report(this, "overloaded: " + loadName + " is over the lift limit, lowering it");
             enter(State.OVERLOAD);
         }
         switch (state) {
@@ -901,7 +1077,7 @@ public class QuadcopterEntity extends Entity {
         boolean ok = mob.startRiding(this, true, true);
         pendingLoad = null;
         if (!ok || mob.getVehicle() != this) {
-            abortPickup("cannot lift " + mob.getName().getString());
+            abortPickup("cannot lift " + mob.getName().getString() + ": it would not attach to the hook");
             return;
         }
         mob.addTag(LOAD_TAG);
@@ -909,11 +1085,12 @@ public class QuadcopterEntity extends Entity {
         rope.stopSwing();
         setCarrying(true);
         pickupId = null;
-        CraneFeedback.report(this, String.format(Locale.ROOT, "picked up %s (mass %.2f)", loadName, rope.mass));
+        CraneFeedback.report(this, "picked up " + loadName + " (" + describeLoad(rope.mass) + ")");
         enter(State.WINCH_IN);
     }
 
     private void attachMass(Entity load) {
+        carried = load;
         rope.mass = massOf(load);
         phys.mass = 1.0 + rope.mass;
         loadName = load.getName().getString();
@@ -930,9 +1107,22 @@ public class QuadcopterEntity extends Entity {
         double dz = delivery.z - getZ();
         double dist = Math.hypot(dx, dz);
         double cruise = cruiseSurface(dx, dz, dist) + CRUISE_AGL + rope.length;
-        controller.vMax = getY() < cruise - CLIMB_FIRST ? CLIMB_FIRST_SPEED : CraneController.V_MAX;
+        // a lift-limited load flies as high as it can; climbing-first waits for that height, not the cruise
+        double reachable = Math.min(cruise, ceilingY());
+        controller.vMax = getY() < reachable - CLIMB_FIRST ? CLIMB_FIRST_SPEED : CraneController.V_MAX;
         target = new Vec3(delivery.x, cruise, delivery.z);
         if (dist < ARRIVE_H) {
+            enter(State.LOWER_LOAD);
+            return;
+        }
+        if (dist < carryBest - 0.5) {
+            carryBest = dist;
+            carryStall = 0;
+        } else if (++carryStall > CARRY_STALL_TICKS) {
+            double h = liftCeiling();
+            CraneFeedback.report(this, String.format(Locale.ROOT, "stuck: no progress with %s for %d ticks%s, setting it down here",
+                loadName, CARRY_STALL_TICKS, Double.isInfinite(h) ? "" : String.format(Locale.ROOT, " (max lift %.1f b)", Math.max(0.0, h))));
+            delivery = position();
             enter(State.LOWER_LOAD);
         }
     }
@@ -1016,6 +1206,7 @@ public class QuadcopterEntity extends Entity {
         rope.mass = 0;
         phys.mass = 1;
         loadName = "none";
+        carried = null;
         delivery = null;
         if (load != null) {
             CraneFeedback.report(this, message != null ? message + " (" + name + ")"
@@ -1101,7 +1292,8 @@ public class QuadcopterEntity extends Entity {
             return false;
         }
         Entity direct = source.getDirectEntity();
-        if (direct != null && direct.isPassengerOfSameVehicle(this)) {
+        // the load cannot hit its own crane; an explosion (a lit creeper on the hook) still does
+        if (direct != null && direct.isPassengerOfSameVehicle(this) && !source.is(DamageTypeTags.IS_EXPLOSION)) {
             return false;
         }
         if (onGround() && source.getDirectEntity() instanceof Player) {
@@ -1146,6 +1338,7 @@ public class QuadcopterEntity extends Entity {
             rope.mass = 0;
             phys.mass = 1;
             loadName = "none";
+            carried = null;
         }
         phys.thrust = 0;
         controller.saturated = false;

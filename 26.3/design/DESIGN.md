@@ -20,7 +20,7 @@ for b/s. Accelerations are b/t².
 | Mini airliner | `AirlinerEntity extends PlaneEntity` | fixed-wing | 22 seats (captain for a player, first officer, 20 passengers, boarded by where you click; villagers fill all but the captain's; AIRLINER-MODEL.md); cruise 1.25 b/t (25 b/s); take-off 0.60 b/t, rotation at 34 blocks, airborne at 51 blocks; realised turn 10 deg/s; ground pitch clamped at 12 deg (tail strike at 14.5 deg); metal skin by material tag, 6 logos rolled on placement |
 | Regional airliner | `RegionalAirlinerEntity extends AirlinerEntity` | fixed-wing | the mini airliner's narrow size (§4.4): 14 seats (captain, first officer, 12 passengers one either side of the aisle; villagers fill all but the captain's), 2.5 b wide; cruise 1.25 b/t; take-off 0.54 b/t, rotation at 23.5 blocks, airborne at 38 blocks; realised turn 12 deg/s; tail strike at 13.4 deg, same 12 deg clamp |
 | Airship | `AirshipEntity extends PlaneEntity` (all six flight hooks overridden, like the helicopter) | plane family, own physics | 7 seats; buoyancy + ballast trim, fly-by-wire altitude hold (captures with 0.08 b overshoot); cruise 0.81 b/t (16 b/s); 12 deg/s turn, radius 77 b; static climb/sink limit 0.2 b/t |
-| Quadcopter crane | `QuadcopterEntity extends Entity` (new family) | multirotor, server-flown | thrust-to-weight 3.0; position controller settles a 20-block move in 4.4 s empty, 5.8 s with a cow; rope 1..12 b, winch 0.15 b/t; load limit 1.55 drone masses (cow yes, horse no); carried mob is a passenger placed at the rope end, rope drawn with vanilla's leash renderer |
+| Quadcopter crane | `QuadcopterEntity extends Entity` (new family) | multirotor, server-flown | thrust-to-weight 8.0; position controller settles a 20-block move in 4.5 s empty, 6.3 s with a cow; rope 1..12 b, winch 0.15 b/t; load mass estimated from the mob's box and knockback resistance, lift performance falls with it (chicken barely felt, horse at half capacity, iron golem hovers 0.5 b off the ground, ravager refused; CRANE-MASS.md); carried mob is a passenger placed at the rope end, rope drawn with vanilla's leash renderer |
 | Mini helicopter | `MiniHelicopterEntity extends HelicopterEntity` | rotorcraft (existing model, smaller numbers) | one seat; hover at notch 2 (helicopter: 3), climb to +0.40 b/t at notch 5 (helicopter +0.24), level top speed 0.75 b/t (helicopter 1.11), pedal 90 deg/s, full cyclic in 8.6 ticks; thrust fades above y 100, absolute ceiling y 160; standard or medical livery by material tag |
 
 Five implementation agents: one foundation agent that lands every shared touch point first, then four
@@ -553,7 +553,8 @@ roll φ (right down positive = accelerates right). Mass unit: 1 = the empty dron
 G       = 0.04 b/t^2      (this airframe's gravity; the plane family uses 0.03, vanilla mobs 0.08.
                            0.04 gives a slung load's pendulum at 6 b a period of 77 t = 3.9 s, which reads
                            naturally; a released mob falls under vanilla gravity anyway)
-T_MAX   = 3.0 * G = 0.12  (thrust-to-weight 3.0 empty)
+T_MAX   = 8.0 * G = 0.32  (thrust-to-weight 8.0 empty; rated, `tMaxBase`. The effective ceiling `tMax`
+                           adds the ground assist of 6.6 while a load hangs near the ground)
 thrust vector    = T * up(ψ, θ, φ)
 drag             = -(0.02 + 0.01 |vh|) vh   horizontally, -0.05 vy vertically
 attitude         : commanded (θc, φc) reached through a first-order lag τ = 2 ticks, slewed <= 4 deg/t,
@@ -561,7 +562,8 @@ attitude         : commanded (θc, φc) reached through a first-order lag τ = 2
                    the real 1 kHz rate loop, so it is modelled as this lag)
 yaw              : ψ rate <= 6 deg/t (120 deg/s) toward the commanded heading, slewed 1 deg/t^2
                    (differential rotor torque; cosmetic for the crane, it faces its direction of travel)
-rotor animation  : propellerRotation += 0.6 + 4.0 * T / T_MAX per tick (client)
+rotor animation  : propellerRotation += 0.6 + 4.0 * T / (3 G) per tick (client; the old T_MAX, so the
+                   empty-hover spin is unchanged by the 8 G rating)
 ```
 
 Integration per tick: `v += thrust/m_total + drag + rope reaction - G; p += v`, then `move(MoverType.SELF)`
@@ -600,10 +602,11 @@ instead of 2 changes nothing visible. Stable at 20 Hz with a factor of about 2 i
 rope length L    : 1.0 (stowed, hook under the clamp) .. 12.0 b, winch rate 0.15 b/t (3 b/s) both ways
 winch point      : entity (0, 0.30, 0), the underside of the clamp servo
 load position    : p_drone + winch + L * (sin θx, -cos θ, sin θz)   with θ the rope angle from vertical
-load mass        : m = w^2 * h of the mob's bounding box (drone masses), clamped >= 0.05
-                   cow 1.13, sheep 1.05, pig 0.73, villager 0.70, player 0.65, wolf 0.31, chicken 0.11,
-                   llama 1.51; horse 3.12, donkey 2.92, panda 2.11, polar bear 2.74, iron golem 5.29 are over
-limit            : m <= MAX_LOAD = 1.55  (= 0.85 * T_MAX / G - 1: hover with 15 % thrust in hand)
+load mass        : m = w^2 * h * (1 + KBR) * tag multiplier (drone masses), clamped >= 0.05; w, h the
+                   current bounding box, KBR the knockback-resistance attribute clamped 0..1 (6.6)
+                   chicken 0.11, villager/zombie 0.70, sheep 1.05, cow 1.13, llama 1.51, spider 1.76,
+                   horse 3.12, iron golem 10.58, ravager 14.64 (over), hoglin 17.47 (tag x4, over)
+capacity         : 6.20 = 0.9 * T_MAX / G - 1, hovers anywhere; lift limit 11.96 with full ground assist
 ```
 
 **Pendulum.** In 2-D per axis, with pivot acceleration `a_p` (the drone's) and damping `c`:
@@ -637,27 +640,91 @@ cruise height agl 10 + L, transit at 0.8 b/t) -> LOWER_LOAD (over the drop point
 box bottom is 0.2 b above the heightmap, then winch out) -> RELEASE (stopRiding; jaws open) -> STOW
 (winch to 1.0) -> IDLE/RETURN`.
 
-**Mobs allowed.** `LivingEntity` that is alive, not a `Enemy` (hostiles are out for a peaceful crane),
-not a boss, not another vehicle's passenger, not a `PlaneEntity`, and `m <= MAX_LOAD`; players allowed
-unless in spectator mode. Configurable later by a tag `simpleplanes:crane_liftable` (deny-list tag
-`crane_never` also honoured) — start with the rule above and the two empty tags in the datapack.
+**Mobs allowed.** `LivingEntity` that is alive, hostile (`Enemy`) or not, not a boss (ender dragon,
+wither, warden, elder guardian, or tag `c:bosses`), not another vehicle's passenger or vehicle, not a
+`PlaneEntity`/`QuadcopterEntity`, not in tag `simpleplanes:crane_never`, and `m <=` the lift limit (11.96); players
+allowed unless in spectator mode. `QuadcopterEntity.ALLOW_HOSTILES` (true) is the switch back to the old
+rule, under which `simpleplanes:crane_liftable` is the allow-list for hostiles. Every refusal names its
+reason: `cannot lift <name>: boss|aircraft|spectator|riding <vehicle>|has a rider|dead|not a mob|in tag
+simpleplanes:crane_never|hostile` or `too heavy: <name> ≈ m, max 11.96 (p% of capacity)`. Under the mass rule the ravager, hoglin and zoglin
+(tag `crane_mass_x4`), ghast and happy ghast stay out; the iron golem, size-4 slimes and magma cubes are lifted
+but only just off the ground (6.6). `simpleplanes:crane_liftable` also exempts a type from `c:bosses`
+(the four vanilla bosses always stay refused); mass still applies to it.
 
-### 6.6 Payload mass and hover thrust
+**A slung mob does not fight** (Q8, answered). While a `Mob` is the crane's passenger it carries a transient
+`FOLLOW_RANGE` modifier `simpleplanes:crane_slung` (x0, added in `addPassenger`, removed in
+`removePassenger`, never saved), so target goals neither find nor keep a target; and every crane tick,
+which runs before the passenger's own tick, clears its target and `ATTACK_TARGET` memory, stops its
+navigation, and runs a creeper's fuse back down. Nothing else is stored on the mob, so its AI resumes as
+soon as it leaves the hook by any path (release, overload, crane destroyed or killed, teleport). A creeper
+lit with flint and steel still explodes; that explosion damages the crane (the passenger exemption in
+`hurtServer` does not cover explosions). Read in the 26.3 sources, not tested: an arrow cannot hit the crane
+while its shooter is on it (`Projectile.canHitEntity`), and a passenger does not despawn
+(`Mob.requiresCustomPersistence`). Tested: endermen do not teleport while riding (vanilla `Enderman`), undead
+still burn in daylight (`load lost: Zombie died`), and a load that converts on the hook (piglin to zombified
+piglin; zombie to drowned takes the same vanilla `ConversionType.SINGLE` path) is handed to its successor,
+which vanilla re-mounts at once: `load changed: Piglin is now Zombified Piglin`.
 
-`T_hover = m_total * G / (cos θ cos φ)`: empty 0.040, cow 0.085, at the limit 0.102 of `T_MAX` 0.120.
-Vertical climb: 0.24 b/t (4.8 b/s) empty, 0.25 with a cow, 0.21 at the limit — bounded by `VZ_MAX 0.30`
-and the vertical drag rather than by thrust, so a loaded crane climbs about as fast as an empty one until
-the limit.
+### 6.6 Payload mass and lift performance
+
+Mass is estimated from what every entity, modded ones included, exposes: its current bounding box and its
+knockback resistance. The box follows babies, slime size and the `SCALE` attribute; knockback resistance
+is vanilla's own "hard to push" number (iron golem and warden 1.0, ravager 0.75, hoglin 0.6, armour on a
+player) and stands in for density:
+
+```
+m = max(0.05, w^2 * h * (1 + clamp(KBR, 0, 1)) * mult)          mult: product of the tags the type is in
+    simpleplanes:crane_mass_x0_5 (x0.5), crane_mass_x2 (x2), crane_mass_x4 (x4; hoglin, zoglin shipped)
+```
+
+Thrust (`MultirotorPhysics`): `T_MAX = 8 G` rated. A load hanging within `ASSIST_HEIGHT = 2` b of the
+ground raises the usable ceiling (ground effect on the rotor wash off the load), linearly from x1 at 2 b to
+x1.8 at the ground:
+
+```
+assist(h)    = 1 + 0.8 * clamp(1 - h / 2, 0, 1)            h = load bottom above the ground
+tMax         = T_MAX * assist(h)                           recomputed every tick while a load hangs
+capacity     = 0.9 * T_MAX / G - 1         = 6.20          hovers anywhere with 10 % thrust in hand
+lift limit   = 0.9 * T_MAX * 1.8 / G - 1   = 11.96         leaves the ground at all
+ceiling(m)   = 2 * (1 - (need - 1) / 0.8), need = (1 + m) G / (0.9 T_MAX)   for m > capacity, else none
+handling     = clamp((1 - m_total G / tMax) / (1 - G / T_MAX), 0.15, 1)    thrust margin vs. empty
+```
+
+The controller scales with `handling`: climb limit `VZ_MAX * handling` (descent unchanged), horizontal
+acceleration `A_MAX * handling`, horizontal speed `V_MAX * (0.5 + 0.5 * handling)`. A chicken (0.11) is
+barely felt (0.98); a cow (1.13) 0.84, a horse (3.12) 0.55. Above capacity the target height is capped at
+the ceiling, so an iron golem (10.58, 171 %) hangs at about 0.48 b and is carried at that height. The
+swing-damping gain still scales with `min(1, m / 0.65)`; loads heavier than that damp like a cow.
+
+Numbers measured in game are in CRANE-MASS.md. Offline (Sim, L = 3, 20 b vertical step):
+
+```
+load      m      use   ceiling  handling  climb     settle
+empty     0      0 %   -        1.00      0.240     90 t
+chicken   0.112  2 %   -        0.98      0.236     119 t (10 deg cosmetic swing, as before)
+zombie    0.702  11 %  -        0.90      0.216     122 t
+cow       1.134  18 %  -        0.84      0.201     125 t
+spider    1.764  28 %  -        0.75      0.180     133 t
+horse     3.120  50 %  -        0.55      0.133     158 t
+capacity  6.2    100 % -        0.15      0.036     410 t
+golem     10.584 171 % 0.48 b   0.15      -         409 t to its ceiling, stable
+```
 
 ### 6.7 Too heavy
 
-- Before winching in, the mass rule refuses the pickup: the jaws never close, a feedback line says
-  "too heavy: horse is 3.1, limit 1.55", the crane returns to `IDLE`.
-- If the load grows while attached (a mob that changes size, a player who becomes... nothing does today)
-  or the required hover thrust exceeds `0.95 * T_MAX`, the controller saturates, the drone sinks (simulated
-  with 2.2 masses: -0.07 b/t with thrust pinned for 300 ticks). The state machine watches
-  `thrust saturated for 20 ticks && vy < -0.02` and releases the load where it is if it is within 1.5 b
-  of the ground, else winches it down first and then releases; message "load released: overweight".
+- Over the lift limit, the pickup is refused before the crane moves: "too heavy: Ravager ≈ 14.64, max 11.96
+  (236% of capacity)". The limit is checked against the rated `T_MAX`.
+- A carried load whose ceiling turns negative (a debug `tmax` cut, a load that converts into a
+  heavier mob) is reported "overloaded: <name> is over the lift limit, lowering it" and set down.
+- If the hover thrust of a load within capacity still saturates (thrust pinned for `OVERLOAD_TICKS` 20 with
+  `vy < -0.02`; a lift-limited load sinking onto its ceiling is exempt), the
+  controller sinks and the state machine releases the load where it is if it is within 1.5 b of the ground,
+  else winches it down first; message "load released: overweight".
+- In transit, a lift-limited load flies at its ceiling. If the horizontal distance to the drop point does not
+  shrink by 0.5 b in `CARRY_STALL_TICKS` 200, the crane reports "stuck: no progress with <name> for 200
+  ticks (max lift h b), setting it down here" and lowers the load where it is. The ceiling follows the ground
+  under the load and a passenger has no collision, so a golem crosses a 1-block step; at a 3-block wall it
+  stalled on the top and was set down there (CRANE-MASS.md).
 
 ### 6.8 Rendering
 
@@ -994,6 +1061,8 @@ capture overshoot.
 
 ```
 hover thrust: empty 0.040, cow (1.13) 0.085, T_MAX 0.120 -> max load at 85 % thrust 1.55
+  (superseded by 6.6: T_MAX 0.32, capacity 6.20, lift limit 11.96 with ground assist; the gains below
+  were re-checked with Sim.java at the new rating, C1 PASS)
 climb (target +200): empty 0.240 b/t, 0.65 load 0.248, cow 0.251, 1.50 load 0.211
 20 b step, empty: settle 88 t, overshoot 0
 20 b step, cow, L=6, final law: settle 116 t, overshoot 0.63 b, peak swing 25.1 deg, residual after 15 s 0.0
@@ -1074,8 +1143,9 @@ code, which is the calibration.
   upgrade item. Which do you prefer?
 - **Q7. Recall behaviour for the crane** when the remote's owner is far away (> 64 b): the crane hovers
   where it is and waits. Should it fly home to a "base" block instead?
-- **Q8. Hostile mobs** are refused by the crane. Allow them (a zombie on a rope is funny but not
-  peaceful)?
+- **Q8. Hostile mobs** — answered: allowed. Ordinary hostiles are lifted under the same mass limit;
+  bosses are refused; a slung mob does not fight (see 6.5, "A slung mob does not fight"). Details and
+  test results in `design/CRANE-HOSTILES.md`.
 - **Q9. Autopilot types.** `AircraftType.FIGHTER`/`AIRLINER` are added for testing (not random). Keep
   them player-visible on `/autopilot flight ... type airliner`, or hide them?
 - **Q10. Mini helicopter livery and ceiling.** The medical livery is chosen by building from a white block

@@ -142,13 +142,14 @@ public final class CraneCommand {
 
             LiteralArgumentBuilder<CommandSourceStack> debug = Commands.literal("debug");
             debug.then(Commands.literal("tmax").then(id()
-                .then(Commands.argument("value", DoubleArgumentType.doubleArg(0, 1)).executes(c -> {
+                .then(Commands.argument("value", DoubleArgumentType.doubleArg(0, 2)).executes(c -> {
                     QuadcopterEntity crane = crane(c);
                     if (crane == null) {
                         return 0;
                     }
-                    crane.phys.tMax = DoubleArgumentType.getDouble(c, "value");
-                    return say(c.getSource(), String.format(Locale.ROOT, "Crane #%d: [test aid] T_MAX = %.4f", crane.getId(), crane.phys.tMax));
+                    crane.phys.tMaxBase = DoubleArgumentType.getDouble(c, "value");
+                    return say(c.getSource(), String.format(Locale.ROOT, "Crane #%d: [test aid] T_MAX = %.4f (capacity %.2f, lift limit %.2f)",
+                        crane.getId(), crane.phys.tMaxBase, SlungLoad.capacity(crane.phys.tMaxBase), SlungLoad.liftLimit(crane.phys.tMaxBase)));
                 }))));
             debug.then(Commands.literal("swinggain").then(id()
                 .then(Commands.argument("k", DoubleArgumentType.doubleArg(-5, 5)).executes(c -> {
