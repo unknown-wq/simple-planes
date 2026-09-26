@@ -1133,6 +1133,8 @@ public final class AutopilotConfig {
      * See {@code PlaneAutopilot#strikePushOverLead}.
      */
     public static final double STRIKE_PUSH_OVER_LAG = 2.0;
+    /** A drone's aim point above the clicked block's centre: its top face, plus a tenth. */
+    public static final double STRIKE_DRONE_AIM_ABOVE_CENTRE = 0.6;
     /** Speed under which an aircraft on a strike run is considered to have hit something. */
     public static final double STRIKE_STALLED_SPEED = 0.35;
 

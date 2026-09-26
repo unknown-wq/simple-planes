@@ -10,12 +10,16 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
+import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.container.PlaneWorkbenchContainer;
 import xyz.przemyk.simpleplanes.items.CraneRemoteItem;
 import xyz.przemyk.simpleplanes.items.DescriptionItem;
+import xyz.przemyk.simpleplanes.items.DroneItem;
 import xyz.przemyk.simpleplanes.items.HelipadToolItem;
 import xyz.przemyk.simpleplanes.items.ParachuteItem;
 import xyz.przemyk.simpleplanes.items.PlaneArmorItem;
@@ -52,13 +56,14 @@ public class SimplePlanesItems {
     }
 
     public static List<PlaneItem> getPlaneItems() {
-        ArrayList<PlaneItem> planeItems = new ArrayList<>(8);
+        ArrayList<PlaneItem> planeItems = new ArrayList<>(9);
         planeItems.add(PLANE_ITEM.get());
         planeItems.add(LARGE_PLANE_ITEM.get());
         planeItems.add(CARGO_PLANE_ITEM.get());
         planeItems.add(HELICOPTER_ITEM.get());
         planeItems.add(FIGHTER_ITEM.get());
         planeItems.add(AIRLINER_ITEM.get());
+        planeItems.add(REGIONAL_AIRLINER_ITEM.get());
         planeItems.add(AIRSHIP_ITEM.get());
         planeItems.add(MINI_HELICOPTER_ITEM.get());
         return planeItems;
@@ -102,11 +107,17 @@ public class SimplePlanesItems {
         properties -> new PlaneItem(properties, SimplePlanesEntities.FIGHTER), new Item.Properties());
     public static final Supplier<PlaneItem> AIRLINER_ITEM = register("airliner",
         properties -> new PlaneItem(properties, SimplePlanesEntities.AIRLINER), new Item.Properties());
+    public static final Supplier<PlaneItem> REGIONAL_AIRLINER_ITEM = register("regional_airliner",
+        properties -> new PlaneItem(properties, SimplePlanesEntities.REGIONAL_AIRLINER), new Item.Properties());
     public static final Supplier<PlaneItem> AIRSHIP_ITEM = register("airship",
         properties -> new PlaneItem(properties, SimplePlanesEntities.AIRSHIP), new Item.Properties());
     public static final Supplier<PlaneItem> MINI_HELICOPTER_ITEM = register("mini_helicopter",
         properties -> new PlaneItem(properties, SimplePlanesEntities.MINI_HELICOPTER), new Item.Properties());
     public static final Supplier<QuadcopterItem> QUADCOPTER_ITEM = register("quadcopter", QuadcopterItem::new, new Item.Properties());
+    public static final Supplier<DroneItem> STRIKE_DRONE_ITEM = register("strike_drone",
+        properties -> new DroneItem(properties, SimplePlanesEntities.STRIKE_DRONE), new Item.Properties());
+    public static final Supplier<DroneItem> FPV_DRONE_ITEM = register("fpv_drone",
+        properties -> new DroneItem(properties, SimplePlanesEntities.FPV_DRONE), new Item.Properties());
     public static final Supplier<CraneRemoteItem> CRANE_REMOTE = register("crane_remote", CraneRemoteItem::new, new Item.Properties());
 
     public static final Supplier<ParachuteItem> PARACHUTE_ITEM = register("parachute", ParachuteItem::new, new Item.Properties());
@@ -122,10 +133,40 @@ public class SimplePlanesItems {
     public static final Supplier<HelipadToolItem> HELIPAD_TOOL =
         register("helipad_tool", HelipadToolItem::new, new Item.Properties());
 
+    /** Original Simple Planes aircraft: one creative entry per block in {@code simpleplanes:plane_materials}. */
+    private static final List<Supplier<? extends Item>> PER_MATERIAL_AIRCRAFT =
+        List.of(PLANE_ITEM, LARGE_PLANE_ITEM, CARGO_PLANE_ITEM, HELICOPTER_ITEM);
+
+    /** Aircraft added by this port: one creative entry each, built in the material the type was drawn around. */
+    private static final List<CreativeEntry> SINGLE_ENTRY_AIRCRAFT = List.of(
+        new CreativeEntry(FIGHTER_ITEM, Blocks.IRON_BLOCK),
+        new CreativeEntry(AIRLINER_ITEM, Blocks.IRON_BLOCK),        // metal skin
+        new CreativeEntry(REGIONAL_AIRLINER_ITEM, Blocks.IRON_BLOCK), // metal skin
+        new CreativeEntry(AIRSHIP_ITEM, Blocks.OAK_PLANKS),
+        new CreativeEntry(MINI_HELICOPTER_ITEM, Blocks.CONCRETE.pick(DyeColor.WHITE)), // medical livery
+        new CreativeEntry(QUADCOPTER_ITEM, Blocks.OAK_PLANKS));
+
+    private record CreativeEntry(Supplier<? extends Item> item, Block material) {
+        ItemStack stack() {
+            return withMaterial(item.get(), material);
+        }
+    }
+
+    private static ItemStack withMaterial(Item item, Block material) {
+        CompoundTag entityTag = new CompoundTag();
+        entityTag.putString("material", BuiltInRegistries.BLOCK.getKey(material).toString());
+        ItemStack stack = new ItemStack(item);
+        stack.set(SimplePlanesComponents.ENTITY_TAG, entityTag);
+        return stack;
+    }
+
+    // Order: workbench and parts, the port's aircraft, tools (Missiles inserts the silo and missiles
+    // after the crane remote), then the per-material original aircraft, which are most of the list.
     public static final Supplier<CreativeModeTab> PLANES_TAB = registerTab("planes_tab", FabricCreativeModeTab.builder()
         .icon(() -> PLANE_ITEM.get().getDefaultInstance())
         .title(Component.translatable(SimplePlanesMod.MODID + ".planes_tab"))
         .displayItems((parameters, output) -> {
+            output.accept(PLANE_WORKBENCH.get());
             output.accept(PROPELLER.get());
             output.accept(FLOATY_BEDDING.get());
             output.accept(BOOSTER.get());
@@ -138,37 +179,23 @@ public class SimplePlanesItems {
             output.accept(FURNACE_ENGINE.get());
             output.accept(LIQUID_ENGINE.get());
             output.accept(WRENCH.get());
-            output.accept(PLANE_WORKBENCH.get());
+
+            for (CreativeEntry entry : SINGLE_ENTRY_AIRCRAFT) {
+                output.accept(entry.stack());
+            }
+
             output.accept(PARACHUTE_ITEM.get());
             output.accept(PLANE_STRIKE_TOOL.get());
+            output.accept(STRIKE_DRONE_ITEM.get());
+            output.accept(FPV_DRONE_ITEM.get());
             output.accept(ROUTE_WAND.get());
             output.accept(RUNWAY_TOOL.get());
             output.accept(HELIPAD_TOOL.get());
             output.accept(CRANE_REMOTE.get());
 
             BuiltInRegistries.BLOCK.get(PlaneWorkbenchContainer.PLANE_MATERIALS_TAG).ifPresent(tag -> tag.forEach(block -> {
-                ItemStack planeStack = new ItemStack(PLANE_ITEM.get());
-                ItemStack largePlaneStack = new ItemStack(LARGE_PLANE_ITEM.get());
-                ItemStack cargoPlaneStack = new ItemStack(CARGO_PLANE_ITEM.get());
-                ItemStack heliStack = new ItemStack(HELICOPTER_ITEM.get());
-
-                CompoundTag entityTag = new CompoundTag();
-                entityTag.putString("material", BuiltInRegistries.BLOCK.getKey(block.value()).toString());
-
-                planeStack.set(SimplePlanesComponents.ENTITY_TAG, entityTag);
-                largePlaneStack.set(SimplePlanesComponents.ENTITY_TAG, entityTag);
-                cargoPlaneStack.set(SimplePlanesComponents.ENTITY_TAG, entityTag);
-                heliStack.set(SimplePlanesComponents.ENTITY_TAG, entityTag);
-
-                output.accept(planeStack);
-                output.accept(largePlaneStack);
-                output.accept(cargoPlaneStack);
-                output.accept(heliStack);
-
-                for (Supplier<? extends Item> item : List.of(FIGHTER_ITEM, AIRLINER_ITEM, AIRSHIP_ITEM, MINI_HELICOPTER_ITEM, QUADCOPTER_ITEM)) {
-                    ItemStack stack = new ItemStack(item.get());
-                    stack.set(SimplePlanesComponents.ENTITY_TAG, entityTag.copy());
-                    output.accept(stack);
+                for (Supplier<? extends Item> item : PER_MATERIAL_AIRCRAFT) {
+                    output.accept(withMaterial(item.get(), block.value()));
                 }
             }));
         }).build());

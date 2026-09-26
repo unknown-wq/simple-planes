@@ -1,0 +1,16 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "simpleplanes:item/regional_airliner",
+    "tints": [
+      {
+        "type": "minecraft:constant",
+        "value": 15921906
+      },
+      {
+        "type": "minecraft:constant",
+        "value": 16777215
+      }
+    ]
+  }
+}

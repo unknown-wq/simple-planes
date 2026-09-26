@@ -42,6 +42,7 @@ import java.util.stream.Collectors;
  *   <li>right-click the air — status report, including the blast setting</li>
  *   <li>sneak + right-click the air — cycle the spawn distance, and the blast each time it wraps</li>
  *   <li>a plane item in the other hand — that airframe, in that material, flies the strike</li>
+ *   <li>a drone item in the other hand — that drone flies it, with its own small charge</li>
  * </ul>
  *
  * <p><b>Aircraft.</b> Chosen the way a bow chooses its arrow: whatever aircraft is in the other hand
@@ -131,6 +132,12 @@ public class PlaneStrikeToolItem extends Item {
             return new Selection(getType(tool), null, "quadcopter (other hand, refused)", strikeRefusal("quadcopter"),
                 other);
         }
+        if (other.getItem() instanceof DroneItem droneItem) {
+            AircraftType type = AircraftType.of(droneItem.droneEntityType.get());
+            if (type != null && type.canStrike()) {
+                return new Selection(type, null, type.getSerializedName() + " (other hand)", null, other);
+            }
+        }
         if (other.getItem() instanceof PlaneItem planeItem) {
             AircraftType type = AircraftType.of(planeItem.planeEntityType.get());
             if (type == null || !type.canStrike()) {
@@ -156,6 +163,11 @@ public class PlaneStrikeToolItem extends Item {
         // tryParse and getOptional: player-supplied data, as in PlaneItem's tooltip.
         return tag.getString("material").map(Identifier::tryParse)
             .flatMap(BuiltInRegistries.BLOCK::getOptional).orElse(null);
+    }
+
+    /** The tool's blast, or for a drone the fixed charge it flies instead. */
+    private static String describeBlast(Blast blast, AircraftType type) {
+        return type.isDrone() ? type.warhead(blast).describe() + " (drone charge)" : blast.describe();
     }
 
     /** Pinned run-in bearing in compass degrees, or null to work one out from the player. */
@@ -228,7 +240,7 @@ public class PlaneStrikeToolItem extends Item {
         // Compass degrees, not the internal yaw: describeLaunch prints the number as a bearing, and
         // the two conventions are 180 degrees apart.
         AutopilotFeedback.success(player, AutopilotSpawner.describeLaunch(plane, target, distance,
-            AutopilotMath.compassHeading(bearing)) + " Warhead: " + blast.describe() + ". "
+            AutopilotMath.compassHeading(bearing)) + " Warhead: " + plane.warhead(blast).describe() + ". "
             + AutopilotSpawner.describeAirframe(plane));
         return InteractionResult.CONSUME;
     }
@@ -266,11 +278,11 @@ public class PlaneStrikeToolItem extends Item {
                 stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
             }
             AutopilotFeedback.info(player, "Strike spawn distance: " + next
-                + " blocks, blast " + blast.describe() + describeBearing(stack)
+                + " blocks, blast " + describeBlast(blast, aircraft.type()) + describeBearing(stack)
                 + ", aircraft " + aircraft.label() + ".");
         } else {
             AutopilotFeedback.info(player, "Spawn distance " + getDistance(stack) + " blocks, blast "
-                + getBlast(stack).describe() + describeBearing(stack) + ", aircraft " + aircraft.label() + ". "
+                + describeBlast(getBlast(stack), aircraft.type()) + describeBearing(stack) + ", aircraft " + aircraft.label() + ". "
                 + RunwayOccupancy.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS
                 + " autopilot aircraft active.");
         }
@@ -285,9 +297,11 @@ public class PlaneStrikeToolItem extends Item {
                                 Consumer<Component> builder, TooltipFlag flag) {
         builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_desc"));
         builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_distance", getDistance(stack)));
-        builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_blast",
-            getBlast(stack).describe()));
         AircraftType type = getType(stack);
+        Blast blast = getBlast(stack);
+        builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_blast", type.isDrone()
+            ? Component.translatable(SimplePlanesMod.MODID + ".strike_tool_drone_charge", type.warhead(blast).describe())
+            : Component.literal(blast.describe())));
         builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_aircraft",
             AutopilotText.tr("airframe." + type.getSerializedName(), type.getSerializedName())));
         Integer bearing = getBearing(stack);

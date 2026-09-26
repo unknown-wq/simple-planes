@@ -519,13 +519,28 @@ public class PlaneEntity extends Entity {
         boolean creativePlayer = isPlayer && source.getEntity() instanceof Player player && player.getAbilities().instabuild;
         if (creativePlayer) {
             kill(serverLevel);
-        } else if (getOnGround() && getHealth() <= 0) {
+        } else if (health > 0 && getHealth() <= 0 && isPlayerBreak(source)) {
+            // Broken by a player's own hand, on the ground or within reach in the air: the item comes back.
             kill(serverLevel);
             if (serverLevel.getGameRules().get(GameRules.ENTITY_DROPS)) {
                 dropItem(serverLevel);
             }
+        } else if (getOnGround() && getHealth() <= 0) {
+            // Any other killing blow destroys it: no item. In the air it falls and crash() takes it.
+            kill(serverLevel);
         }
         return true;
+    }
+
+    /**
+     * Whether {@code source} is a player breaking an aircraft by hand: a melee hit (player_attack, spear,
+     * mace_smash) whose direct and causing entity are the same player. Arrows, tridents, explosions, fire,
+     * mobs and commands without a player attacker are destruction, which drops nothing.
+     */
+    public static boolean isPlayerBreak(DamageSource source) {
+        return source.is(DamageTypeTags.IS_PLAYER_ATTACK)
+            && source.getDirectEntity() instanceof Player player
+            && source.getEntity() == player;
     }
 
     private void explode() {
@@ -544,10 +559,10 @@ public class PlaneEntity extends Entity {
         // autopilot: the warhead is a property of the flight, not a constant. An aircraft with no
         // flight plan — every plane a player ever built or flew — gets Blast.DEFAULT, which is
         // 4.0F with TNT block interaction and no fire, i.e. bit-for-bit what this line used to do.
-        Blast blast = Blast.DEFAULT;
+        Blast blast = warhead(Blast.DEFAULT);
         PlaneAutopilot engaged = getAutopilot();
         if (engaged != null && engaged.getPlan() != null) {
-            blast = engaged.getPlan().blast();
+            blast = warhead(engaged.getPlan().blast());
         }
         // Extension point: Blast#detonate runs the registered BlastGuards (see BlastGuard) and then the
         // explosion. It is the one path every blast of this mod takes, aircraft and missiles alike.
@@ -556,6 +571,11 @@ public class PlaneEntity extends Entity {
             return;
         }
         level().explode(this, getX(), getY(), getZ(), blast.power(), blast.fire(), blast.interaction());
+    }
+
+    /** The warhead this airframe carries when {@code asked} is ordered; only a drone differs. */
+    public Blast warhead(Blast asked) {
+        return asked;
     }
 
     protected void dropItem(ServerLevel serverLevel) {
@@ -1500,11 +1520,8 @@ public class PlaneEntity extends Entity {
     public void crash(float damage) {
         if (level() instanceof ServerLevel serverLevel && isAlive()) {
             explode();
+            // A crash destroys the aircraft: no item (see isPlayerBreak).
             kill(serverLevel);
-
-            if (serverLevel.getGameRules().get(GameRules.ENTITY_DROPS)) {
-                dropItem(serverLevel);
-            }
         }
     }
 

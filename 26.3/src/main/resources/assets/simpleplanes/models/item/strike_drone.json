@@ -1,0 +1,7 @@
+{
+    "parent": "item/generated",
+    "textures": {
+        "layer0": "simpleplanes:item/strike_drone",
+        "layer1": "simpleplanes:item/strike_drone_overlay"
+    }
+}

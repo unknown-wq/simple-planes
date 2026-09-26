@@ -16,6 +16,8 @@ public final class CraneController {
     public static final double K_VZ = 0.2;
     public static final double SWING_GAIN = -0.4;
     public static final double SWING_FULL_MASS = 0.65;
+    /** Floor of the handling factor (share of climb rate and acceleration left at no thrust margin). */
+    public static final double HANDLING_MIN = 0.15;
     public static final double YAW_SPEED = 0.15;
 
     /** Swing-damping gain at full coupling; negative accelerates against the load's relative velocity. */
@@ -30,6 +32,8 @@ public final class CraneController {
     public double yawCmd = Double.NaN;
     public double thrustCmd;
     public double tiltCmd;
+    /** 1 empty; falls with the thrust margin a load leaves (see {@link #handling}). */
+    public double handling = 1.0;
     public boolean saturated;
     public final double[] accelCmd = new double[3];
 
@@ -37,15 +41,17 @@ public final class CraneController {
     public void control(MultirotorPhysics drone, SlungLoad rope, double tx, double ty, double tz) {
         double G = MultirotorPhysics.G;
         boolean carrying = rope.loaded();
-        double aMax = carrying ? A_MAX_LOADED * Math.min(1.0, rope.length / 4.0) : A_MAX;
+        handling = carrying ? handling(drone) : 1.0;
+        double aMax = carrying ? A_MAX_LOADED * Math.min(1.0, rope.length / 4.0) * handling : A_MAX;
         double ks = carrying ? swingGain * Math.min(1.0, rope.mass / SWING_FULL_MASS) : 0.0;
+        double vH = vMax * (0.5 + 0.5 * handling);
 
-        double vxCmd = MultirotorPhysics.clamp(K_POS * (tx - drone.p[0]), vMax);
-        double vzCmdH = MultirotorPhysics.clamp(K_POS * (tz - drone.p[2]), vMax);
+        double vxCmd = MultirotorPhysics.clamp(K_POS * (tx - drone.p[0]), vH);
+        double vzCmdH = MultirotorPhysics.clamp(K_POS * (tz - drone.p[2]), vH);
         double hs = Math.hypot(vxCmd, vzCmdH);
-        if (hs > vMax) {
-            vxCmd *= vMax / hs;
-            vzCmdH *= vMax / hs;
+        if (hs > vH) {
+            vxCmd *= vH / hs;
+            vzCmdH *= vH / hs;
         }
         vxCmd += ks * rope.relativeVelocity(0);
         vzCmdH += ks * rope.relativeVelocity(2);
@@ -58,7 +64,7 @@ public final class CraneController {
             ah = aMax;
         }
 
-        double vyCmd = MultirotorPhysics.clamp(K_ALT * (ty - drone.p[1]), vzMax);
+        double vyCmd = Math.max(-vzMax, Math.min(vzMax * handling, K_ALT * (ty - drone.p[1])));
         double ay = K_VZ * (vyCmd - drone.v[1]);
         accelCmd[0] = ax;
         accelCmd[1] = ay;
@@ -89,6 +95,17 @@ public final class CraneController {
         saturated = t >= drone.tMax;
         thrustCmd = Math.max(0.0, Math.min(drone.tMax, t));
         drone.thrust = thrustCmd;
+    }
+
+    /**
+     * Thrust margin left by the load at this tick's ceiling, relative to the empty drone's: 1 for the empty
+     * drone, falling linearly to {@link #HANDLING_MIN} as the hover thrust approaches the ceiling. Scales the
+     * climb rate, the horizontal acceleration and (by half) the horizontal speed.
+     */
+    public static double handling(MultirotorPhysics drone) {
+        double margin = 1.0 - drone.mass * MultirotorPhysics.G / drone.tMax;
+        double empty = 1.0 - MultirotorPhysics.G / MultirotorPhysics.T_MAX;
+        return Math.max(HANDLING_MIN, Math.min(1.0, margin / empty));
     }
 
     /** Hold the current heading until the drone moves fast enough to face its travel. */

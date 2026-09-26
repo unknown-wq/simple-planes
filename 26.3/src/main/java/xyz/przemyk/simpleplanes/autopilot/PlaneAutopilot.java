@@ -17,6 +17,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xyz.przemyk.simpleplanes.api.AirspaceGuards;
 import xyz.przemyk.simpleplanes.api.Flight;
+import xyz.przemyk.simpleplanes.entities.DroneEntity;
+import xyz.przemyk.simpleplanes.entities.FpvDroneEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
@@ -80,9 +82,13 @@ public class PlaneAutopilot {
     private boolean outcomeReported;
     /** Previous tick's range to the strike target, for closest-point-of-approach detection. */
     private double previousSlantRange = Double.MAX_VALUE;
+    /** Previous tick's position on a drone strike, for the closest point of approach on the path flown. */
+    private @Nullable Vec3 previousStrikePosition;
 
     /** Distance from the aimpoint still counted as a hit rather than a miss. */
     public static final double STRIKE_HIT_RADIUS = 8.0;
+    /** The same for a drone: its charge reaches about two blocks (see {@code AUTOPILOT.md}). */
+    public static final double STRIKE_DRONE_HIT_RADIUS = 2.0;
 
     private final TerrainScanner scanner = new TerrainScanner();
     /** Decides between climbing over the terrain ahead and going round it. See {@link RoutePlanner}. */
@@ -289,8 +295,14 @@ public class PlaneAutopilot {
                 + " in " + mode.name().toLowerCase(java.util.Locale.ROOT) + ".");
             return;
         }
-        long miss = Math.round(plane.position().distanceTo(target));
-        if (miss <= STRIKE_HIT_RADIUS) {
+        boolean drone = plane instanceof DroneEntity;
+        if (drone) {
+            target = droneAim(target);
+        }
+        double exact = plane.position().distanceTo(target);
+        // Tenths for a drone: its charge is a block across, so whole blocks would hide the result.
+        String miss = drone ? String.format(java.util.Locale.ROOT, "%.1f", exact) : String.valueOf(Math.round(exact));
+        if (drone ? exact <= STRIKE_DRONE_HIT_RADIUS : Math.round(exact) <= STRIKE_HIT_RADIUS) {
             AutopilotFeedback.report(owner, "Strike #" + plane.getId() + " hit the target at " + where
                 + " (" + miss + " blocks off).");
         } else {
@@ -1085,6 +1097,10 @@ public class PlaneAutopilot {
             stop(plane);
             return;
         }
+        boolean drone = plane instanceof DroneEntity;
+        if (drone) {
+            target = droneAim(target);
+        }
         Vec3 position = plane.position();
         cmdHeading = AutopilotMath.headingTo(position, target);
         cmdSpeed = AutopilotConfig.STRIKE_SPEED;
@@ -1107,7 +1123,10 @@ public class PlaneAutopilot {
             + strikePushOverLead(Math.max(plane.getDeltaMovement().length(), AutopilotSpawner.STRIKE_LAUNCH_SPEED),
                 plane.autopilotRotationSpeedMultiplier());
 
-        if (distance > diveEntry) {
+        if (plane instanceof FpvDroneEntity fpv) {
+            // A multirotor flies its own run; the fixed-wing commands below mean nothing to it.
+            fpv.steer(target, Math.max(groundBelow(plane), target.y) + AutopilotConfig.STRIKE_RUN_IN_AGL);
+        } else if (distance > diveEntry) {
             // Run-in: hold height above the ground, not above the target. A target in a valley is
             // no reason to fly the whole approach down in the valley with it.
             cmdTargetAltitude = Math.max(groundBelow(plane), target.y) + AutopilotConfig.STRIKE_RUN_IN_AGL;
@@ -1138,11 +1157,27 @@ public class PlaneAutopilot {
         // samples. Scale the radius with the speed, and fall back to detecting the closest point of
         // approach — if the range starts opening again the aircraft is already past the target.
         double slantRange = position.distanceTo(target);
-        double closureSpeed = plane.getDeltaMovement().length();
-        boolean atTarget = slantRange < Math.max(3.0, closureSpeed * 1.2)
-            || (slantRange < 24.0 && slantRange > previousSlantRange);
+        boolean atTarget;
+        Vec3 detonation = null;
+        if (drone) {
+            // A drone's charge reaches about a block, and the sphere below would set it off up to
+            // 3.6 blocks out. It goes off at the closest point of approach on the path it actually
+            // flew over the last tick instead; hitting the ground first sets it off there.
+            atTarget = previousStrikePosition != null && slantRange < 24.0 && slantRange > previousSlantRange;
+            if (atTarget) {
+                detonation = AutopilotMath.closestPointOnSegment(previousStrikePosition, position, target);
+            }
+        } else {
+            double closureSpeed = plane.getDeltaMovement().length();
+            atTarget = slantRange < Math.max(3.0, closureSpeed * 1.2)
+                || (slantRange < 24.0 && slantRange > previousSlantRange);
+        }
         previousSlantRange = slantRange;
+        previousStrikePosition = position;
         if (atTarget) {
+            if (detonation != null) {
+                plane.setPos(detonation);
+            }
             plane.crash(16);
             stop(plane);
             return;
@@ -1158,6 +1193,15 @@ public class PlaneAutopilot {
             plane.crash(16);
             stop(plane);
         }
+    }
+
+    /**
+     * Where a drone aims: the top face of the clicked block rather than its centre, a little above it
+     * so the charge goes off in the open. Inside the block, the block itself would shield the blast
+     * from anything standing on it.
+     */
+    static Vec3 droneAim(Vec3 blockCentre) {
+        return blockCentre.add(0.0, AutopilotConfig.STRIKE_DRONE_AIM_ABOVE_CENTRE, 0.0);
     }
 
     /**

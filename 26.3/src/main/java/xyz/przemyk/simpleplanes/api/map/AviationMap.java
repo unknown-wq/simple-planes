@@ -32,9 +32,11 @@ public final class AviationMap {
     /**
      * Version of this API. 1: snapshot, launch request, launch result. 2: load / unload requests
      * ({@link SiloAction}), the action on {@link LaunchResult}, and the service and air-defence fields on
-     * {@link AviationSnapshot.Silo}.
+     * {@link AviationSnapshot.Silo}. 3: remote launch -- a silo out of reach or in an unloaded chunk may be
+     * {@link AviationSnapshot.Silo#usable() usable}, and its launch is answered first with a
+     * {@link LaunchResult#pending() pending} result while the server loads the silo's chunk.
      */
-    public static final int API_VERSION = 2;
+    public static final int API_VERSION = 3;
 
     /** Target height meaning "the server picks the surface". */
     public static final int SURFACE = Integer.MIN_VALUE;
@@ -94,7 +96,9 @@ public final class AviationMap {
     /**
      * Asks the server to launch from {@code silo} (the master position from the snapshot) at the block column
      * {@code x, z}. {@code y} is the first free block above the surface as the map knows it, or {@link #SURFACE}.
-     * The answer arrives as {@link Listener#onLaunchResult}.
+     * The answer arrives as {@link Listener#onLaunchResult}. Operators only, from any distance: for a silo whose
+     * chunk is not loaded the first answer is {@link LaunchResult#pending() pending} and the final one follows once
+     * the server has loaded the chunk (API 3).
      */
     public static boolean requestLaunch(BlockPos silo, int x, int y, int z) {
         if (!isAvailable()) return false;

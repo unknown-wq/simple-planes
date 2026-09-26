@@ -71,9 +71,9 @@ public final class AviationService {
     public static final Logger LOGGER = LoggerFactory.getLogger("simpleplanes-aviation");
 
     /**
-     * How close (3D, feet to silo mouth) a player must be to launch. 24 blocks is "standing at the silo":
-     * the silo is in view, and it is always within the player's own simulation distance (minimum 2 chunks =
-     * 32 blocks), so its chunk is block-ticking and the hatch sequence runs.
+     * How close (3D, feet to silo mouth) a player must be to load or unload a silo. 24 blocks is "standing at the
+     * silo": the silo is in view, and it is always within the player's own simulation distance (minimum 2 chunks =
+     * 32 blocks), so its chunk is loaded and block-ticking. A launch has no distance limit ({@link RemoteLaunch}).
      */
     public static final int NEAR_RADIUS = 24;
     /** Horizontal radius the snapshot lists are cut to: the tier 4 range plus margin. */
@@ -131,6 +131,7 @@ public final class AviationService {
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             for (ServerLevel level : server.getAllLevels()) sweep(level);
             PENDING.clear();
+            RemoteLaunch.clear();
             LAST_LAUNCH.clear();
             LAST_SNAPSHOT.clear();
             CURRENT.clear();
@@ -165,6 +166,7 @@ public final class AviationService {
             }
             PENDING.addAll(later);
         }
+        RemoteLaunch.tick(level);
         if (level.getGameTime() % SWEEP_TICKS == 0) sweep(level);
     }
 
@@ -306,24 +308,33 @@ public final class AviationService {
         String phase = be != null ? be.phase().name().toLowerCase(Locale.ROOT) : "unknown";
         Vec3 mouth = SiloStructure.mouth(pos, tier);
         double distance = player.position().distanceTo(mouth);
-        Component problem = siloProblem(level, be, tier, strike, distance, chunkLoaded);
+        Component problem = siloProblem(level, pos, be, tier, strike, loaded, chunkLoaded);
         Component service = reachProblem(be, distance, chunkLoaded);
         InterceptorSpec ad = InterceptorSpec.of(tier);
+        Component ready = distance <= NEAR_RADIUS && be != null ? AviationPayloads.text("status.ready", "ready")
+            : be != null ? AviationPayloads.text("status.remote", "ready - remote launch")
+            : AviationPayloads.text("status.remote_unloaded", "ready (last known) - remote launch; the server loads the silo's chunk first");
         return new AviationSnapshot.Silo(pos, tier.tier, strike, loaded, phase, chunkLoaded, mouth.x, mouth.z,
             (int) tier.minRange, (int) tier.maxRange, distance, problem == null,
-            problem == null ? AviationPayloads.text("status.ready", "ready") : problem,
+            problem == null ? ready : problem,
             service == null, service == null ? AviationPayloads.text("status.ready", "ready") : service,
             ad.detectionRadius(), ad.range);
     }
 
     /**
-     * Why this silo cannot launch for a player at {@code distance}, target aside; null when it can. The
-     * permission check is separate ({@link #permitted}), so non-operators still see what the silo is doing.
+     * Why this silo cannot launch, target aside; null when it can. Distance does not matter (remote launch). With
+     * the chunk loaded the silo is asked; without, the index's last known state is used. The permission check is
+     * separate ({@link #permitted}), so non-operators still see what the silo is doing.
      */
-    private static @Nullable Component siloProblem(ServerLevel level, @Nullable LaunchSiloBlockEntity be, MissileTier tier,
-                                                   boolean strike, double distance, boolean chunkLoaded) {
-        Component reach = reachProblem(be, distance, chunkLoaded);
-        if (reach != null) return reach;
+    private static @Nullable Component siloProblem(ServerLevel level, BlockPos pos, @Nullable LaunchSiloBlockEntity be,
+                                                   MissileTier tier, boolean strike, boolean loaded, boolean chunkLoaded) {
+        // A remote launch waits for level ticks; its chunk may be loaded (a paused single-player game) before then.
+        if (RemoteLaunch.pending(level, pos)) return AviationPayloads.text("status.remote_loading", "busy (loading the silo's chunk)");
+        if (!chunkLoaded || be == null) {
+            if (!strike) return AviationPayloads.text("refuse.air_defence_known", "the silo is in air-defence mode (last known state)");
+            if (!loaded) return AviationPayloads.text("refuse.empty_known", "no missile loaded (last known state)");
+            return null;
+        }
         if (!strike) return AviationPayloads.text("refuse.air_defence", "the silo is in air-defence mode");
         String readiness = be.readiness(level, tier);
         return readiness == null ? null : Component.literal(readiness);
@@ -351,8 +362,11 @@ public final class AviationService {
      * The checks every silo request shares, in order: operator permission, rate limit (one budget for all
      * three actions), coarse distance and world bounds, silo chunk loaded, silo present, player near the mouth.
      * {@code beforeReach} runs between the rate limit and the distance check (the launch's world-border check).
+     * With {@code remote} (a launch) distance is not checked, and a silo in an unloaded chunk comes back with a
+     * null block entity and no refusal: {@link RemoteLaunch} takes it from there.
      */
-    private static Located locate(ServerPlayer player, BlockPos requested, SiloAction action, @Nullable Component beforeReach) {
+    private static Located locate(ServerPlayer player, BlockPos requested, SiloAction action, @Nullable Component beforeReach,
+                                  boolean remote) {
         ServerLevel level = (ServerLevel) player.level();
         if (!permitted(player)) {
             return refusal(player, requested, action, action == SiloAction.LAUNCH
@@ -367,11 +381,15 @@ public final class AviationService {
             return refusal(player, requested, action, AviationPayloads.text("refuse.rate", "too many silo requests; wait a second"));
         }
         if (beforeReach != null) return refusal(player, requested, action, beforeReach);
-        if (!level.isInWorldBounds(requested) || player.position().distanceTo(Vec3.atCenterOf(requested)) > NEAR_RADIUS + 8) {
+        if (!level.isInWorldBounds(requested)) {
+            return refusal(player, requested, action, AviationPayloads.text("refuse.no_silo", "there is no silo at %s", requested.toShortString()));
+        }
+        if (!remote && player.position().distanceTo(Vec3.atCenterOf(requested)) > NEAR_RADIUS + 8) {
             return refusal(player, requested, action, AviationPayloads.text("refuse.far", "too far away (%s blocks; you must be within %s)",
                 (int) Math.round(player.position().distanceTo(Vec3.atCenterOf(requested))), NEAR_RADIUS));
         }
         if (!level.isLoaded(requested)) {
+            if (remote) return new Located(null, requested, null);
             return refusal(player, requested, action, AviationPayloads.text("refuse.unloaded", "the silo's chunk is not loaded"));
         }
         BlockPos master = SiloStructure.masterOf(level, requested);
@@ -381,7 +399,7 @@ public final class AviationService {
             return refusal(player, requested, action, AviationPayloads.text("refuse.no_silo", "there is no silo at %s", requested.toShortString()));
         }
         double distance = player.position().distanceTo(SiloStructure.mouth(master, be.tier()));
-        if (distance > NEAR_RADIUS) {
+        if (!remote && distance > NEAR_RADIUS) {
             return refusal(player, master, action, AviationPayloads.text("refuse.far", "too far away (%s blocks; you must be within %s)",
                 (int) Math.round(distance), NEAR_RADIUS));
         }
@@ -394,33 +412,54 @@ public final class AviationService {
 
     /**
      * The one launch path for the map. Checks, in order: operator permission, rate limit, target inside the
-     * world border, player near the silo, silo chunk loaded, silo present ({@link #locate}), then everything
-     * {@code /missile launch} checks ({@link LaunchSiloBlockEntity#launch}: mode, idle, loaded, intact, hatch
-     * clear, range, height).
+     * world border, silo present ({@link #locate}), then everything {@code /missile launch} checks
+     * ({@link LaunchSiloBlockEntity#launch}: mode, idle, loaded, intact, hatch clear, range, height). The player may
+     * be at any distance (remote launch). A silo in an unloaded chunk goes to {@link RemoteLaunch}, which answers
+     * "pending" now and the real answer once the chunk has loaded.
      */
     public static LaunchResult handleLaunch(ServerPlayer player, AviationPayloads.LaunchRequest request) {
         ServerLevel level = (ServerLevel) player.level();
         Component border = level.getWorldBorder().isWithinBounds(request.x() + 0.5, request.z() + 0.5) ? null
             : AviationPayloads.text("refuse.border", "the target is outside the world border");
-        Located at = locate(player, request.silo().immutable(), SiloAction.LAUNCH, border);
+        Located at = locate(player, request.silo().immutable(), SiloAction.LAUNCH, border, true);
         if (at.refusal() != null) return at.refusal();
+        if (RemoteLaunch.pending(level, at.master())) {
+            return refused(player, at.master(), SiloAction.LAUNCH, AviationPayloads.text("refuse.silo", "silo at %s cannot launch: %s",
+                at.master().toShortString(), "busy (loading the silo's chunk)"));
+        }
+        if (at.be() == null) return RemoteLaunch.start(level, player, at.master(), request);
         LaunchSiloBlockEntity be = at.be();
-        BlockPos master = at.master();
+        double distance = player.position().distanceTo(SiloStructure.mouth(at.master(), be.tier()));
+        return launchFrom(level, player, player.getName().getString(), be, at.master(), request.x(), request.y(), request.z(),
+            distance > NEAR_RADIUS ? "remote, chunk already loaded" : null);
+    }
+
+    /**
+     * Launches the silo {@code be} (its chunk loaded) at the target column, and answers. {@code player} is null when
+     * the requester has left before a remote launch finished; {@code remote} is null for a launch at the silo, else
+     * the note the audit line carries.
+     */
+    static LaunchResult launchFrom(ServerLevel level, @Nullable ServerPlayer player, String name, LaunchSiloBlockEntity be,
+                                   BlockPos master, int x, int y, int z, @Nullable String remote) {
         MissileTier tier = be.tier();
         Vec3 mouth = SiloStructure.mouth(master, tier);
-        Vec3 target = new Vec3(request.x() + 0.5, targetY(level, request.x(), request.z(), request.y()), request.z() + 0.5);
+        Vec3 target = new Vec3(x + 0.5, targetY(level, x, z, y), z + 0.5);
         String problem = be.launch(level, target);
         SiloIndex.get(level).update(be, level.getGameTime());
         if (problem != null) {
-            return refused(player, master, SiloAction.LAUNCH, AviationPayloads.text("refuse.silo", "silo at %s cannot launch: %s",
+            return refused(player, name, master, SiloAction.LAUNCH, AviationPayloads.text("refuse.silo", "silo at %s cannot launch: %s",
                 master.toShortString(), problem));
         }
         double range = Math.hypot(target.x - mouth.x, target.z - mouth.z);
-        LOGGER.info("[aviation] {} launched silo {} T{} from the map at {} {} {} ({} blocks)", player.getName().getString(),
-            master.toShortString(), tier.tier, fmt(target.x), fmt(target.y), fmt(target.z), fmt(range));
-        Component message = AviationPayloads.text("launched", "Launch: tier %s missile from %s to %s %s %s (%s blocks)",
-            tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range));
-        player.sendOverlayMessage(message.copy().withStyle(ChatFormatting.GREEN));
+        LOGGER.info("[aviation] {} launched silo {} T{} from the map at {} {} {} ({} blocks){}", name,
+            master.toShortString(), tier.tier, fmt(target.x), fmt(target.y), fmt(target.z), fmt(range),
+            remote == null ? "" : " [" + remote + "]");
+        Component message = remote == null
+            ? AviationPayloads.text("launched", "Launch: tier %s missile from %s to %s %s %s (%s blocks)",
+                tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range))
+            : AviationPayloads.text("launched_remote", "Remote launch: tier %s missile from %s to %s %s %s (%s blocks)",
+                tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range));
+        if (player != null) player.sendOverlayMessage(message.copy().withStyle(ChatFormatting.GREEN));
         return new LaunchResult(master, true, message, target.x, target.y, target.z, SiloAction.LAUNCH);
     }
 
@@ -438,7 +477,7 @@ public final class AviationService {
             return refused(player, requested, action, AviationPayloads.text("refuse.action", "a launch needs a target"));
         }
         boolean load = action == SiloAction.LOAD;
-        Located at = locate(player, requested, action, null);
+        Located at = locate(player, requested, action, null, false);
         if (at.refusal() != null) return at.refusal();
         LaunchSiloBlockEntity be = at.be();
         BlockPos master = at.master();
@@ -478,19 +517,24 @@ public final class AviationService {
             level.getChunkSource().randomState());
     }
 
-    private static LaunchResult refused(ServerPlayer player, BlockPos silo, SiloAction action, Component reason) {
+    static LaunchResult refused(ServerPlayer player, BlockPos silo, SiloAction action, Component reason) {
+        return refused(player, player.getName().getString(), silo, action, reason);
+    }
+
+    /** A refusal: to the action bar when the player is still here, and to the log. */
+    static LaunchResult refused(@Nullable ServerPlayer player, String name, BlockPos silo, SiloAction action, Component reason) {
         Component message = switch (action) {
             case LAUNCH -> AviationPayloads.text("refused", "Launch refused: %s", reason);
             case LOAD -> AviationPayloads.text("refused_load", "Load refused: %s", reason);
             case UNLOAD -> AviationPayloads.text("refused_unload", "Unload refused: %s", reason);
         };
-        player.sendOverlayMessage(message.copy().withStyle(ChatFormatting.RED));
+        if (player != null) player.sendOverlayMessage(message.copy().withStyle(ChatFormatting.RED));
         LOGGER.info("[aviation] {} request by {} for silo {} refused: {}", action.name().toLowerCase(Locale.ROOT),
-            player.getName().getString(), silo.toShortString(), reason.getString());
+            name, silo.toShortString(), reason.getString());
         return new LaunchResult(silo, false, message, 0, 0, 0, action);
     }
 
-    private static void reply(ServerPlayer player, LaunchResult result) {
+    static void reply(ServerPlayer player, LaunchResult result) {
         if (player instanceof FakePlayer || !CURRENT.contains(player.getUUID())
             || !ServerPlayNetworking.canSend(player, AviationPayloads.LaunchReply.TYPE)) return;
         ServerPlayNetworking.send(player, new AviationPayloads.LaunchReply(result));

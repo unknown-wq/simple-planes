@@ -171,6 +171,8 @@ Allowed loads: `LivingEntity`, alive, not `Enemy`, not `getType().is(EntityTypeT
 vanilla tag if present, else a hard list: ender dragon, wither), not already a passenger or vehicle,
 not a `PlaneEntity`/`QuadcopterEntity`, not a spectator; `simpleplanes:crane_never` denies,
 `simpleplanes:crane_liftable` overrides the `Enemy` rule; mass `<= 1.55`.
+*Superseded (Q8 answered): hostiles are now allowed and bosses include the warden and elder guardian;
+see DESIGN.md 6.5 and `design/CRANE-HOSTILES.md`.*
 
 ### 6. Remote (`items/CraneRemoteItem`) and feedback
 
@@ -231,7 +233,7 @@ On `/home/user/sp-test-5`; ground y = -60; `gamerule minecraft:spawn_mobs false`
 | C8 | swing during transit | trace of C7 | peak `theta` <= 32 deg; after arrival, `theta` <= 3 deg within 300 t (log the decay: 5 s, 10 s values) |
 | C9 | villager and a light load | repeat C6/C7 with a villager (0.70) and a chicken (0.11) | both delivered alive; chicken's residual swing may exceed 3 deg (report it) |
 | C10 | too heavy | `summon minecraft:horse`, `pickup` | refused with "too heavy: Horse is 3.12, limit 1.55"; crane returns to `IDLE`; horse untouched |
-| C11 | hostile refused | `summon minecraft:zombie` (spawn_mobs is off, summon works), `pickup` | refused "cannot lift Zombie" |
+| C11 | hostile lifted (was: refused; changed with Q8) | `summon minecraft:zombie` (spawn_mobs is off, summon works), `pickup` | "picked up Zombie (mass 0.70)"; a boss (`summon minecraft:wither`) is refused "cannot lift Wither: boss" |
 | C12 | overload release | `data merge` cannot change the mass; instead `crane winch` a cow up and then set `T_MAX` lower through a hidden test subcommand `crane debug tmax <id> <value>` (0.07) | `OVERLOAD` within 40 t, load lowered and released within 300 t, cow alive |
 | C13 | swing-damping sign | with `crane debug swinggain <id> <k>` (test aid): from a hover with a cow on 6 b, `crane debug kick <id> 20` sets theta 20 deg; measure the peak after 5 s and 10 s for k = -0.4, 0, +0.4 | keep the sign with the smallest 5 s peak; design predicts 1.2 / 5.6 / 25 deg |
 | C14 | long carry, chunk loading | `deliver` 300 b away without `forceload`; sprint 12000 | arrives; no "lost" event; the cow is delivered |

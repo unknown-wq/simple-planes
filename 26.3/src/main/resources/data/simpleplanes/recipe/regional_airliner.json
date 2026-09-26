@@ -1,0 +1,9 @@
+{
+  "type": "simpleplanes:plane_workbench",
+  "ingredient": "simpleplanes:propeller",
+  "ingredient_amount": 2,
+  "material_amount": 9,
+  "result": {
+    "id": "simpleplanes:regional_airliner"
+  }
+}

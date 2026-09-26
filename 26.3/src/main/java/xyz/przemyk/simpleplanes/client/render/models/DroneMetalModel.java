@@ -5,6 +5,7 @@ import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.model.geom.PartPose;
 import net.minecraft.client.model.geom.builders.*;
 import xyz.przemyk.simpleplanes.client.render.PlaneRenderState;
+import xyz.przemyk.simpleplanes.client.render.FpvDroneRenderState;
 import xyz.przemyk.simpleplanes.client.render.QuadcopterRenderState;
 
 /**
@@ -118,13 +119,16 @@ public class DroneMetalModel extends EntityModel<PlaneRenderState> {
     @Override
     public void setupAnim(PlaneRenderState state) {
         super.setupAnim(state);
-        setPayloadAttached(state instanceof QuadcopterRenderState q && q.carrying);
+        boolean armed = state instanceof FpvDroneRenderState;
+        setPayloadAttached(armed || (state instanceof QuadcopterRenderState q && q.carrying));
+        // The FPV drone carries its charge in the clamp; the crane never carries one.
+        this.Payload.visible = armed;
     }
 
     /**
      * Closes the clamp jaws while a load is attached and swings them outwards by {@link #JAW_OPEN_ANGLE}
-     * otherwise. The payload canister is never drawn: this airframe is a crane. Call after the pose reset
-     * done by {@code super.setupAnim}.
+     * otherwise. The payload canister is hidden here: the crane never carries one, and {@link #setupAnim}
+     * shows it only on the FPV drone. Call after the pose reset done by {@code super.setupAnim}.
      */
     public void setPayloadAttached(boolean attached) {
         this.Payload.visible = false;

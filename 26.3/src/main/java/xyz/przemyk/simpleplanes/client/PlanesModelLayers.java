@@ -7,19 +7,23 @@ import net.fabricmc.fabric.api.client.rendering.v1.ModelLayerRegistry;
 import net.minecraft.client.model.geom.ModelLayerLocation;
 import net.minecraft.client.renderer.entity.NoopRenderer;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.EntityType;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.client.render.AirlinerRenderer;
 import xyz.przemyk.simpleplanes.client.render.AirshipRenderer;
 import xyz.przemyk.simpleplanes.client.render.FighterRenderer;
+import xyz.przemyk.simpleplanes.client.render.FpvDroneRenderer;
 import xyz.przemyk.simpleplanes.client.render.MiniHeliRenderer;
 import xyz.przemyk.simpleplanes.client.render.ParachuteRenderer;
 import xyz.przemyk.simpleplanes.client.render.PlaneRenderer;
 import xyz.przemyk.simpleplanes.client.render.QuadcopterRenderer;
 import xyz.przemyk.simpleplanes.client.render.models.*;
+import xyz.przemyk.simpleplanes.entities.AirlinerEntity;
 import xyz.przemyk.simpleplanes.entities.CargoPlaneEntity;
 import xyz.przemyk.simpleplanes.entities.HelicopterEntity;
 import xyz.przemyk.simpleplanes.entities.LargePlaneEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
+import xyz.przemyk.simpleplanes.entities.StrikeDroneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
 import xyz.przemyk.simpleplanes.upgrades.armor.*;
 import xyz.przemyk.simpleplanes.upgrades.booster.*;
@@ -58,6 +62,10 @@ public final class PlanesModelLayers {
     public static final ModelLayerLocation AIRLINER_SKIN_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "skin");
     public static final ModelLayerLocation AIRLINER_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "metal");
     public static final ModelLayerLocation AIRLINER_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "propeller");
+    public static final ModelLayerLocation REGIONAL_AIRLINER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "main");
+    public static final ModelLayerLocation REGIONAL_AIRLINER_SKIN_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "skin");
+    public static final ModelLayerLocation REGIONAL_AIRLINER_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "metal");
+    public static final ModelLayerLocation REGIONAL_AIRLINER_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "propeller");
     public static final ModelLayerLocation AIRSHIP_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airship"), "main");
     public static final ModelLayerLocation AIRSHIP_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airship"), "metal");
     public static final ModelLayerLocation AIRSHIP_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airship"), "propeller");
@@ -70,6 +78,9 @@ public final class PlanesModelLayers {
     public static final ModelLayerLocation QUADCOPTER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "quadcopter"), "main");
     public static final ModelLayerLocation QUADCOPTER_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "quadcopter"), "metal");
     public static final ModelLayerLocation QUADCOPTER_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "quadcopter"), "propeller");
+    public static final ModelLayerLocation STRIKE_DRONE_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "strike_drone"), "main");
+    public static final ModelLayerLocation STRIKE_DRONE_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "strike_drone"), "metal");
+    public static final ModelLayerLocation STRIKE_DRONE_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "strike_drone"), "propeller");
     public static final ModelLayerLocation PARACHUTE_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "parachute"), "main");
     public static final ModelLayerLocation FURNACE_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "furnace_engine"), "main");
     public static final ModelLayerLocation LARGE_FURNACE_ENGINE = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "furnace_engine"), "large");
@@ -121,10 +132,9 @@ public final class PlanesModelLayers {
         ModelLayerRegistry.registerModelLayer(FIGHTER_METAL_LAYER, FighterMetalModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(FIGHTER_PROPELLER_LAYER, FighterExhaustModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(FIGHTER_GLASS_LAYER, FighterGlassModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(AIRLINER_LAYER, AirlinerModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(AIRLINER_SKIN_LAYER, AirlinerSkinModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(AIRLINER_METAL_LAYER, AirlinerMetalModel::createBodyLayer);
-        ModelLayerRegistry.registerModelLayer(AIRLINER_PROPELLER_LAYER, AirlinerFanModel::createBodyLayer);
+        registerAirlinerLayers(AirlinerShape.WIDE, AIRLINER_LAYER, AIRLINER_SKIN_LAYER, AIRLINER_METAL_LAYER, AIRLINER_PROPELLER_LAYER);
+        registerAirlinerLayers(AirlinerShape.REGIONAL, REGIONAL_AIRLINER_LAYER, REGIONAL_AIRLINER_SKIN_LAYER,
+                REGIONAL_AIRLINER_METAL_LAYER, REGIONAL_AIRLINER_PROPELLER_LAYER);
         ModelLayerRegistry.registerModelLayer(AIRSHIP_LAYER, AirshipModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(AIRSHIP_METAL_LAYER, AirshipMetalModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(AIRSHIP_PROPELLER_LAYER, AirshipPropellerModel::createBodyLayer);
@@ -137,6 +147,9 @@ public final class PlanesModelLayers {
         ModelLayerRegistry.registerModelLayer(QUADCOPTER_LAYER, DroneModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(QUADCOPTER_METAL_LAYER, DroneMetalModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(QUADCOPTER_PROPELLER_LAYER, DroneRotorModel::createBodyLayer);
+        ModelLayerRegistry.registerModelLayer(STRIKE_DRONE_LAYER, StrikeDroneModel::createBodyLayer);
+        ModelLayerRegistry.registerModelLayer(STRIKE_DRONE_METAL_LAYER, StrikeDroneMetalModel::createBodyLayer);
+        ModelLayerRegistry.registerModelLayer(STRIKE_DRONE_PROPELLER_LAYER, StrikeDronePropellerModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(PARACHUTE_LAYER, ParachuteModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(FURNACE_ENGINE, FurnaceEngineModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(LARGE_FURNACE_ENGINE, LargeFurnaceEngineModel::createBodyLayer);
@@ -214,16 +227,12 @@ public final class PlanesModelLayers {
                 SimplePlanesMod.texture("fighter_metal.png"),
                 SimplePlanesMod.texture("fighter_metal.png")));
 
-        EntityRendererRegistry.register(SimplePlanesEntities.AIRLINER.get(), context -> new AirlinerRenderer(context,
-                new AirlinerModel(context.bakeLayer(AIRLINER_LAYER)),
-                new AirlinerSkinModel(context.bakeLayer(AIRLINER_SKIN_LAYER)),
-                new AirlinerMetalModel(context.bakeLayer(AIRLINER_METAL_LAYER)),
-                new AirlinerFanModel(context.bakeLayer(AIRLINER_PROPELLER_LAYER)),
-                1.0F,
-                SimplePlanesMod.texture("airliner_metal.png"),
-                SimplePlanesMod.texture("airliner_metal.png")));
-
+        registerAirliner(SimplePlanesEntities.AIRLINER.get(), AirlinerShape.WIDE,
+                AIRLINER_LAYER, AIRLINER_SKIN_LAYER, AIRLINER_METAL_LAYER, AIRLINER_PROPELLER_LAYER);
+        registerAirliner(SimplePlanesEntities.REGIONAL_AIRLINER.get(), AirlinerShape.REGIONAL,
+                REGIONAL_AIRLINER_LAYER, REGIONAL_AIRLINER_SKIN_LAYER, REGIONAL_AIRLINER_METAL_LAYER, REGIONAL_AIRLINER_PROPELLER_LAYER);
         EntityRendererRegistry.register(SimplePlanesEntities.AIRLINER_PART.get(), NoopRenderer::new);
+        EntityRendererRegistry.register(SimplePlanesEntities.REGIONAL_AIRLINER_PART.get(), NoopRenderer::new);
 
         EntityRendererRegistry.register(SimplePlanesEntities.AIRSHIP.get(), context -> new AirshipRenderer(context,
                 new AirshipModel(context.bakeLayer(AIRSHIP_LAYER)),
@@ -252,7 +261,42 @@ public final class PlanesModelLayers {
                 0.5F,
                 SimplePlanesMod.texture("drone_metal.png")));
 
+        EntityRendererRegistry.register(SimplePlanesEntities.STRIKE_DRONE.get(), context -> new PlaneRenderer<StrikeDroneEntity>(context,
+                new StrikeDroneModel(context.bakeLayer(STRIKE_DRONE_LAYER)),
+                new StrikeDroneMetalModel(context.bakeLayer(STRIKE_DRONE_METAL_LAYER)),
+                new StrikeDronePropellerModel(context.bakeLayer(STRIKE_DRONE_PROPELLER_LAYER)),
+                0.75F,
+                SimplePlanesMod.texture("strike_drone_metal.png"),
+                SimplePlanesMod.texture("strike_drone_metal.png")));
+
+        // The crane's model, scaled down; its own layers, baked a second time.
+        EntityRendererRegistry.register(SimplePlanesEntities.FPV_DRONE.get(), context -> new FpvDroneRenderer(context,
+                new DroneModel(context.bakeLayer(QUADCOPTER_LAYER)),
+                new DroneMetalModel(context.bakeLayer(QUADCOPTER_METAL_LAYER)),
+                new DroneRotorModel(context.bakeLayer(QUADCOPTER_PROPELLER_LAYER)),
+                0.3F,
+                SimplePlanesMod.texture("drone_metal.png")));
+
         EntityRendererRegistry.register(SimplePlanesEntities.PARACHUTE.get(),
                 context -> new ParachuteRenderer(context, new ParachuteModel(context.bakeLayer(PARACHUTE_LAYER))));
+    }
+
+    /** The four layers of one airliner size: wooden body, metal skin, metal parts, fans. */
+    private static void registerAirlinerLayers(AirlinerShape shape, ModelLayerLocation body, ModelLayerLocation skin,
+                                               ModelLayerLocation metal, ModelLayerLocation fans) {
+        ModelLayerRegistry.registerModelLayer(body, () -> AirlinerModel.createBodyLayer(shape));
+        ModelLayerRegistry.registerModelLayer(skin, () -> AirlinerSkinModel.createBodyLayer(shape));
+        ModelLayerRegistry.registerModelLayer(metal, () -> AirlinerMetalModel.createBodyLayer(shape));
+        ModelLayerRegistry.registerModelLayer(fans, () -> AirlinerFanModel.createBodyLayer(shape));
+    }
+
+    private static void registerAirliner(EntityType<? extends AirlinerEntity> type, AirlinerShape shape, ModelLayerLocation body,
+                                         ModelLayerLocation skin, ModelLayerLocation metal, ModelLayerLocation fans) {
+        EntityRendererRegistry.<AirlinerEntity>register(type, context -> new AirlinerRenderer(context, shape,
+                new AirlinerModel(context.bakeLayer(body)),
+                new AirlinerSkinModel(context.bakeLayer(skin)),
+                new AirlinerMetalModel(context.bakeLayer(metal), shape),
+                new AirlinerFanModel(context.bakeLayer(fans)),
+                1.0F));
     }
 }

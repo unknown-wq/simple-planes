@@ -469,7 +469,8 @@ public final class AutopilotCommand {
         return Commands.literal("type")
             .then(Commands.argument("aircraft", StringArgumentType.word())
                 .suggests((context, builder) -> SharedSuggestionProvider.suggest(
-                    Arrays.stream(AircraftType.values()).map(AircraftType::getSerializedName), builder))
+                    Arrays.stream(AircraftType.values()).filter(type -> !type.isDrone())
+                        .map(AircraftType::getSerializedName), builder))
                 .executes(action));
     }
 
@@ -528,8 +529,8 @@ public final class AutopilotCommand {
     }
 
     /**
-     * True when the caller asked a fixed-wing command for a helicopter, having already told them
-     * what to type instead.
+     * True when the caller asked a fixed-wing command for a helicopter or a drone, having already
+     * told them what to type instead.
      *
      * <p>{@code type helicopter} now parses — {@link AircraftType} has the value, because a status
      * line has to be able to name a rotorcraft — so the refusal has to be here rather than in the
@@ -538,7 +539,14 @@ public final class AutopilotCommand {
      * cannot use any of the three would not fly them badly, it would sit on a threshold for ever.
      */
     private static boolean refusedRotorcraft(CommandContext<CommandSourceStack> context, String alternative) {
-        if (!aircraftType(context).isRotorcraft()) {
+        AircraftType type = aircraftType(context);
+        if (type.isDrone()) {
+            context.getSource().sendFailure(Component.literal("A " + type.getSerializedName()
+                + " is a one-way munition and cannot land. Use /autopilot strike ... type "
+                + type.getSerializedName() + " or the Plane Strike Tool."));
+            return true;
+        }
+        if (!type.isRotorcraft()) {
             return false;
         }
         context.getSource().sendFailure(Component.literal(
@@ -613,7 +621,7 @@ public final class AutopilotCommand {
         AllegianceOption.apply(context, plane);
         source.sendSuccess(() -> Component.literal(
             AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
-                + " Warhead: " + blast.describe() + ". " + AutopilotSpawner.describeAirframe(plane)), true);
+                + " Warhead: " + plane.warhead(blast).describe() + ". " + AutopilotSpawner.describeAirframe(plane)), true);
         return 1;
     }
 
@@ -682,7 +690,8 @@ public final class AutopilotCommand {
             + PlaneStrikeToolItem.getDistance(configured) + " blocks out, bearing "
             + (reportedBearing == null
                 ? "from wherever you stand" : String.format("%03d", reportedBearing))
-            + ", warhead " + blast.describe() + ", aircraft " + type.getSerializedName() + "."), false);
+            + ", warhead " + blast.describe() + (type.isDrone() ? " (a drone flies " + type.warhead(blast).describe() + ")" : "")
+            + ", aircraft " + type.getSerializedName() + "."), false);
         return 1;
     }
 

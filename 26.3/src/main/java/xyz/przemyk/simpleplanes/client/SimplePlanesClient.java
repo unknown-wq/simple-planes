@@ -13,6 +13,7 @@ import xyz.przemyk.simpleplanes.client.gui.PlaneWorkbenchScreen;
 import xyz.przemyk.simpleplanes.client.gui.StorageScreen;
 import xyz.przemyk.simpleplanes.client.missile.MissilesClient;
 import xyz.przemyk.simpleplanes.client.render.AirfieldOverlayRenderer;
+import xyz.przemyk.simpleplanes.client.render.MaterialTextures;
 import xyz.przemyk.simpleplanes.client.render.ToolPreview;
 import xyz.przemyk.simpleplanes.api.map.AviationMap;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
@@ -29,6 +30,7 @@ public class SimplePlanesClient implements ClientModInitializer {
     public void onInitializeClient() {
         PlanesModelLayers.registerLayers();
         PlanesModelLayers.registerRenderers();
+        MaterialTextures.register();
         MissilesClient.init();
 
         MenuScreens.register(SimplePlanesContainers.PLANE_WORKBENCH.get(), PlaneWorkbenchScreen::new);
