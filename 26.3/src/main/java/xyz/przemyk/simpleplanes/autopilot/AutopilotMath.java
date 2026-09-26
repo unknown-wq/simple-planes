@@ -32,6 +32,17 @@ public final class AutopilotMath {
         return Mth.wrapDegrees(target - current);
     }
 
+    /** The point of the segment {@code a}-{@code b} closest to {@code p}. */
+    public static Vec3 closestPointOnSegment(Vec3 a, Vec3 b, Vec3 p) {
+        Vec3 ab = b.subtract(a);
+        double lengthSqr = ab.lengthSqr();
+        if (lengthSqr < 1.0E-9) {
+            return a;
+        }
+        double t = Mth.clamp(p.subtract(a).dot(ab) / lengthSqr, 0.0, 1.0);
+        return a.add(ab.scale(t));
+    }
+
     /** Horizontal distance between two points. */
     public static double horizontalDistance(Vec3 a, Vec3 b) {
         double dx = a.x - b.x;

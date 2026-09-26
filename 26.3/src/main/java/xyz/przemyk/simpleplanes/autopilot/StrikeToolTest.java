@@ -1,6 +1,8 @@
 package xyz.przemyk.simpleplanes.autopilot;
 
 import com.mojang.authlib.GameProfile;
+import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.FloatArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -10,6 +12,7 @@ import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.commands.arguments.coordinates.Vec3Argument;
 import net.minecraft.commands.arguments.item.ItemArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -18,6 +21,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.BaseFireBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -26,7 +31,9 @@ import org.slf4j.LoggerFactory;
 import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -38,6 +45,9 @@ import java.util.UUID;
  * /autopilot tooltest use &lt;target&gt;                   right-click the top of that block
  * /autopilot tooltest air [sneak]                      right-click the air
  * /autopilot tooltest run &lt;autopilot arguments&gt;      run /autopilot … as the fake player
+ * /autopilot tooltest charge &lt;pos&gt; &lt;power&gt; [&lt;blocks&gt;]  set a fireless Blast off there
+ * /autopilot tooltest crater snapshot &lt;from&gt; &lt;to&gt;      remember every block in that box
+ * /autopilot tooltest crater diff &lt;centre&gt;            what changed since, and how far out
  * </pre>
  *
  * <p>The player stands at the command's position. Its chat, including the strike's outcome report
@@ -52,6 +62,7 @@ final class StrikeToolTest {
         new GameProfile(UUID.fromString("5c1e0a11-0000-4000-8000-00000057a1c3"), "[StrikeTest]");
 
     private static @Nullable TestPlayer player;
+    private static final Map<BlockPos, BlockState> snapshot = new HashMap<>();
 
     private StrikeToolTest() {}
 
@@ -70,7 +81,72 @@ final class StrikeToolTest {
                 .then(Commands.literal("sneak").executes(c -> air(c, true))))
             .then(Commands.literal("run")
                 .then(Commands.argument("arguments", StringArgumentType.greedyString())
-                    .executes(StrikeToolTest::run)));
+                    .executes(StrikeToolTest::run)))
+            .then(Commands.literal("charge")
+                .then(Commands.argument("pos", Vec3Argument.vec3(false))
+                    .then(Commands.argument("power", FloatArgumentType.floatArg(0.0F, Blast.MAX_POWER))
+                        .executes(c -> charge(c, true))
+                        .then(Commands.argument("blocks", BoolArgumentType.bool())
+                            .executes(c -> charge(c, BoolArgumentType.getBool(c, "blocks")))))))
+            .then(Commands.literal("crater")
+                .then(Commands.literal("snapshot")
+                    .then(Commands.argument("from", BlockPosArgument.blockPos())
+                        .then(Commands.argument("to", BlockPosArgument.blockPos())
+                            .executes(StrikeToolTest::snapshot))))
+                .then(Commands.literal("diff")
+                    .then(Commands.argument("centre", Vec3Argument.vec3(false))
+                        .executes(StrikeToolTest::diff))));
+    }
+
+    /** The warhead on its own, through the same {@link Blast#detonate} path an aircraft takes. */
+    private static int charge(CommandContext<CommandSourceStack> c, boolean blocks) {
+        Vec3 at = Vec3Argument.getVec3(c, "pos");
+        Blast applied = new Blast(FloatArgumentType.getFloat(c, "power"), blocks, false)
+            .detonate(c.getSource().getLevel(), null, at);
+        c.getSource().sendSuccess(() -> Component.literal("[StrikeTest] charge at " + at + ": "
+            + (applied == null ? "suppressed" : applied.describe())), false);
+        return 1;
+    }
+
+    private static int snapshot(CommandContext<CommandSourceStack> c) {
+        ServerLevel level = c.getSource().getLevel();
+        snapshot.clear();
+        for (BlockPos pos : BlockPos.betweenClosed(BlockPosArgument.getBlockPos(c, "from"), BlockPosArgument.getBlockPos(c, "to"))) {
+            snapshot.put(pos.immutable(), level.getBlockState(pos));
+        }
+        c.getSource().sendSuccess(() -> Component.literal("[StrikeTest] snapshot of " + snapshot.size() + " blocks"), false);
+        return 1;
+    }
+
+    /**
+     * Blocks changed since the snapshot, the farthest of them from {@code centre} (block centre to
+     * point), and every fire block in the box, new or not.
+     */
+    private static int diff(CommandContext<CommandSourceStack> c) {
+        ServerLevel level = c.getSource().getLevel();
+        Vec3 centre = Vec3Argument.getVec3(c, "centre");
+        int changed = 0;
+        int fire = 0;
+        double farthest = 0.0;
+        List<String> offsets = new ArrayList<>();
+        for (Map.Entry<BlockPos, BlockState> e : snapshot.entrySet()) {
+            BlockState now = level.getBlockState(e.getKey());
+            if (now.getBlock() instanceof BaseFireBlock) {
+                fire++;
+            }
+            if (now != e.getValue()) {
+                changed++;
+                farthest = Math.max(farthest, Vec3.atCenterOf(e.getKey()).distanceTo(centre));
+                BlockPos d = e.getKey().subtract(BlockPos.containing(centre));
+                offsets.add(d.getX() + "," + d.getY() + "," + d.getZ());
+            }
+        }
+        String text = String.format(java.util.Locale.ROOT,
+            "[StrikeTest] crater: %d changed, farthest %.2f from %s, fire %d; offsets %s",
+            changed, farthest, centre, fire, offsets.size() <= 40 ? offsets : offsets.size() + " (too many)");
+        LOGGER.info(text);
+        c.getSource().sendSuccess(() -> Component.literal(text), false);
+        return 1;
     }
 
     private static TestPlayer player(CommandContext<CommandSourceStack> c) {

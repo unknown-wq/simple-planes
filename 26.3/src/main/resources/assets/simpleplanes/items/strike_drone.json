@@ -1,0 +1,16 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "simpleplanes:item/strike_drone",
+    "tints": [
+      {
+        "type": "minecraft:constant",
+        "value": 10132616
+      },
+      {
+        "type": "minecraft:constant",
+        "value": 16777215
+      }
+    ]
+  }
+}

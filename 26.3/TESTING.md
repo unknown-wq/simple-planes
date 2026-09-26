@@ -397,6 +397,24 @@ tool that has never had an aircraft set, which is how an old tool is told apart 
 `plane`. Time strikes in real time, not under `tick sprint`: chunk loading falls behind and the
 tick counts come out inflated.
 
+`tooltest` also has three subcommands with no fake player involved, added for the drone warheads
+(see `AUTOPILOT.md`, "The drones") but useful for any blast:
+
+```sh
+# a bare Blast through Blast#detonate, no aircraft — for calibrating a power to a crater size
+./cmd.sh "autopilot tooltest crater snapshot 7000 -65 -10 7020 -55 10"
+./cmd.sh "autopilot tooltest charge 7010 -60.5 0 1.0 true"
+./cmd.sh "autopilot tooltest crater diff 7010 -60.5 0"
+# ... crater: 8 changed, farthest 1.22 from (7010.0, -60.5, 0.0), fire 0; offsets [...]
+```
+
+`snapshot` remembers every block in the box; `diff` compares against it and reports the count
+changed, the farthest changed block from the point given (block centre to point, so it also works
+as a rough radius), and how many of the *unchanged-or-not* blocks in the box are currently fire —
+useful for an incendiary test where nothing is expected to move but something is expected to burn.
+Unlike `tooltest use`, `charge` and `crater diff` are fine under `tick sprint`: nothing here depends
+on a fake player's click.
+
 ### Recipe: proving something survives a save
 
 `autopilot status` after a restart is **not** proof: a plane in a chunk nobody loads is not ticking

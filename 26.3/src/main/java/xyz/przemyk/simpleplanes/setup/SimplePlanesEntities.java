@@ -142,6 +142,9 @@ public class SimplePlanesEntities {
     public static final Supplier<EntityType<AirshipEntity>> AIRSHIP = register("airship", AirshipEntity::new, 3.0F, 2.5F);
     public static final Supplier<EntityType<MiniHelicopterEntity>> MINI_HELICOPTER = register("mini_helicopter", MiniHelicopterEntity::new, 1.5F, 1.95F);
     public static final Supplier<EntityType<QuadcopterEntity>> QUADCOPTER = register("quadcopter", QuadcopterEntity::new, 1.0F, 0.875F);
+    public static final Supplier<EntityType<StrikeDroneEntity>> STRIKE_DRONE = register("strike_drone", StrikeDroneEntity::new, 1.5F, 0.75F);
+    // The crane's hitbox at the FPV's render scale (FpvDroneRenderer.SCALE).
+    public static final Supplier<EntityType<FpvDroneEntity>> FPV_DRONE = register("fpv_drone", FpvDroneEntity::new, 0.6F, 0.525F);
 
     /**
      * The airliner's nose-to-tail hitboxes ({@link AirlinerPartEntity}): never saved, not summonable. The

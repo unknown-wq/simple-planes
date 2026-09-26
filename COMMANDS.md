@@ -70,12 +70,16 @@ Spawns an aircraft off to one side of the target and flies it straight in at ful
 
 ### Which aircraft
 
-`plane` (the starter plane), `large`, `cargo`, `fighter`, `airliner`, or `random` (one of
-`plane`, `large` and `cargo`). The message says which aircraft was actually built.
+`plane` (the starter plane), `large`, `cargo`, `fighter`, `airliner`, `strike_drone`,
+`fpv_drone`, or `random` (one of `plane`, `large` and `cargo` — never a drone). The
+message says which aircraft was actually built.
 
 ```mcfunction
 # a fighter from the east, default warhead
 /autopilot strike 100 70 200 400 90 type fighter
+
+# a one-way drone: whatever blast was ordered is replaced by its own small charge
+/autopilot strike 100 70 200 400 90 type fpv_drone
 ```
 
 The quadcopter is peaceful and is never sent. Helicopters, the mini helicopters and the
@@ -85,6 +89,17 @@ The large, cargo and airliner planes need room to push over into the dive. A sho
 `distance` is raised to their minimum — large 200, airliner 234, cargo 318 — and the
 message says so. The cargo plane's final is long and shallow: if something stands in
 front of the target, pin a `bearing` over open ground.
+
+**`strike_drone` and `fpv_drone` are one-way munitions** — see `AUTOPILOT.md`, "Choosing
+the aircraft", for the full account. In short: whatever `blast`/`blocks`/`fire` were
+asked for on the command, a drone flies its own small fixed charge instead (never
+incendiary; the message says so — `warhead 4.0 (a drone flies 1.0)`). `strike_drone` is
+the starter plane's own dive law on a lighter airframe, so its miss distance is the same
+few blocks as the other fixed-wing types; with only a ~1-block charge that usually means
+the clicked block itself survives. `fpv_drone` steers itself onto the aim point instead
+and lands within one or two blocks on the rig, at the cost of a slower final approach.
+Neither is offered by `type random`, and neither can be sent on a runway sortie — see
+"Flights" below.
 
 ### How bearing works
 
@@ -237,6 +252,8 @@ Gunship #425 did not land: ditched in water at 66401, -61, 66401 - floating, not
   blast strength on every wraparound;
 * **a plane in the other hand** — that plane flies the strike instead, with its wood.
   It is used up (except in creative), like an arrow from a bow.
+* **a drone in the other hand** (`simpleplanes:strike_drone`, `simpleplanes:fpv_drone`)
+  — that drone flies the strike instead, with its own small fixed charge. Also used up.
 
 The gesture only cycles those two numbers. The full set of settings, including "don't
 break blocks", "start fires", a pinned bearing and the aircraft, is written onto the tool
@@ -291,7 +308,10 @@ says the speed the aircraft was actually sent at.
 `inbound` all fly the starter plane. `random` draws from the three fixed-wing airframes
 only — a helicopter is never picked, and `type helicopter` is refused outright with a
 pointer to `heliflight`/`heliinbound` instead, since none of `route`, `flight` or
-`inbound` means anything for a rotorcraft: no take-off roll, no glide slope.
+`inbound` means anything for a rotorcraft: no take-off roll, no glide slope. `type
+strike_drone` and `type fpv_drone` are refused the same way, with a pointer to
+`/autopilot strike` or the Plane Strike Tool instead: a drone is a one-way munition and
+cannot land.
 
 `flight` also takes `delay <seconds>` (0…3600), how long the sortie waits parked before
 it asks for the runway. It comes after `speed` when both are given.

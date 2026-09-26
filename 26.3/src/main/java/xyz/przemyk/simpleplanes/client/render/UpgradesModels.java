@@ -193,7 +193,9 @@ public final class UpgradesModels {
         return entityType == SimplePlanesEntities.FIGHTER.get()
             || entityType == SimplePlanesEntities.AIRLINER.get()
             || entityType == SimplePlanesEntities.AIRSHIP.get()
-            || entityType == SimplePlanesEntities.MINI_HELICOPTER.get();
+            || entityType == SimplePlanesEntities.MINI_HELICOPTER.get()
+            || entityType == SimplePlanesEntities.STRIKE_DRONE.get()
+            || entityType == SimplePlanesEntities.FPV_DRONE.get();
     }
 
     private static @Nullable Identifier textureFor(ModelEntry entry, EntityType<?> entityType) {

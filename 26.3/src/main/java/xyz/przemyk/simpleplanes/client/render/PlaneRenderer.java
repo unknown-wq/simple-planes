@@ -107,38 +107,10 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
     @Override
     public void submit(PlaneRenderState state, PoseStack poseStack, SubmitNodeCollector collector, CameraRenderState camera) {
         poseStack.pushPose();
-        poseStack.translate(0.0F, 0.375F, 0.0F);
-        poseStack.scale(-1.0F, -1.0F, 1.0F);
-        poseStack.rotate(Axis.YP.rotationDegrees(180.0F));
-        poseStack.rotate(new Quaternionf(state.rotation));
-
-        EntityType<?> entityType = state.entityType;
-        if (entityType == SimplePlanesEntities.PLANE.get()) {
-            poseStack.translate(0.0F, -0.5F, -0.5F);
-        } else if (entityType == SimplePlanesEntities.LARGE_PLANE.get()) {
-            poseStack.translate(0.0F, -0.3F, -1.0F);
-        } else if (entityType == SimplePlanesEntities.CARGO_PLANE.get()) {
-            poseStack.translate(0.0F, -0.8F, -1.0F);
-        } else if (entityType == SimplePlanesEntities.FIGHTER.get()) {
-            poseStack.translate(0.0F, -0.025F, 0.25F);
-        } else if (entityType == SimplePlanesEntities.AIRLINER.get()) {
-            poseStack.translate(0.0F, -0.025F, 0.375F);
-        } else if (entityType == SimplePlanesEntities.AIRSHIP.get()) {
-            poseStack.translate(0.0F, -0.025F, 0.0F);
-        } else if (entityType == SimplePlanesEntities.MINI_HELICOPTER.get()) {
-            poseStack.translate(0.0F, -0.025F, -0.25F);
-        } else {
-            poseStack.translate(0.0F, 0.0F, 0.9F);
-        }
-
-        if (state.timeSinceHit > 0.0F) {
-            float angle = Mth.clamp(state.timeSinceHit / 10.0F, -30.0F, 30.0F);
-            poseStack.rotate(Axis.ZP.rotationDegrees(Mth.sin(state.ageInTicks) * angle * wobbleScale(state)));
-        }
-
-        poseStack.translate(0.0F, -1.1F, 0.0F);
+        applyModelPose(state, poseStack);
 
         EntityModel<PlaneRenderState> body = bodyModel(state);
+
         collector.submitModel(body, state, poseStack,
                 body.renderType(bodyTexture(state)),
                 state.lightCoords, OverlayTexture.NO_OVERLAY, state.outlineColor);
@@ -167,6 +139,42 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
 
         poseStack.popPose();
         super.submit(state, poseStack, collector, camera);
+    }
+
+    /** Model space to entity space: the flip, the orientation, the per-type offset and the damage wobble. */
+    protected void applyModelPose(PlaneRenderState state, PoseStack poseStack) {
+        poseStack.translate(0.0F, 0.375F, 0.0F);
+        poseStack.scale(-1.0F, -1.0F, 1.0F);
+        poseStack.rotate(Axis.YP.rotationDegrees(180.0F));
+        poseStack.rotate(new Quaternionf(state.rotation));
+
+        EntityType<?> entityType = state.entityType;
+        if (entityType == SimplePlanesEntities.PLANE.get()) {
+            poseStack.translate(0.0F, -0.5F, -0.5F);
+        } else if (entityType == SimplePlanesEntities.LARGE_PLANE.get()) {
+            poseStack.translate(0.0F, -0.3F, -1.0F);
+        } else if (entityType == SimplePlanesEntities.CARGO_PLANE.get()) {
+            poseStack.translate(0.0F, -0.8F, -1.0F);
+        } else if (entityType == SimplePlanesEntities.FIGHTER.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.25F);
+        } else if (entityType == SimplePlanesEntities.AIRLINER.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.375F);
+        } else if (entityType == SimplePlanesEntities.AIRSHIP.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.0F);
+        } else if (entityType == SimplePlanesEntities.MINI_HELICOPTER.get()) {
+            poseStack.translate(0.0F, -0.025F, -0.25F);
+        } else if (entityType == SimplePlanesEntities.STRIKE_DRONE.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.09375F);
+        } else {
+            poseStack.translate(0.0F, 0.0F, 0.9F);
+        }
+
+        if (state.timeSinceHit > 0.0F) {
+            float angle = Mth.clamp(state.timeSinceHit / 10.0F, -30.0F, 30.0F);
+            poseStack.rotate(Axis.ZP.rotationDegrees(Mth.sin(state.ageInTicks) * angle * wobbleScale(state)));
+        }
+
+        poseStack.translate(0.0F, -1.1F, 0.0F);
     }
 
     /** Multiplier on the damage wobble angle. */
