@@ -22,7 +22,14 @@ silo with its fins folded, deploys them clear of the tube, turns toward the targ
 - An AD silo with a loaded missile launches at the **nearest hostile aircraft** within its tier's detection
   radius. The missile **pursues** it and ends in a **proximity detonation** with the tier's warhead, through the
   same `Blast#detonate` path as everything else.
-- A missile that runs out of range ends **harmless**. AD silos hold **no chunk tickets**.
+- **One missile per aircraft** at a time, across all silos. A second one is fired only after the first has ended
+  without killing the aircraft (§1c, "One missile per aircraft").
+- AD silos hold **no chunk tickets**.
+
+**Fuel (this build)** (§2, "Fuel and the fall"): every missile, strike or air defence, carries fuel equal to the
+distance it can fly. It burns by the distance flown. When it is gone the motor stops: the missile falls under
+gravity, unguided and without a flame, and goes off on whatever it lands on. A strike missile lands with its
+normal warhead. A spent interceptor lands harmlessly. Design notes and measurements: `design/MISSILE-FUEL.md`.
 
 **Missile items (this build)** (§1d):
 
@@ -91,13 +98,17 @@ blocks.
   longer ahead of the nose or the path is blocked. The reported miss is therefore the true closest approach, not
   the first distance under 1.5.
 - **Terrain impact.** The flight also ends when the path is blocked anywhere else.
-- **What it ignores.** A missile passes through entities without touching them. It cannot be hurt, is immune to
+- **Falling.** Once its fuel is gone (§2, "Fuel and the fall") the missile is `UNPOWERED`. It moves under gravity
+  and drag, and the nose follows the velocity. Its swept nose segment is then also tested against entities
+  (`ProjectileUtil#getEntityHitResult`, pickable entities other than missiles), and the flight ends as `FELL` on
+  the first entity or block it meets.
+- **What it ignores.** A missile under power passes through entities without touching them. It cannot be hurt, is immune to
   explosions and fire, uses no portals, triggers no pressure plates and cannot be pushed by pistons. It cannot be
   `/summon`ed (`noSummon`) and is never saved (`noSave`). At a server stop every missile in flight is discarded,
   and a line is written to the log.
 - **Ending a flight.** Every ending goes through `MissileEntity.finish`. It calls `MissileFx.puff` (particles and
-  a firework sound), then, for `ARRIVED` and `TERRAIN` only, the warhead (§1b), writes a report and discards the
-  entity.
+  a firework sound), then, for `ARRIVED`, `TERRAIN` and `FELL` only, the warhead (§1b), writes a report and
+  discards the entity. An interceptor has its own rule (§1c, "Launch and guidance", step 6).
 - **Render data.** The synced data is `tier`, `fins` (0 to 1), `thrust` (0 to 1) and `booster` (attached or
   not). The renderer copies them into `MissileRenderState`, and the model's hooks read them in `setupAnim`.
   26.3 defers `setupAnim` to draw time, so the hooks are never called by hand.
@@ -306,7 +317,8 @@ as items either, so a silo cannot be used to mine or to duplicate anything.
 
 ### 1b. Warheads
 
-A missile that ends its flight `ARRIVED` or `TERRAIN` detonates. The values are the `warhead` field of
+A strike missile that ends its flight `ARRIVED`, `TERRAIN` or `FELL` (it ran out of fuel and fell onto
+something) detonates. The values are the `warhead` field of
 `MissileTier`, one `Blast` per tier, and nothing else holds them:
 
 | Tier | Power | Block damage | Fire | Damage radius (2 x power) |
@@ -335,7 +347,8 @@ aircraft.
   along the flight path, so that the blast starts in the air cell in front of the face and not inside the block.
 - **The missile** is immune to explosions and is removed right after.
 - **What does not detonate.**
-  - `FUEL`, `TIMEOUT`, `OUT_OF_WORLD`: the missile never hit anything.
+  - `TIMEOUT`, `OUT_OF_WORLD`: the missile never hit anything. There is no ending for running out of fuel any more:
+    the missile falls and ends as `FELL` where it lands.
   - `STALLED`: the watchdog removing a frozen missile is not an impact.
   - `ABORTED`, `REMOVED`, a server stop.
   - Tier 4 staging and the dropped booster: particles only, as before.
@@ -363,7 +376,7 @@ ending does not detonate).
 A silo has two modes: **strike** (launch to coordinates, everything above) and **air defence** (AD). An AD silo
 holding a loaded missile watches for **hostile aircraft**. When one comes within its detection radius, the silo
 launches at it. The missile climbs out of the tube, deploys its fins and chases the aircraft. It ends in a
-**proximity detonation** next to the aircraft, or harmlessly when it runs out of range.
+**proximity detonation** next to the aircraft. If it runs out of fuel first, it falls unguided and lands harmlessly.
 
 The code is in its own package, `airdefence/`. The shared missile and silo classes carry only the hooks.
 
@@ -374,7 +387,7 @@ The code is in its own package, `airdefence/`. The shared missile and silo class
 | `airdefence/AllegianceOption` | The `hostile` keyword grafted onto the spawning commands |
 | `airdefence/AircraftRoster` | Every loaded `PlaneEntity` per dimension (entity load/unload events) |
 | `airdefence/InterceptorSpec` | Per-tier AD figures (table below) and the shared limits |
-| `airdefence/TargetSelector`, `Engagements` | Target choice and the per-target missile limit |
+| `airdefence/TargetSelector`, `Engagements` | Target choice, the one-missile-per-aircraft claims and the follow-up reasons |
 | `airdefence/Pursuit`, `Interceptor` | Guidance law and fuse geometry; the missile's pursuit state |
 | `airdefence/AirDefenceSilo` | The silo's idle scan, target keeping during the hatch, the right-click toggle |
 | `airdefence/AirDefenceCommand`, `AirDefenceTestPlayer` | `/airdefence` and its fake player |
@@ -384,8 +397,8 @@ Hooks outside the package:
 - `PlaneEntity`: the allegiance field.
 - `LaunchSiloBlockEntity`: the `AIR_DEFENCE` mode, `launchAirDefence`, the idle hook and the AD hatch rate.
 - `LaunchSiloBlock` and `LaunchSiloCasingBlock`: `useItemOn`.
-- `MissileEntity`: the `PURSUIT` phase, three outcomes and `launchInterceptor`.
-- `MissileTracker`: an `ad` report field and `holdsSilo`.
+- `MissileEntity`: the `PURSUIT` phase, the `INTERCEPTED` and `LOST` outcomes and `launchInterceptor`.
+- `MissileTracker`: an `ad` report field, `holdsSilo`, and the claim renewal of interceptors in flight.
 - The autopilot and gunship spawn lines: one call each.
 - `Shuttle`: one field.
 
@@ -452,15 +465,15 @@ It is chosen when the aircraft is spawned:
   - the hatch is clear.
 
   Scans are every 10 ticks, staggered per silo by position.
-- **Candidates.** Only `PlaneEntity` aircraft that are **hostile**, alive and loaded in the silo's dimension. They
+- **Candidates.** Only `PlaneEntity` aircraft that are **hostile**, alive, above 0 health and loaded in the silo's
+  dimension. An aircraft shot down to 0 health keeps falling until it crashes; it is not a target any more. They
   come from `AircraftRoster`, a set of loaded aircraft kept by Fabric's entity load/unload events, so a scan is a
   walk over a handful of aircraft rather than an entity search. Players, mobs, friendly aircraft, the crane and
   other missiles are never candidates.
 - **Choice.** The **nearest** candidate by 3D distance from the silo mouth to the aircraft's box centre, within the
   tier's detection radius.
-- **Limit.** At most **2 missiles per aircraft** at a time, over all silos. A silo in its launch sequence and a
-  missile in flight each hold a claim on their aircraft (`Engagements`). Claims lapse on their own 40 ticks after
-  their last renewal, so a silo that goes to sleep or a missile that is removed never blocks a target for good.
+- **Limit.** **One missile per aircraft** at a time, over all silos (`InterceptorSpec.MAX_PER_TARGET = 1`). See
+  "One missile per aircraft" below.
 - **Cooldown.** Each silo has one missile. After an AD launch it runs the usual close (30 t) and cooldown (100 t),
   then scans again once it is reloaded.
 - **Re-targeting.**
@@ -468,10 +481,40 @@ It is chosen when the aircraft is spawned:
     friendly, the silo takes the next nearest free candidate. If there is none, it closes the hatch and **keeps
     the missile**.
   - A missile in flight whose aircraft is gone looks for the nearest free hostile within its tier's detection
-    radius of itself. If it finds none, it ends as `LOST`, harmlessly.
+    radius of itself that nobody else holds. If it finds none, it ends as `LOST`, harmlessly.
 
 `/airdefence scan <silo>` prints this choice without launching. It lists every loaded aircraft with its
 distance and why it is or is not a candidate.
+
+#### One missile per aircraft
+
+A silo in its launch sequence and a missile in flight each hold a **claim** on their aircraft (`Engagements`).
+A silo only chooses an aircraft that nobody else claims, so:
+
+- **While a missile is on its way** to an aircraft, no other silo and no other missile engages it.
+- **A launch sequence is a claim.** A silo claims its aircraft when the hatch starts to open, so two silos never
+  both begin a launch at the same aircraft. At ignition the missile takes its own claim and the silo's is
+  dropped, in the same tick. A missile that re-targets in flight only takes an aircraft nobody holds.
+- **A second missile** is fired only once the first is gone without a kill. The missile gives its claim up when:
+  - it is removed (`/kill`, `/missile abort`, a server stop);
+  - it hits terrain or a blocker (`TERRAIN`), loses its target (`LOST`), or is ended by the watchdog (`STALLED`);
+  - it runs out of fuel: the claim goes at burnout, not when the missile lands;
+  - its fuse fires and the aircraft survives the blast (`INTERCEPTED`, target above 0 health).
+
+  If the aircraft is dead or down to 0 health at that moment, nothing is remembered and no second missile follows.
+  Otherwise the reason is remembered for 2400 ticks (`Engagements.MISS_MEMORY_TICKS`). The next silo to claim that
+  aircraft logs it: `[airdefence] silo … engaging #N at … blocks (second shot: missile #M from silo … ended
+  OUT_OF_FUEL (target hp 10/10) 0.3 s earlier)`, or `(first shot)`.
+- **Expiry.** Claims still lapse 40 ticks after their last renewal (`MISSILE_CLAIM_TICKS`), so a silo that goes
+  to sleep in an unloaded chunk never blocks an aircraft for good. A silo claim is renewed every tick of the
+  hatch. A missile's claim is renewed every tick it is guided, and again by `MissileTracker` from the level tick,
+  so it cannot lapse while the missile exists and has its motor, even in ticks the missile itself did not run.
+  A silo whose claim did lapse while it slept checks on waking whether someone else has taken its aircraft, and
+  chooses another one or aborts (missile kept) if so.
+- **Where to see it.** `/airdefence engagements` lists every claim (which silo or missile holds which aircraft,
+  for how long, with the missile's fuel and motor state) and the recent follow-up shots with their reasons.
+  `/missile silo status` adds `, holding #N` to a silo in its launch sequence. `/airdefence scan` names the
+  holder of an aircraft that is already engaged.
 
 #### Launch and guidance
 
@@ -507,8 +550,11 @@ distance and why it is or is not a candidate.
 
    What the blast does to the aircraft is vanilla explosion damage on `PlaneEntity#hurtServer`. An aircraft at
    0 health loses control, falls and crashes (`PlaneEntity#crash`, its own blast, also through `Blast#detonate`).
-6. **Harmless endings.** An AD missile detonates **only** on its fuse. These end with the puff alone:
-   - `OUT_OF_RANGE`: the motor path is used up;
+6. **Harmless endings.** An AD missile detonates its warhead **only** on its fuse. These end with the puff alone:
+   - **fuel out**: once it has flown its fuel (the tier's range), the motor stops, the claim is given up and the
+     missile falls unguided. It ends as `FELL` where it lands, on terrain or on an entity, with
+     `InterceptorSpec.SPENT_WARHEAD`, which is **none**, so spent interceptors falling on the defended area do no
+     harm. A small blast instead would be `new Blast(1.0F, false, false)` (entities within 2 blocks, no blocks);
    - `LOST`: no target left;
    - `TERRAIN`: the missile hit the ground, a hill or a tree while chasing a low aircraft. It is deliberately
      harmless, so an AD site never craters its own surroundings;
@@ -520,16 +566,17 @@ distance and why it is or is not a candidate.
 |---|---|---|---|---|
 | Speed (b/t), from `MissileTier` | 2.0 | 2.5 | 3.0 | 4.0 |
 | Acceleration after the tube (b/t²) | 0.10 | 0.10 | 0.10 | 0.12 |
-| Range: motor path past the tube (blocks) | 400 | 600 | 900 | 1400 |
+| Fuel = range: powered path past the tube (blocks) | 400 | 600 | 900 | 1400 |
 | Detection radius = range / 4 (blocks, 3D) | 100 | 150 | 225 | 350 |
 | Fuse radius (blocks to the box surface) | 3 | 4 | 5 | 6 |
 | Warhead (§1b), entity damage radius 2 × power | 2.0 (4) | 4.0 (8) | 8.0 + fire (16) | 16.0 + fire (32) |
 | Turn rate (°/t) | 12 | 10 | 9 | 8 |
 | AD hatch (t) | 10 | 12 | 14 | 16 |
-| Flight time limit (t) | 280 | 320 | 380 | 430 |
+| Powered time limit (t); the motor stops after it | 280 | 320 | 380 | 430 |
+| Hard lifetime cap (t): powered limit + 600 of fall | 880 | 920 | 980 | 1030 |
 
 The detection radius is a quarter of the range. A tail chase that starts at the edge of detection needs a path of
-`d · v_m / (v_m − v_a)`, so the range is enough against an aircraft up to three quarters of the missile's speed.
+`d · v_m / (v_m − v_a)`, so the fuel is enough against an aircraft up to three quarters of the missile's speed.
 
 **Aircraft speeds** in this build:
 
@@ -547,9 +594,9 @@ it starts 30 blocks out, flying away):
 
 | Missile | Aircraft at 0.8 | Helicopter at 1.1 | Plane at 2.0 | Plane at 2.8 |
 |---|---|---|---|---|
-| **T1** at 2.0 | catches it | catches it | approach only; tail is a tie and it runs out of range | **outruns T1** in both geometries |
+| **T1** at 2.0 | catches it | catches it | approach only; tail is a tie and it runs out of fuel | **outruns T1** in both geometries |
 | **T2** at 2.5 | catches it | catches it | catches it; the tail chase uses 571 of its 600 blocks | **outruns T2** in both; head-on it passes 7.5–14.6 blocks off and cannot turn back in time |
-| **T3** at 3.0 | catches it | catches it | not measured (faster than T2, so catches it) | approach only; tail chase closes at 0.2 b/t and runs out of range |
+| **T3** at 3.0 | catches it | catches it | not measured (faster than T2, so catches it) | approach only; tail chase closes at 0.2 b/t and runs out of fuel |
 | **T4** at 4.0 | catches it | catches it | not measured | catches it, including the tail chase (9.4 s, ~590 blocks) |
 
 - **Fast aircraft against T1 and T2, even head-on.** An AD launch needs about 26 ticks from detection to
@@ -582,7 +629,7 @@ the natural integration points are:
 - `PlaneEntity#getAllegiance`: a colony could treat hostile aircraft as raiders;
 - `AircraftRoster`: a cheap list of loaded aircraft;
 - `Engagements`: a colony battery could hold a claim, so that silos and the battery do not waste shots on the
-  same aircraft.
+  same aircraft (one claim per aircraft).
 
 ---
 
@@ -703,10 +750,43 @@ The profile is **climb, cruise, dive.**
 
 These limits apply to every tier:
 
-- **Motor.** It burns for a path of `1.3 × range + 200` blocks. After that the flight ends as `FUEL`.
-- **Lifetime.** The limit is `1.3 × range / speed + 600` ticks. After that the flight ends as `TIMEOUT`.
+- **Fuel.** `1.3 × range + 200` blocks of powered flight past the tube (`MissileTier#fuel`): 1760, 3450, 6700 and
+  13200. The silo's range check (`rangeProblem`, 24–1200 … 64–10000 horizontally) is unchanged and is what limits
+  a launch; the fuel covers the climb, cruise and dive to a target at maximum range with margin (a T1 to 1190
+  blocks used 1213 of 1760). See "Fuel and the fall" below.
+- **Powered time.** `1.3 × range / speed + 600` ticks (`MissileTier#poweredTicks`). After that the motor stops as
+  if the fuel were gone.
+- **Lifetime.** A hard cap of the powered time plus 600 ticks of fall. After that the flight ends as `TIMEOUT`.
 - **Height.** The flight ends as `OUT_OF_WORLD` more than 16 blocks below the world or 256 blocks above it.
 - **Arrival radius.** 1.5 blocks.
+
+### Fuel and the fall
+
+Every missile carries a fuel budget, in blocks of flight under power after it has left the tube:
+
+| | T1 | T2 | T3 | T4 |
+|---|---|---|---|---|
+| Strike (`MissileTier#fuel`, `1.3 × range + 200`) | 1760 | 3450 | 6700 | 13200 |
+| Air defence (`InterceptorSpec#range`) | 400 | 600 | 900 | 1400 |
+
+- **Burn.** Each powered tick outside the tube burns the distance flown that tick. Nothing else burns fuel.
+- **Burnout.** When the fuel reaches 0, or the powered time limit is reached, the missile goes `UNPOWERED`:
+  - `thrust` is synced as 0, so the flame and the exhaust particles stop;
+  - no guidance: no midcourse, dive or pursuit steering, no fuse;
+  - an interceptor gives up its engagement claim at once, so another silo may follow up (§1c);
+  - the log says `[missile] #N Tn fuel out at x y z t=<ticks> flown=<path> spd=<b/t>: motor off, falling unguided`.
+- **The fall.** Each tick the velocity is multiplied by 0.99 (drag, as an arrow) and loses 0.08 b/t downwards
+  (gravity, as a mob), and the nose turns to follow it. The missile keeps its forward speed for a while and
+  arcs down. It does not self-destruct in mid-air.
+- **Impact.** The swept nose segment is tested against terrain (as in powered flight) and against pickable
+  entities other than missiles. The first hit ends the flight as `FELL`:
+  - a strike missile (silo launch, `/missile launch` or remote launch from the map) detonates with its tier's
+    normal warhead, as on `TERRAIN`;
+  - an interceptor lands with `InterceptorSpec.SPENT_WARHEAD`, none by default (§1c).
+- **Backstop.** Anything still airborne 600 ticks after burnout ends as `TIMEOUT` with the puff alone, and
+  `OUT_OF_WORLD` still applies below the world. Missiles are never saved, so none outlives a restart.
+- **Range is unchanged.** A strike launch is still limited by the silo's range check; the fuel only matters for
+  a flight that somehow flies further, or for `/missile fuel` in tests. Remote launches use the same path.
 
 **Why this profile.** A lofted ballistic arc would need very different trajectories from 24 blocks to 10 km. A
 cruise at a fixed height over the higher end has three advantages:
@@ -762,9 +842,10 @@ horizontal range from the silo (T1 24–1200, T2 32–2500, T3 48–5000, T4 64�
 | `/missile silo reset <pos>` | **Recovery.** Puts a busy silo back to idle with the hatch shut, whatever its phase. A missile not yet fired stays loaded. Prints what it was doing. The same thing happens on its own to a sequence that has not ticked for 600 game ticks (§1) | `/missile silo reset 0 -20 0` |
 | `/missile silo status <pos>` | Prints the tier, loaded or empty, the phase, the hatch, the mode, the cooldown, the launch count, the last missile id and the target, and flags a damaged structure | `/missile silo status 0 -20 0` |
 | `/missile launch <silo> <target>` | Starts the launch sequence toward the point `target` (x y z; integer x and z are centred on the block). Refused with the reason for anything in §1's check list | `/missile launch 0 -20 0 500 -19 0` |
-| `/missile list` | One telemetry line per missile in flight | `/missile list` |
+| `/missile list` | One telemetry line per missile in flight, with its fuel and motor state | `/missile list` |
 | `/missile report [count]` | The last `count` (default 10, max 64) flight reports since the server started | `/missile report 4` |
 | `/missile abort all` / `/missile abort <id>` | Ends one or all flights with the harmless puff and no warhead (outcome `ABORTED`) | `/missile abort 1445` |
+| `/missile fuel <id> <blocks>` | **Test.** Sets the fuel left of a missile in flight, so that it burns out where a test wants it (0: on its next powered tick). Refused for a missile that has already burnt out. Prints the new `fuel=… motor=…` | `/missile fuel 64 60` |
 | `/missile telemetry <interval>` | Logs a telemetry line for each missile every `interval` ticks (0 = off, max 1200) | `/missile telemetry 10` |
 | `/missile hash <from> <to> [census]` | FNV-1a 64-bit hash of every block state in the box, plus the block and non-air counts (max 16,777,216 blocks). `census` also lists every block state with its count. The ids are runtime block-state ids, so compare hashes within one server session. Loads or generates chunks as it reads them | `/missile hash -3 -30 -3 4 10 4 census` |
 | `/missile hash <from> <to> snapshot` / `... diff` | **Test.** `snapshot` remembers every block state in the box (one snapshot at a time, same size limit). `diff`, on exactly the same box, counts the blocks that changed since and lists the transitions (`dirt -> air`, `air -> fire`, ...) | `/missile hash 170 -40 -28 228 0 28 diff` |
@@ -788,12 +869,13 @@ Outside `/missile`:
 | Command | Effect | Example |
 |---|---|---|
 | `/airdefence mode <silo> strike\|air_defence` | Sets the silo's mode, as the right-click toggle does. Refused while the hatch is opening or a missile is leaving | `/airdefence mode 0 -20 0 air_defence` |
-| `/airdefence scan <silo>` | Dry run of target choice. Prints the tier's detection radius, range, speed and fuse, then every loaded aircraft with its allegiance, distance to the mouth and verdict (`candidate`, `friendly, ignored`, `out of detection`, `already engaged by 2`), then the one the silo would pick | `/airdefence scan 0 -20 0` |
+| `/airdefence scan <silo>` | Dry run of target choice. Prints the tier's detection radius, range, speed and fuse, then every loaded aircraft with its allegiance, distance to the mouth and verdict (`candidate`, `candidate (follow-up: <why>)`, `friendly, ignored`, `shot down, ignored`, `out of detection`, `already engaged by <silo or missile>`), then the one the silo would pick | `/airdefence scan 0 -20 0` |
+| `/airdefence engagements` | Every live claim: `silo <pos> (launch sequence)` or `missile #N from silo <pos> (fuel=<left>/<budget> motor=<state>)`, the aircraft it holds, for how long, and `first shot` or `second shot: missile #M from silo <pos> ended <reason> (target hp <h>/<max>) <t> s earlier`. Then the last 16 follow-up shots with their reasons | `/airdefence engagements` |
 | `/airdefence aircraft [radius]` | Lists the loaded aircraft (nearest first, optionally within `radius` of the source): `#id type allegiance pos spd dist [autopilot]` | `/airdefence aircraft 500` |
 | `/airdefence allegiance <targets>` | Prints the allegiance of the aircraft among `targets` (an entity selector). Other entities are skipped | `/airdefence allegiance @e[type=simpleplanes:plane]` |
 | `/airdefence allegiance <targets> friendly\|hostile` | Sets it | `/airdefence allegiance @e[type=simpleplanes:helicopter,limit=1,sort=nearest] hostile` |
 | `/airdefence item friendly\|hostile` | Writes `allegiance` into the entity tag of the plane item in the player's main hand (or off hand). The aircraft it places has that allegiance | `/airdefence item hostile` |
-| `/airdefence spec` | Prints the per-tier AD figures of §1c and the shared limits | `/airdefence spec` |
+| `/airdefence spec` | Prints the per-tier AD figures of §1c and the shared limits (one missile per target, fuel = range) | `/airdefence spec` |
 | `/airdefence tickets <pos>` | **Test.** For the chunk holding `pos`: whether it is loaded and block-ticking, the tickets on it (read from `TicketStorage`, without loading the chunk), and whether a silo there holds a strike-launch ticket (`MissileTracker`) | `/airdefence tickets 0 -20 0` |
 | `/airdefence click <pos> [item] [sneak]` | **Test.** A survival fake player right-clicks the top face of `pos` holding `item` (an item argument, components allowed; empty hand if left off), optionally sneaking, through the vanilla `ServerPlayerGameMode#useItemOn` path. Prints accepted, passed or refused, the count left, the action-bar message and the silo's status | `/airdefence click 0 -20 0 simpleplanes:launch_silo` |
 | `/airdefence place <pos> <item>` | **Test.** The fake player stands on `pos`, looks straight down and uses `item` through `ServerPlayerGameMode#useItem`, as a right-click in the air. Prints the aircraft it placed | `/airdefence place 0 -19 0 simpleplanes:plane[simpleplanes:entity_tag={allegiance:"hostile"}]` |
@@ -816,17 +898,25 @@ The permissions are those of the parent commands (level 2).
 **Report line**, one per flight, to the log and to `/missile report`:
 
 ```
-[missile] #101 T4 ARRIVED at 10.50,-19.00,-199.50 target 10.50,-19.00,-199.50 miss=0.00 closest=0.00 flight=93t
-          total=134t (6.7s) flown=270.3 range=210.5 max_y=42.5 stalls=0 silo=10, -20, 10 blast=16.0,blocks,fire,66.0ms
+[missile] #64 T1 ARRIVED at 76189.68,-19.00,0.50 target 76190.50,-20.00,0.50 miss=1.29 closest=1.29 flight=621t
+          total=646t (32.3s) flown=1213.2 range=1190.0 max_y=5.0 stalls=0 silo=75000, -20, 0 blast=2.0,blocks,24.5ms
+          fuel=548.6/1760 motor=cruise
+[missile] #21 T1 FELL at 66451.06,-19.00,-0.92 target 66910.90,43.04,-2.93 miss=464.01 closest=464.01 flight=250t
+          total=260t (13.0s) flown=476.6 range=98.8 max_y=21.7 stalls=0 silo=66000, -20, 0 blast=none fuel=0.0/400
+          motor=unpowered burnout=fuel_out@t216,66393.6,21.7,-0.7 fell=34t on_grass_block ad target=#20 hp=10/10 ...
 ```
 
 - `flight` is counted from ignition.
 - `total` is counted from the launch command, so it includes the hatch opening. `total` is the launch-to-arrival
   time.
-- The outcome is one of `ARRIVED`, `TERRAIN`, `FUEL`, `TIMEOUT`, `OUT_OF_WORLD`, `STALLED`, `ABORTED` or
-  `REMOVED`. `REMOVED` means removed by something else, such as `/kill`. An air-defence missile ends as
-  `INTERCEPTED` (proximity fuse, the only one of its endings that detonates), `OUT_OF_RANGE`, `LOST` (no target
-  left), `TERRAIN`, `TIMEOUT`, `OUT_OF_WORLD`, `STALLED`, `ABORTED` or `REMOVED`.
+- The outcome is one of `ARRIVED`, `TERRAIN`, `FELL` (out of fuel, fell onto terrain or an entity), `TIMEOUT`,
+  `OUT_OF_WORLD`, `STALLED`, `ABORTED` or `REMOVED`. `REMOVED` means removed by something else, such as `/kill`.
+  An air-defence missile ends as `INTERCEPTED` (proximity fuse, the only one of its endings that detonates its
+  warhead), `FELL`, `LOST` (no target left), `TERRAIN`, `TIMEOUT`, `OUT_OF_WORLD`, `STALLED`, `ABORTED` or
+  `REMOVED`. The old `FUEL` and `OUT_OF_RANGE` endings are gone: a missile out of fuel falls and ends as `FELL`.
+- `fuel=<left>/<budget> motor=boost|cruise|unpowered` is the fuel and motor state at the end. After a burnout it
+  goes on with `burnout=<fuel_out|motor_time_limit>@t<tick>,<x>,<y>,<z> fell=<ticks> on_<block or entity type
+  #id>`.
 - For an AD missile, `target` and `miss` refer to the last lead point, and the line ends with
   `ad target=#<aircraft> hp=<health>/<max>|destroyed|gone closest=<fuse distance to the box> tvel=<measured
   aircraft speed> retargets=<n>`, read just after the blast.
@@ -835,11 +925,15 @@ The permissions are those of the parent commands (level 2).
   `inert` (the game rule is off) or `none` (the ending does not detonate).
 
 **Telemetry line:** `#id Tn t=<ticks> <phase> pos=x,y,z spd=<b/t> pitch=<deg> agl=<height above ground>
-to_go=<horizontal> dist=<nose to target> flown=<path> fins=<0..1> booster=on|off|- stalls=<n>`. An AD missile shows
-the phase `pursuit`, and "target" is its current lead point.
+to_go=<horizontal> dist=<nose to target> flown=<path> fins=<0..1> booster=on|off|- stalls=<n> fuel=<left>/<budget>
+motor=boost|cruise|unpowered`. An AD missile shows the phase `pursuit`, and "target" is its current lead point. A
+burnt-out missile shows the phase `unpowered`. `motor` is `boost` in the tube, while the fins deploy, while
+accelerating and while a tier 4 carries its booster; `cruise` at cruise speed; `unpowered` after burnout.
 
-AD log lines: `[airdefence] silo <pos> T<n> engaging #<aircraft> at <distance> blocks`, `... target gone, launch
-aborted, missile kept` and `... switched to <mode> by <player>`.
+AD log lines: `[airdefence] silo <pos> T<n> engaging #<aircraft> at <distance> blocks (first shot)` or `(second
+shot: missile #<m> from silo <pos> ended <reason> (target hp <h>/<max>) <t> s earlier)`, `... target gone, launch
+aborted, missile kept`, `... target #<aircraft> taken by another engager meanwhile` and `... switched to <mode> by
+<player>`.
 
 ---
 
@@ -1148,7 +1242,7 @@ game ticks at 20 TPS. "Total" runs from the silo's decision to launch (hatch sta
 | Friendly plane at 1.2 b/t flying over a loaded T2 AD silo | no engagement; `scan`: "friendly, ignored" |
 | Pig, zombie, villager, armor stand at 3–9 blocks, pig floating 30 above | no engagement; not listed by `scan` (only aircraft are) |
 | Hostiles at 50, 90 and 99 blocks | engaged "#213 at 50.0 blocks", the nearest; `INTERCEPTED` |
-| Three T1 silos, one hostile at 60–63 blocks | two engaged at once; the third engaged only after both missiles had ended (warheads off, so the aircraft survived) |
+| Three T1 silos, one hostile at 60–63 blocks | two engaged at once; the third engaged only after both missiles had ended (warheads off, so the aircraft survived). Since then the limit is one missile per aircraft (§6d) |
 | First target killed 12 ticks after ignition, second hostile 100 blocks away | `INTERCEPTED` the second one, `retargets=1` |
 | The only target killed 12 ticks after ignition | `LOST` after 16 flight ticks, `blast=none` |
 | Target killed while the hatch opened | "target gone, launch aborted, missile kept": the silo closed and cooled down, still loaded |
@@ -1160,7 +1254,8 @@ this rests on the code, and on the mobs above as the nearest stand-in.
 
 - **Hits.** 57 intercepts. 56 left the aircraft at 0 health, and it fell and crashed. One T1 hit on a 2.0 plane,
   with a fuse distance of 1.46, left it at 3 of 10.
-- **Misses.** All 27 misses ended `OUT_OF_RANGE`, `blast=none`, with the aircraft at 10 of 10: harmless.
+- **Misses.** All 27 misses ended `OUT_OF_RANGE`, `blast=none`, with the aircraft at 10 of 10: harmless. (Since
+  §6d such a missile runs out of fuel and falls instead of vanishing.)
 
 | Tier | Aircraft (measured speed) | Approach: hits, total ticks | Tail: hits, total ticks | Path flown by hits |
 |---|---|---|---|---|
@@ -1322,6 +1417,23 @@ The same four flights on other bearings, with an earlier build, gave identical t
 
 ---
 
+### 6d. One missile per aircraft, and fuel
+
+Measured on the dedicated test server with the jar of `5a3d7b7` ("before") and this build ("after"); the full
+table, the causes and the test list are in `design/MISSILE-FUEL.md`.
+
+| Scenario | Before | After |
+|---|---|---|
+| Three T1 silos, one hostile at 0.8 | 3 missiles, 1 kill; the third chased the falling wreck | 1 missile, 1 kill, 0 second shots |
+| Three T1 silos, two hostiles | all 3 missiles at the first; the second never engaged | 3 missiles, 2 kills; one follow-up at the aircraft the first hit left at 2/10 |
+| T1 against a plane at 2.8 flying away | vanished in mid-air at 403 blocks | fuel out at 403 blocks, fell 34 ticks, landed 57 blocks on, harmless |
+| First missile `/kill`ed | 3 missiles, one of them burst on the wreck | exactly one follow-up ("ended REMOVED:killed"), 1 kill |
+| First missile hits a roof over its silo | – | exactly one follow-up ("ended TERRAIN") |
+| First missile stalled in unloaded ground | – | its claim held for 201 ticks until the watchdog; then one follow-up ("ended STALLED") |
+| Strike T1 at 1190 / remote T2 at 2400 | – | arrived with 548.6 / 1020.2 fuel left; 1250 / 2600 refused as before |
+| Strike and remote with fuel cut (`/missile fuel`) | – | fell 25–29 ticks, normal warhead on impact, on the ground or on an iron golem |
+| Restart with an interceptor in flight | – | discarded at shutdown, no entity and no claim left; the other silo engaged after the restart |
+
 ## 7. Known limitations
 
 - **Launching is a command only.** There is no launch interface (see below). Loading has the missile items.
@@ -1350,13 +1462,18 @@ The same four flights on other bearings, with an earlier build, gave identical t
 - **The dive needs a clear line of sight.** A target under a roof or underground is reached from overhead, and
   ends as `TERRAIN` on whatever covers it.
 - **Accuracy.** The miss is 0.00 because the final aim is exact. Nothing models guidance error.
-- **Speed.** Missiles fly through entities, and the tier-4 cruise speed of 4 b/t is near the upper end of what a
+- **Speed.** Missiles under power fly through entities (only a falling one hits them), and the tier-4 cruise speed of 4 b/t is near the upper end of what a
   client renders smoothly.
 - **Client check.** The client was checked with llvmpipe under Xvfb at low tick rates. Lighting at night and in
   deep shafts was not examined.
 - **Air defence** (§1c):
   - **One shot per load.** An AD silo fires its one missile and must be reloaded with a missile item. There is
     no magazine and no automatic reload.
+  - **One missile per aircraft.** A follow-up waits until the first missile has ended. Against a fast aircraft
+    that a single missile cannot catch, the second one is only fired after the first has flown its whole fuel.
+  - **Missiles cannot be shot down.** `hurtServer` refuses all damage, so "destroyed" means `/kill`,
+    `/missile abort`, a blocker or the watchdog.
+  - **Direct hits by a spent interceptor** do nothing (`SPENT_WARHEAD` is none), even on the aircraft it chased.
   - **No ticket, by design.** A silo far from players and away from the aircraft's own chunk bubble does not see
     it (§6b, "Chunks"). A hostile aircraft without an autopilot carries no tickets, so it only wakes silos where
     something else loads the ground.

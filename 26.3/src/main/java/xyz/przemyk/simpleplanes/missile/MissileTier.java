@@ -25,7 +25,7 @@ public enum MissileTier {
     public final double seatDepth;
     public final double cruiseSpeed;
     public final double accel;
-    /** Maximum horizontal launch range. The motor burns for 1.3x this path length. */
+    /** Maximum horizontal launch range. The fuel is {@link #fuel()}: 1.3x this path length plus 200. */
     public final double maxRange;
     public final double minRange;
     /** Cruise height above the higher of the launch surface and the target. */
@@ -53,6 +53,20 @@ public enum MissileTier {
         this.terminalTurn = terminalTurn;
         this.hatchTicks = hatchTicks;
         this.warhead = warhead;
+    }
+
+    /**
+     * Fuel of a strike missile, in blocks of powered flight past the tube: the path the climb-cruise-dive profile
+     * needs for a target at {@link #maxRange}, with margin. The silo range check is what limits a launch; this only
+     * decides where a missile that somehow flies further stops and falls.
+     */
+    public double fuel() {
+        return maxRange * 1.3 + 200.0;
+    }
+
+    /** Powered flight time limit of a strike missile; the motor stops after it even with fuel left. */
+    public int poweredTicks() {
+        return (int) (maxRange * 1.3 / cruiseSpeed) + 600;
     }
 
     /** Silo layers: the top layer plus {@code tier} shaft layers, i.e. the tube is {@code tier + 1} blocks deep. */

@@ -31,6 +31,7 @@ import xyz.przemyk.simpleplanes.autopilot.AircraftType;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.items.PlaneItem;
 import xyz.przemyk.simpleplanes.missile.LaunchSiloBlockEntity;
+import xyz.przemyk.simpleplanes.missile.MissileEntity;
 import xyz.przemyk.simpleplanes.missile.MissileTier;
 import xyz.przemyk.simpleplanes.missile.SiloStructure;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
@@ -72,6 +73,8 @@ public final class AirDefenceCommand {
                 .then(Commands.argument("silo", BlockPosArgument.blockPos()).executes(AirDefenceCommand::scan)));
 
             root.then(Commands.literal("spec").executes(AirDefenceCommand::spec));
+
+            root.then(Commands.literal("engagements").executes(AirDefenceCommand::engagements));
 
             root.then(Commands.literal("mode")
                 .then(Commands.argument("silo", BlockPosArgument.blockPos())
@@ -161,8 +164,10 @@ public final class AirDefenceCommand {
             double d = AircraftRoster.aimPoint(p).distanceTo(mouth);
             String why = !p.isHostile() ? "friendly, ignored"
                 : d > spec.detectionRadius() ? "out of detection"
-                : Engagements.saturated(p.getUUID(), now, Engagements.silo(level, master)) ? "already engaged by " + InterceptorSpec.MAX_PER_TARGET
-                : "candidate";
+                : p.getHealth() <= 0 ? "shot down, ignored"
+                : Engagements.saturated(p.getUUID(), now, Engagements.silo(level, master))
+                    ? "already engaged by " + engager(Engagements.holder(p.getUUID(), now, Engagements.silo(level, master)))
+                : "candidate" + (Engagements.lastMiss(p.getUUID(), now) instanceof Engagements.Miss m ? " (follow-up: " + m.describe(now) + ")" : "");
             ok(c, String.format(Locale.ROOT, "  #%d %s d=%.1f: %s", p.getId(), p.getAllegiance().getSerializedName(), d, why));
         }
         PlaneEntity pick = TargetSelector.select(level, master, tier, Engagements.silo(level, master));
@@ -174,8 +179,38 @@ public final class AirDefenceCommand {
             ok(c, String.format(Locale.ROOT, "T%d: speed %.1f b/t, accel %.2f, range %.0f, detection %.0f, fuse %.1f, turn %.0f deg/t, hatch %d t, flight limit %d t",
                 s.tier.tier, s.speed(), s.tier.accel, s.range, s.detectionRadius(), s.fuseRadius, s.turnRate, s.hatchTicks, s.maxFlightTicks()));
         }
-        return ok(c, "At most " + InterceptorSpec.MAX_PER_TARGET + " missiles per target; silos scan every "
-            + InterceptorSpec.SCAN_INTERVAL + " ticks.");
+        return ok(c, "At most " + InterceptorSpec.MAX_PER_TARGET + " missile per target at a time (a follow-up only after it ends"
+            + " without a kill); fuel = range; silos scan every " + InterceptorSpec.SCAN_INTERVAL + " ticks.");
+    }
+
+    /** Every live claim (who holds which aircraft, and why a follow-up), then the recent follow-up shots. */
+    private static int engagements(CommandContext<CommandSourceStack> c) {
+        ServerLevel level = c.getSource().getLevel();
+        long now = level.getGameTime();
+        var claims = Engagements.claims(now);
+        ok(c, claims.size() + " engagement(s).");
+        for (var e : claims) {
+            Engagements.Claim cl = e.getValue();
+            ok(c, String.format(Locale.ROOT, "  %s holding #%d for %.1f s%s", engager(e.getKey()), cl.targetEntityId(),
+                (now - cl.since()) / 20.0, cl.note() == null ? ", first shot" : ", " + cl.note()));
+        }
+        List<Engagements.FollowUp> follow = Engagements.followUps();
+        if (!follow.isEmpty()) ok(c, "Recent follow-up shots:");
+        for (Engagements.FollowUp f : follow) {
+            ok(c, String.format(Locale.ROOT, "  %.1f s ago silo %s fired again at #%d: %s", (now - f.at()) / 20.0,
+                f.silo().toShortString(), f.targetEntityId(), f.why()));
+        }
+        return claims.size();
+    }
+
+    private static String engager(Engagements.@Nullable Engager e) {
+        if (e instanceof Engagements.SiloEngager s) return "silo " + s.pos().toShortString() + " (launch sequence)";
+        if (e instanceof Engagements.MissileEngager m) {
+            MissileEntity missile = MissileTracker.byId(m.id());
+            return missile == null ? "missile #" + m.id()
+                : "missile #" + m.id() + " from silo " + missile.silo().toShortString() + " (" + missile.fuelLine() + ")";
+        }
+        return "nobody";
     }
 
     private static int mode(CommandContext<CommandSourceStack> c, LaunchSiloBlockEntity.Mode mode) {

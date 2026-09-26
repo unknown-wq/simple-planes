@@ -16,6 +16,7 @@ import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.missile.LaunchSiloBlockEntity;
+import xyz.przemyk.simpleplanes.missile.MissileEntity;
 import xyz.przemyk.simpleplanes.missile.MissileItem;
 import xyz.przemyk.simpleplanes.missile.MissileTracker;
 import xyz.przemyk.simpleplanes.missile.Missiles;
@@ -26,6 +27,10 @@ import java.util.UUID;
 /**
  * The silo side of air defence: the idle scan, keeping or replacing the target while the hatch opens, and the
  * right-click toggle. Nothing here holds a chunk ticket; a silo in an unloaded chunk does not tick and does nothing.
+ *
+ * <p>A silo claims its aircraft when it starts the launch sequence ({@link Engagements}), so no other silo starts
+ * one at the same aircraft, and hands the claim to its missile at ignition. If the aircraft was engaged before by a
+ * missile that ended without killing it, the claim carries that reason and the engage line logs it.
  */
 public final class AirDefenceSilo {
 
@@ -40,9 +45,11 @@ public final class AirDefenceSilo {
         PlaneEntity target = TargetSelector.select(level, pos, silo.tier(), Engagements.silo(level, pos));
         if (target == null) return;
         if (silo.launchAirDefence(level, target) == null) {
-            MissileTracker.LOGGER.info("[airdefence] silo {} T{} engaging #{} at {} blocks", pos.toShortString(), silo.tier().tier,
+            Engagements.Claim claim = Engagements.claimOf(Engagements.silo(level, pos), level.getGameTime());
+            MissileTracker.LOGGER.info("[airdefence] silo {} T{} engaging #{} at {} blocks{}", pos.toShortString(), silo.tier().tier,
                 target.getId(), String.format(java.util.Locale.ROOT, "%.1f",
-                    AircraftRoster.aimPoint(target).distanceTo(SiloStructure.mouth(pos, silo.tier()))));
+                    AircraftRoster.aimPoint(target).distanceTo(SiloStructure.mouth(pos, silo.tier()))),
+                claim != null && claim.note() != null ? " (" + claim.note() + ")" : " (first shot)");
         }
     }
 
@@ -51,7 +58,13 @@ public final class AirDefenceSilo {
         BlockPos pos = silo.getBlockPos();
         Engagements.SiloEngager self = Engagements.silo(level, pos);
         InterceptorSpec spec = InterceptorSpec.of(silo.tier());
+        long now = level.getGameTime();
         PlaneEntity current = resolve(level, silo.airDefenceTarget());
+        // another engager holds it: this silo's own claim lapsed (its chunk slept) and someone else took the aircraft
+        if (current != null && Engagements.saturated(current.getUUID(), now, self)) {
+            MissileTracker.LOGGER.info("[airdefence] silo {} target #{} taken by another engager meanwhile", pos.toShortString(), current.getId());
+            current = null;
+        }
         if (current == null) {
             PlaneEntity next = TargetSelector.select(level, pos, silo.tier(), self);
             if (next == null) {
@@ -60,14 +73,33 @@ public final class AirDefenceSilo {
                 return false;
             }
             silo.retarget(next.getUUID());
-            current = next;
+            claim(level, pos, next, spec);
+            return true;
         }
-        Engagements.claim(self, current.getUUID(), level.getGameTime(), spec.hatchTicks + Engagements.MISSILE_CLAIM_TICKS);
+        Engagements.claim(self, current.getUUID(), current.getId(), now, spec.hatchTicks + Engagements.MISSILE_CLAIM_TICKS);
         return true;
     }
 
-    public static void claim(ServerLevel level, BlockPos pos, UUID target, InterceptorSpec spec) {
-        Engagements.claim(Engagements.silo(level, pos), target, level.getGameTime(), spec.hatchTicks + Engagements.MISSILE_CLAIM_TICKS);
+    /** Claims {@code target} for this silo's launch sequence; a remembered miss on it becomes the follow-up note. */
+    public static void claim(ServerLevel level, BlockPos pos, PlaneEntity target, InterceptorSpec spec) {
+        Engagements.SiloEngager self = Engagements.silo(level, pos);
+        long now = level.getGameTime();
+        Engagements.claim(self, target.getUUID(), target.getId(), now, spec.hatchTicks + Engagements.MISSILE_CLAIM_TICKS);
+        Engagements.followUp(self, target.getUUID(), target.getId(), now);
+    }
+
+    /** At ignition: the missile holds its own claim now; the silo's goes, its follow-up note passes to the missile. */
+    public static void handOver(ServerLevel level, BlockPos pos, MissileEntity missile) {
+        Interceptor i = missile.interceptor();
+        if (i == null) release(level, pos);
+        else Engagements.handOver(Engagements.silo(level, pos), i.engager());
+    }
+
+    /** Status fragment: {@code , holding #<aircraft>} and the follow-up reason, or empty when the silo holds no claim. */
+    public static String holding(ServerLevel level, BlockPos pos) {
+        Engagements.Claim c = Engagements.claimOf(Engagements.silo(level, pos), level.getGameTime());
+        if (c == null) return "";
+        return ", holding #" + c.targetEntityId() + (c.note() == null ? "" : " (" + c.note() + ")");
     }
 
     public static void release(ServerLevel level, BlockPos pos) {

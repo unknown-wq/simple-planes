@@ -1122,6 +1122,40 @@ sleep 4                                            # taxiing, so it holds airfie
 ./cmd.sh "autopilot tower"                         # -> airfield-1  36/18  FREE  no traffic
 ```
 
+### Recipe: one missile per aircraft, and missile fuel
+
+Three loaded air-defence T1 silos 20 blocks apart and one hostile at 0.8 b/t, 30 blocks abeam. The silo area is
+force-loaded (a stand-in for a player). With the default superflat the tube of a T2+ reaches bedrock, so the
+missile rig uses 40 stone under the dirt (surface y = −20, as in `MISSILES.md` §5).
+
+```sh
+./cmd.sh "forceload add 59936 -64 60104 64"
+./cmd.sh "missile silo place 60000 -20 0 1 true"      # and 60020, 60040
+./cmd.sh "airdefence mode 60000 -20 0 air_defence"    # and the others
+./cmd.sh "autopilot route 59700 -19 30 60900 -19 30 0.8 hostile"
+./cmd.sh "airdefence engagements"   # who holds which aircraft, fuel and motor state, why a follow-up
+grep -a '\[airdefence\] silo .* engaging\|\[missile\] #' console.log
+# -> ... engaging #1 at 99.3 blocks (first shot)
+# -> [missile] #2 T1 INTERCEPTED ... fuel=330.6/400 motor=cruise ad target=#1 destroyed ...
+```
+
+- **Follow-ups.** `kill @e[type=simpleplanes:missile]` right after the first launch, or a stone roof 8 blocks over
+  the first silo (above the hatch check), gives exactly one follow-up; its engage line ends in `(second shot:
+  missile #M from silo … ended REMOVED:killed (target hp 10/10) …)`.
+- **Fuel out.** A T1 against `autopilot route … 2.8 hostile` flying away from 30 blocks out runs dry at about
+  403 blocks: `[missile] #N T1 fuel out at … motor off, falling unguided`, then `FELL … burnout=… fell=<ticks>
+  on_grass_block`.
+- **A fall on demand.** `/missile fuel <id> <blocks>` sets the fuel left of a missile in flight. The flight is
+  deterministic, so the same launch with the same cut lands at the same point, and an entity summoned there
+  (`summon minecraft:iron_golem x -19 z {NoAI:1b}`) is hit: `FELL … on_iron_golem_#N`.
+- **Claims across a stall.** `/missile tickets false`, silos force-loaded, the target in its own force-loaded chunk
+  five chunks away: the missile stalls in between, and the second silo must not fire until the watchdog has ended
+  the first (`STALLED`, 200 ticks).
+- **Leaks.** At the end, `missile list` says "No missiles in flight", `execute if entity
+  @e[type=simpleplanes:missile]` fails, and `airdefence engagements` lists 0 claims.
+- **Machine load.** Several agents share this machine. With a load average above 100 a command can take minutes
+  (`Can't keep up! … 532389ms behind`); throw such a run away rather than reading its timings.
+
 ### The one thing this rig cannot see
 
 An autopilot plane has **no rider**, so on the server `isClientAuthoritative()` is false and
