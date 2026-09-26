@@ -30,9 +30,10 @@ public final class AviationPayloads {
     /**
      * Protocol version carried by the snapshot request; bumped on an incompatible payload change. The server
      * answers only a client that asked with this version (see {@code AviationService}). 2: load / unload
-     * request, action on the reply, service and air-defence fields on each silo.
+     * request, action on the reply, service and air-defence fields on each silo. 3: pending flag on the reply
+     * (remote launch).
      */
-    public static final int PROTOCOL = 2;
+    public static final int PROTOCOL = 3;
 
     public static final int MAX_AIRFIELDS = 128;
     public static final int MAX_HELIPADS = 128;
@@ -113,10 +114,11 @@ public final class AviationPayloads {
                 buf.writeDouble(r.targetY());
                 buf.writeDouble(r.targetZ());
                 buf.writeVarInt(r.action().ordinal());
+                buf.writeBoolean(r.pending());
             },
             buf -> new LaunchReply(new LaunchResult(BlockPos.STREAM_CODEC.decode(buf), buf.readBoolean(),
                 ComponentSerialization.STREAM_CODEC.decode(buf), buf.readDouble(), buf.readDouble(), buf.readDouble(),
-                decodeAction(buf.readVarInt()))));
+                decodeAction(buf.readVarInt()), buf.readBoolean())));
 
         @Override
         public Type<? extends CustomPacketPayload> type() {

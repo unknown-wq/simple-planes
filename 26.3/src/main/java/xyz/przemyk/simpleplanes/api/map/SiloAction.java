@@ -3,7 +3,8 @@ package xyz.przemyk.simpleplanes.api.map;
 import org.jspecify.annotations.Nullable;
 
 /**
- * What a map asks a silo to do. Every action needs operator permission and a player near the silo; the server
+ * What a map asks a silo to do. Every action needs operator permission. Load and unload also need a player near
+ * the silo; a launch works from any distance since {@link AviationMap#API_VERSION} 3 (remote launch). The server
  * decides. Part of the stable map API (since {@link AviationMap#API_VERSION} 2).
  */
 public enum SiloAction {

@@ -1384,7 +1384,7 @@ snapshot also carries airfields, helipads, shuttles and flights (see `AUTOPILOT.
 The code is in `aviation/` (server side) and `api/map/` (client API and records). The silo, missile and
 launch code is not touched. The map's paths end in the same calls as the commands:
 
-- a launch ends in `LaunchSiloBlockEntity#launch`, as `/missile launch` does;
+- a launch ends in `LaunchSiloBlockEntity#launch`, as `/missile launch` does, including a remote launch (§8h);
 - a load or unload ends in `LaunchSiloBlockEntity#load` / `#unload`, as `/missile silo load|unload` do.
 
 ### 8a. Who may launch, load and unload, and from where
@@ -1402,11 +1402,14 @@ The server handles a request (`AviationService.handleLaunch`) in this order and 
 | 1 | Operator permission | `operator permission is required to launch (the same as /missile launch)` |
 | 2 | Rate limit: one silo request (launch, load or unload share it) per player per 1000 ms, wall clock. A refused request counts too. | `too many silo requests; wait a second` |
 | 3 | Target inside the world border | `the target is outside the world border` |
-| 4 | Silo position in world bounds and within `NEAR_RADIUS + 8` of the player (coarse check) | `too far away (N blocks; you must be within 24)` |
-| 5 | Silo chunk loaded (`level.isLoaded`) | `the silo's chunk is not loaded` |
+| 4 | Silo position in world bounds | `there is no silo at x, y, z` |
+| 5 | Silo chunk loaded (`level.isLoaded`). If not, the request becomes a remote launch (§8h). | (§8h) |
 | 6 | A silo is there (`SiloStructure.masterOf` plus the block entity). If not, the index entry is re-checked and dropped. | `there is no silo at x, y, z` |
-| 7 | Player within `NEAR_RADIUS` (24) of the silo mouth, measured in 3D from the feet | `too far away (…)` |
+| 7 | A remote launch of this silo is not already loading its chunk | `silo at … cannot launch: busy (loading the silo's chunk)` |
 | 8 | `LaunchSiloBlockEntity#launch`: strike mode, idle, loaded, intact, hatch clear, min and max range, height | `silo at … cannot launch: <the silo's own reason>` |
+
+Since protocol 3 a launch has no distance check: the silo may be anywhere in the dimension (§8h). Load and unload
+keep it (below).
 
 The request names a silo position and a target column and carries nothing else. Tier, mode, loaded state and
 range are read from the world, never from the client. A refusal goes to the player's action bar in red and
@@ -1416,7 +1419,13 @@ green (`Launch: tier N missile from … to … (N blocks)`) and is logged as `[a
 
 Check 3 is the one addition beyond what `/missile launch` checks.
 
-**Load and unload** (`AviationService.handleService`, payload `aviation_silo`) run the same checks 1, 2 and 4 to 7.
+**Load and unload** (`AviationService.handleService`, payload `aviation_silo`) run checks 1, 2, 4 and 6, and the
+two reach checks a launch no longer has:
+
+- the silo within `NEAR_RADIUS + 8` of the player (coarse, before anything is looked up), then within
+  `NEAR_RADIUS` (24) of the silo mouth, measured in 3D from the feet: `too far away (N blocks; you must be within 24)`;
+- the silo's chunk loaded: `the silo's chunk is not loaded`.
+
 There is no target, so there is no border check. Then:
 
 1. **Load only:** the structure must be intact (`SiloStructure.isIntact`). The refusal is
@@ -1433,10 +1442,12 @@ own, as always (§1c). The map path does not depend on missile items (branch `cl
 Successes read `Loaded a tier N missile into the silo at …` / `Unloaded the tier N missile from the silo at …`
 (green action bar) and are logged as `[aviation] <player> loaded silo … (strike|air defence) from the map`.
 
-**Why the player must be near (24 blocks).** Twenty-four blocks means standing at the silo with it in view. It
-is also always inside the minimum simulation distance (2 chunks = 32 blocks). So the silo's chunk is
-block-ticking, and its hatch sequence runs without any ticket of its own. Without this rule, an operator
-could fire any silo in the world from the map.
+**Why load and unload need the player near (24 blocks).** Twenty-four blocks means standing at the silo with it
+in view. It is also always inside the minimum simulation distance (2 chunks = 32 blocks), so the silo's chunk is
+loaded and block-ticking. Up to protocol 2 a launch had the same rule. Protocol 3 drops it for launches only: a
+launch is already restricted to operators, logged, and holds its own chunk ticket for the hatch sequence, so the
+server now loads a far silo's chunk itself (§8h). Load and unload could go the same way, but nobody has asked for
+it; they stay near-only.
 
 ### 8b. Target height
 
@@ -1455,7 +1466,8 @@ After this, the missile's own terminal guidance takes over, and it dives on what
 
 ### 8c. Payloads
 
-Protocol `2`. Version 1 had no load or unload, no action on the reply, and no service or air-defence fields.
+Protocol `3`. Version 3 added the `pending` flag on the reply (remote launch, §8h). Version 2 added load and
+unload, the action on the reply, and the service and air-defence fields; version 1 had none of these.
 All five payloads are registered in `PayloadTypeRegistry` by the common initializer, so a dedicated server has
 them. Both sides check `canSend` before sending. A vanilla client, or a client without Simple Planes, is never
 sent anything.
@@ -1463,7 +1475,7 @@ sent anything.
 The server also remembers the protocol each player's last snapshot request carried. It sends snapshots and
 replies only to a client that asked with the server's own version. A client of another version gets no
 clientbound bytes it would fail to decode, and the server logs this once:
-`[aviation] <player> asked with map protocol N, this server speaks 2; not answering`.
+`[aviation] <player> asked with map protocol N, this server speaks 3; not answering`.
 
 | Id | Direction | Content |
 |---|---|---|
@@ -1471,7 +1483,7 @@ clientbound bytes it would fail to decode, and the server logs this once:
 | `simpleplanes:aviation_snapshot` | S → C | `AviationSnapshot`: dimension, game time, near radius, `launchPermitted`, snapshot radius, airfields, helipads, routes (shuttles), flights, silos |
 | `simpleplanes:aviation_launch` | C → S | silo `BlockPos`, target `x` (var int), `y` (int, may be `SURFACE`), `z` (var int) |
 | `simpleplanes:aviation_silo` | C → S | silo `BlockPos`, action (var int: `SiloAction` ordinal, `LOAD` = 1 or `UNLOAD` = 2; `LAUNCH` is refused) |
-| `simpleplanes:aviation_launch_result` | S → C | `LaunchResult`: silo, accepted, message (`Component`), target x/y/z, action (`SiloAction` ordinal). It answers every silo request and is followed by a fresh snapshot, so the map shows the hatch opening or the new load without waiting for its next poll. |
+| `simpleplanes:aviation_launch_result` | S → C | `LaunchResult`: silo, accepted, message (`Component`), target x/y/z, action (`SiloAction` ordinal), pending (boolean). It answers every silo request and is followed by a fresh snapshot, so the map shows the hatch opening or the new load without waiting for its next poll. A remote launch is answered twice: first `pending` (not accepted, "loading the chunk…"), then the final accepted or refused reply (§8h). |
 
 **Snapshot limits.** The lists cover a 12000-block horizontal radius around the player: the tier 4 range plus a
 margin. Each list is sorted by distance and capped at 128 airfields, 128 helipads, 128 routes, 64 flights and
@@ -1499,17 +1511,25 @@ margin. Each list is sorted by distance and capped at 128 airfields, 128 helipad
   the interceptor's motor path, so it is an upper bound on how far from the silo an intercept can happen, not a
   sharp edge. Both are sent for every silo, in either mode, so a map never hard-codes them.
 
-`usable` answers "would the server accept a launch from here right now", leaving out permission and the target.
-It gives the same answer as checks 4 to 8. `serviceable` answers the same for a load or unload, leaving out
+`usable` answers "would the server accept a launch right now", leaving out permission and the target. It gives
+the same answer as checks 4 to 8. Since protocol 3 it does not depend on distance, and a silo in an unloaded chunk
+is judged from its index entry (mode and loaded state as last seen). Its `status` then reads
+`ready - remote launch` (chunk loaded, player far), `ready (last known) - remote launch; the server loads the
+silo's chunk first` (chunk not loaded), `busy (loading the silo's chunk)` while a remote launch waits, or
+`the silo is in air-defence mode (last known state)` / `no missile loaded (last known state)`. `serviceable` answers the same for a load or unload, leaving out
 permission and the silo's own state (loaded, busy, damaged). It is true for air-defence silos too.
 
 ### 8d. Client API
 
-`AviationMap` has `API_VERSION = 2`. Version 2 added load and unload, `SiloAction`, the action on `LaunchResult`,
-and the service and air-defence fields on `AviationSnapshot.Silo`. All methods are called on the client thread.
+`AviationMap` has `API_VERSION = 3`. Version 3 added `LaunchResult.pending()` and the remote-launch meaning of
+`AviationSnapshot.Silo.usable()` (any distance, unloaded chunks). Version 2 added load and unload, `SiloAction`,
+the action on `LaunchResult`, and the service and air-defence fields on `AviationSnapshot.Silo`. All methods are
+called on the client thread.
 
-A map built against version 2 should read `API_VERSION` reflectively, because a `static final int` is inlined at
-compile time, and refuse to start against an older Simple Planes. The world map does this.
+A map should read `API_VERSION` reflectively, because a `static final int` is inlined at compile time, and refuse
+to start against a Simple Planes older than it needs. The world map needs 2 and calls `pending()` only against 3
+or later. A map built for version 2 still works against version 3: it sees far silos as usable and gets the
+pending reply as a refusal with the "loading the chunk" text, followed by the real answer.
 
 | Method | |
 |---|---|
@@ -1553,7 +1573,7 @@ Events are queued and handled in the level tick, never mid-chunk-promotion. A dr
 | `/aviation index` | Lists the index for the current dimension. |
 | `/aviation index sweep` | Runs a sweep now and reports how many entries were dropped. |
 | `/aviation snapshot [<at> [op\|nonop]]` | Prints what a snapshot would hold, for the executor or for a test player at `<at>`. |
-| `/aviation test launch <at> <silo> <tx> <tz> [op\|nonop [y]]` | Runs the real launch handler for a test player standing at `<at>`, and prints the answer. |
+| `/aviation test launch <at> <silo> <tx> <tz> [op\|nonop [y]]` | Runs the real launch handler for a test player standing at `<at>`, and prints the answer (`ACCEPTED`, `REFUSED`, or `PENDING` for a remote launch; its outcome is in the log). |
 | `/aviation test load\|unload <at> <silo> [op\|nonop]` | The same for the load and unload handler. |
 | `/aviation test resetlimits` | Clears the rate limits. |
 
@@ -1574,12 +1594,12 @@ with the world map. Silos used, all by the spawn unless noted:
 | Case | Result |
 |---|---|
 | Non-operator, standing at a loaded T1 | refused: operator permission is required |
-| Operator 200 blocks away | refused: too far away (200 blocks; you must be within 24) |
+| Operator 200 blocks away (protocol 2; since protocol 3 see §8h) | refused: too far away (200 blocks; you must be within 24) |
 | Air-defence silo | refused: the silo is in air-defence mode |
 | Empty silo | refused: no missile loaded |
 | T1, target 2000 blocks away | refused: target is … blocks away, beyond the tier 1 range of 1200 |
 | T1, target 10 blocks away | refused: target is … blocks away, inside the tier 1 minimum range of 24 |
-| Silo in an unloaded chunk | refused: the silo's chunk is not loaded |
+| Silo in an unloaded chunk (protocol 2; since protocol 3 see §8h) | refused: the silo's chunk is not loaded |
 | T3 at −600, −300 (target chunk not loaded, `SURFACE`) | accepted, y = −19 from the generator. It arrived in 15.0 s, 727 blocks flown, miss 0.00. |
 | A second request straight after | refused: too many launch requests (the wording before load and unload shared the limit) |
 | The same silo after 1.1 s | refused: busy (launching) |
@@ -1611,6 +1631,70 @@ Load and unload (protocol 2), through `/aviation test load|unload`, then from th
 
 The damaged-structure refusal was not reached in a test. Removing any casing block dismantles the whole silo
 (`SiloStructure.onPartRemoved`), so a damaged silo that is still a silo is hard to produce.
+
+### 8h. Remote launch
+
+Since protocol 3 an operator can launch any strike silo in the dimension from the map, however far away, and
+whether its chunk is loaded or not. The code is `aviation/RemoteLaunch.java`; `AviationService.handleLaunch`
+hands it the request when the silo's chunk is not loaded.
+
+**Silo chunk already loaded** (someone is near it, or it is force-loaded): the request takes the normal path at
+once, and the log line ends in `[remote, chunk already loaded]` when the player is beyond 24 blocks.
+
+**Silo chunk not loaded:**
+
+1. The request is judged against the silo index first (§8e), so a doomed request loads nothing:
+
+   | Check | Refusal (after "Launch refused: silo at … cannot launch: ") |
+   |---|---|
+   | No index entry at that position | `there is no silo at x, y, z` (without the prefix) |
+   | A remote launch of this silo is already loading its chunk | `busy (loading the silo's chunk)` |
+   | Last known mode is air defence | `the silo is in air-defence mode (last known state)` |
+   | Last known state is empty | `no missile loaded (last known state)` |
+   | Target beyond the tier's range, or inside its minimum range | the same text as `LaunchSiloBlockEntity#launch` (`rangeProblem`) |
+
+2. The silo's chunk gets a `TicketType.ENDER_PEARL` ticket of radius 3, renewed every level tick. That makes the
+   silo's chunk and its neighbours entity-ticking, the same bubble a missile in flight keeps (§3). The player
+   gets `Remote launch: loading the chunk of the silo at x, y, z...` in yellow on the action bar, and the map gets
+   a `LaunchResult` with `pending = true` and `accepted = false`. The log says
+   `[aviation] <player> asked for a remote launch of silo <pos> T<n> (<d> blocks away); loading its chunk`.
+3. Each level tick checks whether the chunk is loaded and ticks blocks (`ServerLevel#shouldTickBlocksAt`). When it
+   does, the normal launch path runs (`AviationService.launchFrom` → `LaunchSiloBlockEntity#launch`) with every
+   check `/missile launch` makes, against the real block entity. A silo that turns out to be empty, busy, damaged
+   or gone is refused with its own reason, and a gone silo's index entry is dropped.
+4. The ticket is removed as soon as the job ends. An accepted launch holds its own `PORTAL` ticket for the hatch
+   sequence by then (`MissileTracker#holdSilo`), and the missile carries its own tickets in flight.
+5. If the chunk has not come up after `LOAD_TIMEOUT_TICKS` (100 level ticks, 5 s), the request is refused with
+   `the silo's chunk did not load in 100 ticks` and the ticket is removed.
+6. The final answer goes to the requester (action bar and map), if still online. A success reads
+   `Remote launch: tier N missile from … to … (N blocks)` and is logged as
+   `[aviation] <player> launched silo … from the map at … (N blocks) [remote, chunk loaded in N ticks]`.
+
+The job counts level ticks, so it waits while a single-player game is paused, for example while the map is open.
+The pending answer comes back at once (packets are handled while paused); the launch itself happens once the game
+runs again, that is, when the map is closed. Server stop forgets pending jobs; their tickets expire with the level.
+
+**Tests** (dedicated server with this jar, then a real client with the world map under Xvfb, and single player).
+Silos, all at y = −20 on a flat test world, with no player within 1000 blocks:
+T3 loaded at (1200, 0), T1 empty at (1300, 0), T2 loaded in air-defence mode at (1400, 0), T4 loaded at (5200, 0).
+Before each run `execute if loaded` said `Test failed` for the silo and `forceload query` found nothing.
+
+| Case | Result |
+|---|---|
+| `/aviation test launch 0 -19 0 1300 -20 0 …` (empty T1) | refused: no missile loaded (last known state). Chunk still unloaded afterwards. |
+| The same for the air-defence T2 at 1400 | refused: the silo is in air-defence mode (last known state) |
+| T3 at 1200, target 7000 blocks away | refused: target too far: 5799.5 blocks from the silo; a tier 3 missile needs at least … and at most … blocks horizontally |
+| Non-operator, T3 at 1200 | refused: operator permission is required |
+| Position with no silo (1500, −20, 0) | refused: there is no silo at 1500, -20, 0 |
+| Map UI, T3 at 1200, player 1189 blocks away, target 492, 1128 | pending, then accepted after 1 tick; #182 arrived, 1331.6 blocks, miss 0.00, 25.9 s |
+| Map UI, T4 at 5200, player 5189 blocks away, target 2892, 1528 | pending, then accepted after 1 tick; #317 arrived, 2768 blocks, miss 0.00, 38.8 s |
+| Two remote requests for the T3 in the same tick (rate limit cleared between) | first pending, second refused: busy (loading the silo's chunk); #526 arrived, miss 0.00 |
+| Silo chunk after an accepted remote launch | unloaded again about 30 s after launch (tickets released) |
+| Map UI: click the empty or air-defence silo far away | not selectable; the panel names the last-known reason |
+| Single player, T1 at (1500, −61, 0), map open (game paused), Launch | pending shown in the panel; nothing launched while the map stayed open (45 s); a second click after the map's 15 s timeout was refused: busy. Map closed at 16:24:05: `launched … [remote, chunk loaded in 1 ticks]` in the same second; #173 arrived, miss 0.00 |
+
+Not reached in a test: the 100-tick timeout. On these worlds the chunk was always ticking one tick after the
+ticket was added.
 
 ## Not done, planned next
 
