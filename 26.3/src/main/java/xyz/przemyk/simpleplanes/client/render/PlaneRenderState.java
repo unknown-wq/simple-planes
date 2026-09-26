@@ -39,4 +39,22 @@ public class PlaneRenderState extends EntityRenderState {
 
     /** Upgrade types installed on the plane, in iteration order. */
     public final List<UpgradeType> upgradeTypes = new ArrayList<>();
+
+    /** Throttle as a fraction of the normal maximum, 0..1. */
+    public float throttle;
+
+    /** Yaw input, -1..1, positive to the right. */
+    public float rudder;
+
+    /** Pitch input, -1..1, positive nose up. */
+    public float elevator;
+
+    public boolean metalSkin;
+
+    public int airlinerLogo;
+
+    public boolean medicalLivery;
+
+    /** Model-space point the mini helicopter's glass is submitted from (translucent sort order). */
+    public final org.joml.Vector3f glassSortOrigin = new org.joml.Vector3f();
 }

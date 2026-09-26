@@ -14,12 +14,14 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.container.PlaneWorkbenchContainer;
+import xyz.przemyk.simpleplanes.items.CraneRemoteItem;
 import xyz.przemyk.simpleplanes.items.DescriptionItem;
 import xyz.przemyk.simpleplanes.items.HelipadToolItem;
 import xyz.przemyk.simpleplanes.items.ParachuteItem;
 import xyz.przemyk.simpleplanes.items.PlaneArmorItem;
 import xyz.przemyk.simpleplanes.items.PlaneItem;
 import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
+import xyz.przemyk.simpleplanes.items.QuadcopterItem;
 import xyz.przemyk.simpleplanes.items.RouteWandItem;
 import xyz.przemyk.simpleplanes.items.RunwayToolItem;
 
@@ -50,11 +52,15 @@ public class SimplePlanesItems {
     }
 
     public static List<PlaneItem> getPlaneItems() {
-        ArrayList<PlaneItem> planeItems = new ArrayList<>(4);
+        ArrayList<PlaneItem> planeItems = new ArrayList<>(8);
         planeItems.add(PLANE_ITEM.get());
         planeItems.add(LARGE_PLANE_ITEM.get());
         planeItems.add(CARGO_PLANE_ITEM.get());
         planeItems.add(HELICOPTER_ITEM.get());
+        planeItems.add(FIGHTER_ITEM.get());
+        planeItems.add(AIRLINER_ITEM.get());
+        planeItems.add(AIRSHIP_ITEM.get());
+        planeItems.add(MINI_HELICOPTER_ITEM.get());
         return planeItems;
     }
 
@@ -92,6 +98,16 @@ public class SimplePlanesItems {
         properties -> new PlaneItem(properties, SimplePlanesEntities.CARGO_PLANE), new Item.Properties());
     public static final Supplier<PlaneItem> HELICOPTER_ITEM = register("helicopter",
         properties -> new PlaneItem(properties, SimplePlanesEntities.HELICOPTER), new Item.Properties());
+    public static final Supplier<PlaneItem> FIGHTER_ITEM = register("fighter",
+        properties -> new PlaneItem(properties, SimplePlanesEntities.FIGHTER), new Item.Properties());
+    public static final Supplier<PlaneItem> AIRLINER_ITEM = register("airliner",
+        properties -> new PlaneItem(properties, SimplePlanesEntities.AIRLINER), new Item.Properties());
+    public static final Supplier<PlaneItem> AIRSHIP_ITEM = register("airship",
+        properties -> new PlaneItem(properties, SimplePlanesEntities.AIRSHIP), new Item.Properties());
+    public static final Supplier<PlaneItem> MINI_HELICOPTER_ITEM = register("mini_helicopter",
+        properties -> new PlaneItem(properties, SimplePlanesEntities.MINI_HELICOPTER), new Item.Properties());
+    public static final Supplier<QuadcopterItem> QUADCOPTER_ITEM = register("quadcopter", QuadcopterItem::new, new Item.Properties());
+    public static final Supplier<CraneRemoteItem> CRANE_REMOTE = register("crane_remote", CraneRemoteItem::new, new Item.Properties());
 
     public static final Supplier<ParachuteItem> PARACHUTE_ITEM = register("parachute", ParachuteItem::new, new Item.Properties());
 
@@ -128,6 +144,7 @@ public class SimplePlanesItems {
             output.accept(ROUTE_WAND.get());
             output.accept(RUNWAY_TOOL.get());
             output.accept(HELIPAD_TOOL.get());
+            output.accept(CRANE_REMOTE.get());
 
             BuiltInRegistries.BLOCK.get(PlaneWorkbenchContainer.PLANE_MATERIALS_TAG).ifPresent(tag -> tag.forEach(block -> {
                 ItemStack planeStack = new ItemStack(PLANE_ITEM.get());
@@ -147,6 +164,12 @@ public class SimplePlanesItems {
                 output.accept(largePlaneStack);
                 output.accept(cargoPlaneStack);
                 output.accept(heliStack);
+
+                for (Supplier<? extends Item> item : List.of(FIGHTER_ITEM, AIRLINER_ITEM, AIRSHIP_ITEM, MINI_HELICOPTER_ITEM, QUADCOPTER_ITEM)) {
+                    ItemStack stack = new ItemStack(item.get());
+                    stack.set(SimplePlanesComponents.ENTITY_TAG, entityTag.copy());
+                    output.accept(stack);
+                }
             }));
         }).build());
 

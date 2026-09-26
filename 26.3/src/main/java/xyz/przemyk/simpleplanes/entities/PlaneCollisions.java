@@ -196,6 +196,18 @@ public final class PlaneCollisions {
 
     /** Relative mass of the plane type; scales every impact damage number. */
     public static double massOf(PlaneEntity plane) {
+        if (plane instanceof FighterEntity) {
+            return 1.1;
+        }
+        if (plane instanceof AirlinerEntity) {
+            return 1.6;
+        }
+        if (plane instanceof AirshipEntity) {
+            return 2.0;
+        }
+        if (plane instanceof MiniHelicopterEntity) {
+            return 0.8;
+        }
         if (plane instanceof HelicopterEntity) {
             return 1.15;
         }

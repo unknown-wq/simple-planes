@@ -1,0 +1,16 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "simpleplanes:item/fighter",
+    "tints": [
+      {
+        "type": "minecraft:constant",
+        "value": 7240587
+      },
+      {
+        "type": "minecraft:constant",
+        "value": 16777215
+      }
+    ]
+  }
+}

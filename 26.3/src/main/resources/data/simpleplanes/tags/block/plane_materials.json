@@ -2,6 +2,15 @@
     "replace": false,
     "values": [
         "#minecraft:planks",
-        "#minecraft:logs"
+        "#minecraft:logs",
+        "minecraft:iron_block",
+        "minecraft:copper_block",
+        "minecraft:waxed_copper_block",
+        "minecraft:gold_block",
+        "minecraft:netherite_block",
+        "minecraft:white_wool",
+        "minecraft:white_concrete",
+        "minecraft:quartz_block",
+        "minecraft:smooth_quartz"
     ]
 }

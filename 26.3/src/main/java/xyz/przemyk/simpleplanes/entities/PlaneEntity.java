@@ -87,6 +87,8 @@ public class PlaneEntity extends Entity {
     // PlaneAutopilot object lives on the server only, so without it a riding player's client still
     // believes it is the pilot and keeps steering the aircraft out from under the flight director.
     public static final EntityDataAccessor<Boolean> AUTOPILOT_FLYING = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BOOLEAN);
+    /** Roll input for an unmanned plane, set by the /aircraft test command. */
+    public static final EntityDataAccessor<Byte> TEST_STRAFE = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BYTE);
     public static final int MAX_THROTTLE = 5;
     public Quaternionf Q_Client = new Quaternionf();
     public Quaternionf Q_Prev = new Quaternionf();
@@ -215,6 +217,7 @@ public class PlaneEntity extends Entity {
         pBuilder.define(PITCH_UP, (byte) 0);
         pBuilder.define(YAW_RIGHT, (byte) 0);
         pBuilder.define(AUTOPILOT_FLYING, false);
+        pBuilder.define(TEST_STRAFE, (byte) 0);
     }
 
     @Override
@@ -636,7 +639,7 @@ public class PlaneEntity extends Entity {
             setSprinting(false);
         } else {
             tempMotionVars.moveForward = 0;
-            tempMotionVars.moveStrafing = 0;
+            tempMotionVars.moveStrafing = getTestStrafe();
             setSprinting(false);
         }
         tempMotionVars.turnThreshold = SimplePlanesConfig.TURN_THRESHOLD.get() / 100d;
@@ -660,7 +663,7 @@ public class PlaneEntity extends Entity {
 
         Vec3 oldMotion = getDeltaMovement();
 
-        tempMotionVars.push = 0.00625f * getThrottle();
+        tempMotionVars.push = pushPerNotch() * getThrottle();
 
         //motion and rotation interpolation + lift.
         if (getDeltaMovement().length() > 0.05) {
@@ -848,6 +851,44 @@ public class PlaneEntity extends Entity {
         return 1.0f;
     }
 
+    /** Thrust per throttle notch, b/t^2. */
+    protected float pushPerNotch() {
+        return 0.00625f;
+    }
+
+    /** Roll rate limit, deg/tick. */
+    protected float maxRollRate() {
+        return 5.0f;
+    }
+
+    /** Nose-up limit while on the ground, degrees; 90 is no limit. */
+    protected float groundPitchLimit() {
+        return 90.0f;
+    }
+
+    /** Constant ground drag added while rolling on the ground or water, b/t^2. */
+    protected double groundRollingResistance() {
+        return 0.0;
+    }
+
+    /** Multiplier on the linear drag while rolling, from the block's friction. */
+    protected double groundLinearDragFactor(float friction) {
+        return 20 * (3 - friction);
+    }
+
+    public byte getTestStrafe() {
+        return entityData.get(TEST_STRAFE);
+    }
+
+    public void setTestStrafe(byte strafe) {
+        entityData.set(TEST_STRAFE, strafe);
+    }
+
+    /** Take-off speed of this airframe, for the test harness. */
+    public double testTakeOffSpeed() {
+        return getMotionVars().takeOffSpeed;
+    }
+
     protected float pitchSpeed = 0;
 
     protected void tickPitch(TempMotionVars tempMotionVars) {
@@ -873,6 +914,9 @@ public class PlaneEntity extends Entity {
             pitch = pitchSpeed;
         }
         setXRot(getXRot() + pitch);
+        if (getOnGround()) {
+            setXRot(Math.min(getXRot(), groundPitchLimit()));
+        }
     }
 
     protected float yawSpeed = 0;
@@ -935,7 +979,7 @@ public class PlaneEntity extends Entity {
                 }
             }
 
-            rollSpeed = Mth.clamp(rollSpeed, -5.0f, 5.0f);
+            rollSpeed = Mth.clamp(rollSpeed, -maxRollRate(), maxRollRate());
             rotationRoll += rollSpeed;
         }
 
@@ -1043,7 +1087,8 @@ public class PlaneEntity extends Entity {
             // NeoForge's per-BlockState BlockState#getFriction(level, pos, entity) has no equivalent
             // in 26.2, so modded per-state friction is lost; vanilla blocks are unaffected.
             float f = level().getBlockState(pos).getBlock().getFriction();
-            tempMotionVars.dragMul *= 20 * (3 - f);
+            tempMotionVars.dragMul *= groundLinearDragFactor(f);
+            tempMotionVars.drag += groundRollingResistance();
         }
         return speedingUp;
     }
@@ -1148,7 +1193,7 @@ public class PlaneEntity extends Entity {
             lift = 0;
         }
 
-        setDeltaMovement(rotationToVector(lerpAngle180(0.1f, yaw, getYRot()),
+        setDeltaMovement(rotationToVector(lerpAngle180(tempMotionVars.yawToMotion, yaw, getYRot()),
                 lerpAngle180(tempMotionVars.pitchToMotion * d, pitch, getXRot()) + lift,
                 speed));
         if (!getOnGround() && !isOnWater() && motion.length() > 0.1) {
@@ -1487,10 +1532,18 @@ public class PlaneEntity extends Entity {
     }
 
     public boolean canAddUpgrade(UpgradeType upgradeType) {
+        if (!acceptsUpgrade(upgradeType)) {
+            return false;
+        }
         if (upgradeType.isEngine && engineUpgrade != null) {
             return false;
         }
         return !upgrades.containsKey(SimplePlanesRegistries.UPGRADE_TYPE.getKey(upgradeType));
+    }
+
+    /** Whether this airframe takes the upgrade at all. */
+    protected boolean acceptsUpgrade(UpgradeType upgradeType) {
+        return true;
     }
 
     @Override
@@ -1804,6 +1857,8 @@ public class PlaneEntity extends Entity {
         float motionToRotation;
         float pitchToMotion;
         float yawMultiplayer;
+        /** Rate at which the velocity heading follows the nose, per tick. */
+        float yawToMotion;
 
         public TempMotionVars() {
             reset();
@@ -1831,6 +1886,7 @@ public class PlaneEntity extends Entity {
             motionToRotation = 0.05f;
             pitchToMotion = 0.2f;
             yawMultiplayer = 0.5f;
+            yawToMotion = 0.1f;
         }
     }
 }
