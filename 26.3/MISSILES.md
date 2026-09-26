@@ -1,15 +1,19 @@
 # Missiles and launch silos
 
-Harmless ground-launched missiles in four tiers, fired from silos sunk into the ground. A missile rises out of its
-silo with its fins folded, deploys them clear of the tube, turns toward the target, cruises and dives on it. When
-it arrives it makes a puff of smoke and particles and disappears.
+Ground-launched missiles in four tiers, fired from silos sunk into the ground. A missile rises out of its
+silo with its fins folded, deploys them clear of the tube, turns toward the target, cruises and dives on it.
 
-**It never breaks a block, damages an entity or sets a fire.** That holds however the flight ends: on arrival,
-on hitting terrain early, on running out of motor, on an abort or at a server stop. No explosion of any power is
-created, and the mod's `Blast` code and explosion paths are never called. `MissileFx` is the only place an
-effect comes from, and it only sends particles and plays sounds.
+**Phase 2 (this build)** adds two things:
 
-This is phase 1: launch and flight to coordinates. Interception is not implemented yet (see
+- **The silo item** (§1a). One item, `simpleplanes:launch_silo`, builds a tier 1 silo, and each further item
+  used on the silo raises it one tier, up to 4. Breaking it gives back one item per tier and puts the ground back.
+- **Warheads** (§1b). A missile that arrives, or hits terrain on the way, detonates with a blast that depends on
+  its tier, up to `Blast.MAX_POWER` for tier 4. Every detonation goes through `Blast#detonate`, the same path
+  as the strike aircraft, so blast guards (claims, protection) apply to missiles exactly as to aircraft. The game
+  rule `simpleplanes:missile_explosions` (default `true`) switches warheads off and restores the phase 1
+  behaviour: a puff of smoke and particles, nothing broken, nobody hurt.
+
+Loading and launching are still commands. Interception is not implemented yet (see
 [Not done, planned next](#not-done-planned-next)).
 
 The render models and their contract are in [`MISSILES-MODEL.md`](MISSILES-MODEL.md).
@@ -26,21 +30,28 @@ Everything lives in its own packages. Each package is registered with one line f
 
 | Where | What |
 |---|---|
-| `missile/Missiles` | Registration of the entity type, the two silo blocks and the block entity, plus `init()`. Called once from `SimplePlanesMod.onInitialize` |
-| `missile/MissileTier` | Per-tier geometry and flight parameters, and the shared constants |
+| `missile/Missiles` | Registration of the entity type, the two silo blocks, the block entity, the silo item, the `missile_explosions` game rule and the creative tab entry, plus `init()`. Called once from `SimplePlanesMod.onInitialize` |
+| `missile/MissileTier` | Per-tier geometry, flight parameters and warhead (`warhead`, a `Blast`), and the shared constants |
 | `missile/MissileEntity` | The missile |
 | `missile/LaunchSiloBlock`, `LaunchSiloCasingBlock` | The master block and the dependent blocks of the multiblock |
-| `missile/SiloStructure` | Multiblock geometry: placement checks, placement, integrity check, dismantling |
+| `missile/SiloStructure` | Multiblock geometry: placement checks, placement, upgrade, integrity check, dismantling and restoring the ground, break drops |
+| `missile/LaunchSiloItem` | The silo item: place a tier 1 silo, or upgrade the silo it is used on |
 | `missile/LaunchSiloBlockEntity` | Silo state and the launch sequence |
 | `missile/MissileTracker` | Chunk tickets, stall accounting, flight reports, telemetry |
 | `missile/MissileFx` | Particles and sounds, and nothing else |
 | `missile/MissileCommand` | `/missile` |
+| `missile/MissileTestGuard`, `SiloTestPlayer` | Test aids behind `/missile guard` and `/missile item` |
+| `autopilot/Blast#detonate` | The one detonation path, shared with the aircraft: blast guards, then `Level#explode` |
 | `client/missile/MissilesClient` | Model layers and renderers. Called once from `SimplePlanesClient` |
 | `client/missile/MissileRenderer`, `LaunchSiloRenderer` | The entity renderer and the block entity renderer |
 | `client/render/MissileRenderState`, `client/render/models/MissileModel`, `LaunchTubeModel` | The ported models |
 
-`SimplePlanesEntities`, `SimplePlanesItems`, `SimplePlanesBlocks` and `PlanesModelLayers` are not touched. The lang
-entries are one block of three keys at the end of each lang file.
+`SimplePlanesEntities`, `SimplePlanesItems`, `SimplePlanesBlocks` and `PlanesModelLayers` are not touched; the
+silo item joins the planes creative tab through Fabric's `CreativeModeTabEvents`. Outside the missile packages,
+phase 2 changes one method: `PlaneEntity#explode` now calls `Blast#detonate` instead of running the guards and
+`Level#explode` itself. The phase 1 lang entries are one block of three keys at the end of each lang file; the
+phase 2 keys (item tooltip, item messages, game rule name) are in `en_us.json` only, and other languages fall
+back to English.
 
 ### The missile entity
 
@@ -64,7 +75,8 @@ blocks.
   `/summon`ed (`noSummon`) and is never saved (`noSave`). At a server stop every missile in flight is discarded,
   and a line is written to the log.
 - **Ending a flight.** Every ending goes through `MissileEntity.finish`. It calls `MissileFx.puff` (particles and
-  a firework sound), writes a report and discards the entity.
+  a firework sound), then, for `ARRIVED` and `TERRAIN` only, the warhead (§1b), writes a report and discards the
+  entity.
 - **Render data.** The synced data is `tier`, `fins` (0 to 1), `thrust` (0 to 1) and `booster` (attached or
   not). The renderer copies them into `MissileRenderState`, and the model's hooks read them in `setupAnim`.
   26.3 defers `setupAnim` to draw time, so the hooks are never called by hand.
@@ -85,17 +97,29 @@ blocks.
 - **Dependent blocks.** Every other block of the `footprint x footprint x (tier + 1)` volume is a
   `simpleplanes:launch_silo_casing`. Its state is the offset back to the master (`dx`, `dy`, `dz`), so any part
   finds its master without a search and without a block entity.
-- **Placement.** Placement is done with `/missile silo place`. It refuses when:
+- **Placement.** With the item (§1a), or with `/missile silo place`. The command refuses when:
   - the shaft would reach below the world;
   - the volume overlaps another silo;
   - the volume contains a block entity;
   - the volume contains an unbreakable block, such as bedrock.
 
-  Otherwise the silo replaces what was in its volume, as a structure placement does. The replaced blocks are not
-  dropped.
-- **Breaking.** Removing any part removes the whole silo: player breaking, `/setblock` and anything else that
-  sends neighbour updates. The hook is `affectNeighborsAfterRemoval` on both blocks, with a re-entrancy guard, so
-  the cascade runs once. The silo leaves an open shaft behind it. A missile that is still loaded is lost.
+  Otherwise the command replaces what was in its volume, as a structure placement does. The item is stricter
+  (§1a).
+- **What the silo displaced.** Every silo, whether built by the item or the command, records in its block entity
+  the block state it replaced at each position of its volume, including air and water. Upgrades add the new
+  positions to the record, and a master that moves hands the record on.
+- **Breaking.** Removing any part removes the whole silo: player breaking, `/setblock`, `/missile silo remove`
+  and anything else that sends neighbour updates. The hook is `affectNeighborsAfterRemoval` on both blocks, with
+  a re-entrancy guard, so the cascade runs once. **Every position of the silo gets back the block it displaced**,
+  bottom layer first, so sand and gravel land on what they stood on before. The part whose removal started the
+  cascade is filled on the next level tick, not inside the removal, so that the vanilla break still counts as a
+  break (drops, statistics, Fabric's break events). Anything else placed there in the meantime, such as the stone
+  of a `/setblock`, is kept. When the master itself is the part removed, its block entity is already gone, so it
+  hands its record over in `preRemoveSideEffects`. A silo placed by the phase 1 build has no record; its
+  positions are filled with dirt, so no shaft is left open either way. A missile that is still loaded is lost.
+- **Break drops.** A player breaking any part in survival gets back one silo item per tier (1 to 4), dropped at
+  the silo mouth. A creative player, `/setblock`, `/missile silo remove` and other non-player removals drop
+  nothing. The `block_drops` game rule applies.
 - **Collision and opacity.** All silo blocks are full, opaque cubes with an invisible render shape. The block
   entity renderer draws the whole tube. The blocks are opaque on purpose: while they were not, skylight reached
   the dirt under a tier 1 or tier 2 shaft and grass spread onto it. See "Results" below.
@@ -167,6 +191,140 @@ the test server. It drew the following, as the screenshots in `docs/missiles/` s
 - the pitch-over with the model oriented along its path, and the smoke trail.
 
 ![Tier 2 pitch-over, slowed to 3 ticks per second](docs/missiles/pitchover-t2.png)
+
+### 1a. The silo item
+
+`simpleplanes:launch_silo` ("Launch Silo") stacks to 64 and is in the planes creative tab. Its tooltip says how
+to use it. One item is one tier level: a tier 4 silo is four items.
+
+**Recipe** (shaped, 1 item):
+
+```
+i R i      i = iron ingot (#c:ingots/iron)
+S   S      R = redstone dust (#c:dusts/redstone)
+S i S      S = minecraft:smooth_stone
+```
+
+**Model.** `item/generated` with a 16x16 placeholder texture drawn for this (a cut-away silo with a missile in
+the ground). It has not been looked at on a client.
+
+**Placing.** Use the item on the **top face of the ground**. The clicked block becomes the master, so the silo's
+top is flush with the ground, and the tier 1 shaft goes one block further down. Clicking a plant or a snow layer
+uses the block under it. A side or bottom face is refused.
+
+**Upgrading.** Use the item on **any part of an existing silo**, in practice its top face, the only part that
+shows. Each item raises the silo one tier. This is the interaction chosen for "stacking", for these reasons:
+
+- The click identifies the silo exactly, whichever part and face is hit, because every casing points at its
+  master. Nothing has to be guessed from where a block would land.
+- "Placing it adjacent above" would put a block in the hatch's airspace, which has to be clear to launch; "below"
+  is underground and cannot be clicked. Adjacent placement would also be ambiguous with building a second silo
+  next to the first.
+- Using an item on a thing to improve it is ordinary vanilla behaviour (bone meal, for example).
+
+| Step | What changes | New positions dug |
+|---|---|---|
+| 1 → 2 | one layer deeper, same 1 x 1 | 1 |
+| 2 → 3 | the 1 x 1 column becomes one corner of a 2 x 2 footprint, 4 deep | 13 |
+| 3 → 4 | one layer deeper, same 2 x 2 | 4 |
+
+**The 2 → 3 footprint.** Tier 3 and 4 missiles do not fit a 1 x 1 bore, so the footprint has to grow. The old
+column is kept and becomes one corner of the new 2 x 2 square. There are four such squares; they are tried in
+order, best first, and the first one whose new positions all pass the space check below is built:
+
+1. the square on the side the player is **facing** (the horizontal look direction; the command uses
+   south-east);
+2. the two squares that flip one axis, the less-looked-at axis first;
+3. the opposite square.
+
+The message says which way the shaft grew ("grew south-west"). If all four are blocked, the upgrade is refused
+with the reason found for the preferred square, and nothing changes. The master/casing invariant holds after
+every step. The master is always the minimum X/Z corner of the top layer. When the chosen square puts the old
+column at another corner, the master moves: the old master becomes a casing, and the new master's block entity
+takes over the mode, the launch count, the last missile id, the last target and the displaced-block record. The
+tests check `isIntact` after every step (§6a).
+
+**Space check.** It applies to item placement and to every upgrade, and only to the positions that would be
+dug. Each position must be:
+
+- inside the world;
+- not part of another silo;
+- not a block entity;
+- breakable;
+- either replaceable (air, water, lava, plants, a snow layer) or **natural ground**, in the block tag
+  `#simpleplanes:silo_ground`. That tag holds the vanilla tags `substrate_overworld` (dirt, grass, podzol,
+  mycelium, mud, moss, ...), `base_stone_overworld`, `base_stone_nether`, `sand`, `terracotta`, `snow` and `ores`,
+  plus gravel, clay, sandstone, red sandstone, calcite, dripstone block, end stone, soul sand and soul soil;
+- a position the player may edit (`Level#mayInteract`: spawn protection, world border).
+
+No living entity may be inside the new positions either. Planks, cobblestone, concrete, glass, farmland, paths,
+and anything else built are never dug, so a floor or a wall next to a silo blocks the upgrade instead of being
+eaten. A refusal names the first blocking block and its position, the item is not used up, and not one block
+changes. What *is* dug is not destroyed: it is recorded and put back when the silo is removed. It is not dropped
+as items either, so a silo cannot be used to mine or to duplicate anything.
+
+**Refused while the silo is in use:**
+
+- a missile loaded ("a missile is loaded; unload it first", `/missile silo unload`);
+- any phase other than idle: opening, launching, closing or cooldown;
+- a damaged structure;
+- tier 4 already.
+
+`/missile silo upgrade <pos>` does the same upgrade from the console, with the same rules and no player.
+
+### 1b. Warheads
+
+A missile that ends its flight `ARRIVED` or `TERRAIN` detonates. The values are the `warhead` field of
+`MissileTier`, one `Blast` per tier, and nothing else holds them:
+
+| Tier | Power | Block damage | Fire | Damage radius (2 x power) |
+|---|---|---|---|---|
+| 1 | 2.0 | yes | no | 4 |
+| 2 | 4.0 (`Blast.DEFAULT_POWER`, TNT) | yes | no | 8 |
+| 3 | 8.0 | yes | yes | 16 |
+| 4 | 16.0 (`Blast.MAX_POWER`) | yes | yes | 32 |
+
+This is the suggested table, unchanged:
+
+- power doubles per tier;
+- tier 2 is exactly TNT, what a plane has always exploded with;
+- tier 4 is the ceiling `Blast` already clamps every strike aircraft to, for cost reasons;
+- the two small tiers leave no fire, so they can be used near one's own builds; the two big ones are incendiary.
+
+Measured sizes are in §6a.
+
+**One path for every blast.** `MissileEntity.detonate` calls `Blast#detonate(level, missile, centre)`. That
+method runs `BlastGuards.filter`, which respects `/blastguard off`, and then `ServerLevel#explode(source, x, y,
+z, power, fire, interaction)`. `PlaneEntity#explode` now calls the same method, so aircraft and missiles cannot
+drift apart. A guard sees the missile as the `source` entity and may downgrade or suppress the blast as for an
+aircraft.
+
+- **The centre** is the target point on arrival. On a terrain hit it is the hit point moved 0.05 blocks back
+  along the flight path, so that the blast starts in the air cell in front of the face and not inside the block.
+- **The missile** is immune to explosions and is removed right after.
+- **What does not detonate.**
+  - `FUEL`, `TIMEOUT`, `OUT_OF_WORLD`: the missile never hit anything.
+  - `STALLED`: the watchdog removing a frozen missile is not an impact.
+  - `ABORTED`, `REMOVED`, a server stop.
+  - Tier 4 staging and the dropped booster: particles only, as before.
+
+  Each of these ends with the puff alone.
+- **Entities.** Missiles still pass through entities without touching them. The blast hurts them.
+
+**The harmless switch** is a game rule, registered through Fabric's game rule API:
+
+```
+/gamerule simpleplanes:missile_explosions false     # warheads off: phase 1 behaviour, a puff and nothing else
+/gamerule simpleplanes:missile_explosions true      # the default
+```
+
+It is stored in the world like any game rule, can be set on the world creation screen (under "Misc"), and takes
+effect on the next detonation. With it off, `Blast` is never called and no guard is asked. Tests and builds that
+need an unchanged world set it first.
+
+**The report** carries a `blast=` field (§4): what was applied and the time spent in the explode call, a
+`guarded:` prefix when a guard changed the blast, or `suppressed`, `inert` (the game rule is off) or `none` (the
+ending does not detonate).
 
 ---
 
@@ -255,23 +413,37 @@ in `place`, where it is the master.
 | Command | Effect | Example |
 |---|---|---|
 | `/missile silo place <pos> <tier> [loaded]` | Builds a silo of tier 1–4 with its master (the top layer, minimum X/Z corner) at `pos`. The shaft goes `tier` blocks down from there. Placement is checked as described in §1. `loaded` defaults to false | `/missile silo place 0 -20 0 1 true` |
-| `/missile silo remove <pos>` | Removes the whole silo. The shaft is left open | `/missile silo remove 0 -21 0` |
+| `/missile silo upgrade <pos>` | Raises the silo one tier with the item's rules (§1a), preferring south-east for 2 → 3. Refused with the reason | `/missile silo upgrade 0 -20 0` |
+| `/missile silo remove <pos>` | Removes the whole silo and puts back the blocks it displaced. No items drop | `/missile silo remove 0 -21 0` |
 | `/missile silo load <pos>` | Loads a missile of the silo's tier. Refused if a missile is already loaded or a launch is under way | `/missile silo load 10 -20 20` |
 | `/missile silo unload <pos>` | Removes the loaded missile | `/missile silo unload 10 -20 20` |
 | `/missile silo status <pos>` | Prints the tier, loaded or empty, the phase, the hatch, the mode, the cooldown, the launch count, the last missile id and the target, and flags a damaged structure | `/missile silo status 0 -20 0` |
 | `/missile launch <silo> <target>` | Starts the launch sequence toward the point `target` (x y z; integer x and z are centred on the block). Refused with the reason for anything in §1's check list | `/missile launch 0 -20 0 500 -19 0` |
 | `/missile list` | One telemetry line per missile in flight | `/missile list` |
 | `/missile report [count]` | The last `count` (default 10, max 64) flight reports since the server started | `/missile report 4` |
-| `/missile abort all` / `/missile abort <id>` | Ends one or all flights with the usual harmless puff (outcome `ABORTED`) | `/missile abort 1445` |
+| `/missile abort all` / `/missile abort <id>` | Ends one or all flights with the harmless puff and no warhead (outcome `ABORTED`) | `/missile abort 1445` |
 | `/missile telemetry <interval>` | Logs a telemetry line for each missile every `interval` ticks (0 = off, max 1200) | `/missile telemetry 10` |
 | `/missile hash <from> <to> [census]` | FNV-1a 64-bit hash of every block state in the box, plus the block and non-air counts (max 16,777,216 blocks). `census` also lists every block state with its count. The ids are runtime block-state ids, so compare hashes within one server session. Loads or generates chunks as it reads them | `/missile hash -3 -30 -3 4 10 4 census` |
+| `/missile hash <from> <to> snapshot` / `... diff` | **Test.** `snapshot` remembers every block state in the box (one snapshot at a time, same size limit). `diff`, on exactly the same box, counts the blocks that changed since and lists the transitions (`dirt -> air`, `air -> fire`, ...) | `/missile hash 170 -40 -28 228 0 28 diff` |
 | `/missile tickets <true\|false>` | **Test switch.** Turns the missiles' chunk tickets off or on. It resets to on at every server start | `/missile tickets false` |
+| `/missile item use <pos> <face> <yaw> [count]` | **Test.** A survival fake player (Fabric `FakePlayer`) holding `count` (default 1) silo items and facing `yaw` (vanilla yaw: 0 = south, -90 = east; pitch 45 down) uses them on `face` (`up`, `north`, ...) of `pos`, through the vanilla `ServerPlayerGameMode#useItemOn` path. Prints accepted or refused, the items left, the action-bar message and the silo's status | `/missile item use 0 -20 0 up -45` |
+| `/missile item break <pos>` | **Test.** The same fake player breaks the block at `pos` in survival, through `ServerPlayerGameMode#destroyBlock`. Prints what was there, what is there now, and the silo items and other items dropped | `/missile item break 0 -22 0` |
+| `/missile item recipe` | **Test.** Looks the recipe up from its ingredients, as a crafting table does, and prints the recipe id and its result | `/missile item recipe` |
+| `/missile guard add <from> <to> [suppress]` | **Test.** Registers (on first use) a `BlastGuard` that stands in for a claim mod. A blast whose damage radius (2 x power) reaches the box loses its block damage and fire, or with `suppress` is cancelled outright. It applies to aircraft and missiles alike. Zones are forgotten at a restart; the guard stays registered until then | `/missile guard add 230 -64 230 270 319 270` |
+| `/missile guard clear` / `/missile guard list` | **Test.** Removes or lists the zones | `/missile guard clear` |
+
+Outside `/missile`:
+
+| Command | Effect |
+|---|---|
+| `/gamerule simpleplanes:missile_explosions <true\|false>` | Warheads on (default) or off (harmless, phase 1 behaviour). §1b |
+| `/blastguard on\|off\|status` | The existing switch for the blast guard chain; it applies to missiles as to aircraft |
 
 **Report line**, one per flight, to the log and to `/missile report`:
 
 ```
-[missile] #1290 T1 ARRIVED at -839.50,-19.00,840.50 target -839.50,-19.00,840.50 miss=0.00 closest=0.00
-          flight=620t total=645t (32.3s) flown=1211.2 range=1187.9 max_y=5.0 stalls=0 silo=0, -20, 0
+[missile] #101 T4 ARRIVED at 10.50,-19.00,-199.50 target 10.50,-19.00,-199.50 miss=0.00 closest=0.00 flight=93t
+          total=134t (6.7s) flown=270.3 range=210.5 max_y=42.5 stalls=0 silo=10, -20, 10 blast=16.0,blocks,fire,66.0ms
 ```
 
 - `flight` is counted from ignition.
@@ -279,6 +451,9 @@ in `place`, where it is the master.
   time.
 - The outcome is one of `ARRIVED`, `TERRAIN`, `FUEL`, `TIMEOUT`, `OUT_OF_WORLD`, `STALLED`, `ABORTED` or
   `REMOVED`. `REMOVED` means removed by something else, such as `/kill`.
+- `blast` is the warhead. It is `<power>[,blocks][,fire],<ms>`, where `ms` is the time spent in the explode call.
+  `guarded:` in front means a blast guard changed it. It can also read `suppressed` (a guard cancelled it),
+  `inert` (the game rule is off) or `none` (the ending does not detonate).
 
 **Telemetry line:** `#id Tn t=<ticks> <phase> pos=x,y,z spd=<b/t> pitch=<deg> agl=<height above ground>
 to_go=<horizontal> dist=<nose to target> flown=<path> fins=<0..1> booster=on|off|- stalls=<n>`.
@@ -335,11 +510,145 @@ never force-loaded.
    - a server stop mid-flight, then a restart;
    - `/missile abort`.
 
+### Phase 2 rig and procedure
+
+A second server of our own, `/home/user/sp-missiles-2-server` (outside the repository):
+
+- **Server.** Port 25692, no RCON, `-Xmx1536M`, the same loader, Fabric API and FIFO console.
+- **World.** A fresh world with the same superflat generator and seed (surface at y = −19), `spawn_mobs false`, and
+  `forceload add -100 -100 100 100` for the silo area only.
+- **Silos.** Built with the item through `/missile item use` (yaw −45, facing south-east): T1 at `0 -20 0`, T2 at
+  `0 -20 10`, T3 at `10 -20 0`, T4 at `10 -20 10`.
+- **Scripts.** `tests/silo_item.py`, `tests/blast.py build|live|inert`, `tests/protect.py` and `tests/endings.py`.
+  They use the phase 1 driver, `mt.py`.
+
+1. **Silo item.**
+   - Build a silo of each tier step by step; check the tier and `intact` after every step.
+   - Break it with `/missile item break`: the master for T1 and T4, the bottom casing for T2, a casing of a grown
+     column for T3. Count the drops.
+   - Compare a 640-block hash box with the one taken before placement.
+   - Refusals, each with a hash before and after:
+     - oak planks on all eight surface neighbours of a T2;
+     - then only the south-west corner freed, while facing south-east: the upgrade should fall back to it;
+     - a chest under a T1;
+     - a pig in an air pocket in the T4 layer;
+     - a side face;
+     - a planks surface;
+     - loaded, opening and cooldown, then idle.
+   - The recipe lookup.
+   - Command placement and removal.
+2. **Warheads.**
+   - One flight per tier onto flat ground about 200 blocks out.
+   - Before each flight:
+     - force-load the target area;
+     - `snapshot` a 57 x 41 x 57 box (133,209 blocks, y −40..0) around the target;
+     - place five NoAI iron golems (100 health, full knockback resistance, so they stay put) 3, 6, 10, 16 and 24
+       blocks from the target along +X.
+   - After the report:
+     - `tick query`, whose P99 over the last 100 ticks is the detonation tick;
+     - `diff` for the blocks changed and the fires;
+     - the golems' health (0 = dead).
+3. **Harmless mode.** The same with `missile_explosions false`, at fresh targets.
+4. **Protection.** `/missile guard` zones of 41 x 41 columns over the target:
+   - tier 4 missiles into a downgrade zone and a suppress zone;
+   - the same for a strike aircraft with the same warhead
+     (`/autopilot strike <target> 300 0 16 true true`);
+   - a missile with the zone still registered but `/blastguard off`;
+   - an unguarded strike as a control;
+   - three more unguarded tier 4 shots for the tick cost.
+5. **Other endings.**
+   - A T1 into a 130-high stone wall 60 blocks out.
+   - `/missile abort all` mid-flight.
+   - A watchdog stall with `/missile tickets false`.
+
 ---
 
 ## 6. Results
 
-Final build: commit `66a7c9c` (the code has not changed since). Times are game ticks at 20 TPS.
+§6a is phase 2, measured on the code of commit `7db6dbe`. The subsections after it are phase 1, measured on
+commit `66a7c9c`, before warheads existed. Phase 2 does not touch the flight code. The phase 1 "nothing changed"
+results describe what the harmless mode still does, and §6a confirms it. Times are game ticks at 20 TPS.
+
+### 6a. Phase 2: silo item, warheads, protection
+
+**Silo item, all as intended.**
+
+| Tier | Steps (item uses) | After every step | Part broken | Silo items dropped | 640-block box after the break |
+|---|---|---|---|---|---|
+| 1 | 1 | right tier, intact | master | 1 | identical to before placement |
+| 2 | 2 | right tier, intact | bottom casing | 2 | identical |
+| 3 | 3 (grew south-east) | right tier, intact | casing of a grown column | 3 | identical |
+| 4 | 4 | right tier, intact | master | 4 | identical |
+
+- **Every step used exactly one item. A refusal used none.**
+- **Blocked 2 → 3.** With oak planks on the eight surface neighbours, the upgrade was refused: "minecraft:oak_planks
+  at 0, -20, -39 is not natural ground". The hash was unchanged. With only the south-west corner freed and the
+  player facing south-east, it grew south-west. The master moved from `0 -20 -40` to `-1 -20 -40` and the silo
+  was intact. Breaking it dropped 3 items and restored everything: the hash was identical once the planks were
+  put back on the freed corner.
+- **Other refusals, hash unchanged each time:**
+  - a chest under a T1: "minecraft:chest at 20, -22, -40 is a block entity";
+  - a pig in the T4 layer: "Pig is in the way at 41, -24, -40", accepted once the pig was gone;
+  - a side face;
+  - a planks surface;
+  - a loaded silo;
+  - `busy (opening)`;
+  - `busy (cooldown)`.
+
+  Once idle again, the silo upgraded, and the launch count and target carried over.
+- **Recipe.** "Recipe simpleplanes:launch_silo matches and gives 1 x simpleplanes:launch_silo."
+- **Command.** `/missile silo place … 4` then `remove`: "20 blocks put back as they were". The hash was identical.
+- **The record survives a restart.** A T3 was grown north-west (yaw 135, so the master moved), then the server
+  was restarted and a casing broken. It dropped 3 items, and the 640-block hash and census were identical to
+  before placement.
+
+**Warheads.** Flat ground, targets about 200 blocks out, launched from the item-built silos. In the 133,209-block
+box, "changed" counts every block that differs afterwards, and "fires" is the part of it that became fire (on the
+surface and in the crater). The golems stand at the given distance from the target.
+
+| Tier | Blast (report) | Blocks changed | of which fire | Destroyed | Golem at 3 | 6 | 10 | 16 | 24 | Explode call | Detonation tick (P99) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | `2.0,blocks` | 17 | 0 | 9 grass, 8 dirt | 94.6 | 100 | 100 | 100 | 100 | 26.6 ms¹ | 31.0 ms¹ |
+| 2 | `4.0,blocks` | 87 | 0 | 38 grass, 49 dirt | 70.6 | 90.3 | 100 | 100 | 100 | 16.5 ms | 18.7 ms |
+| 3 | `8.0,blocks,fire` | 524 | 132 | 108 grass, 297 dirt, 22 stone | 7.1 | 21.0 | 50.8 | 95.3 | 100 | 46.7 ms | 51.7 ms |
+| 4 | `16.0,blocks,fire` | 1609 | 279 | 317 grass, 911 dirt, 241 stone | dead | dead | dead | 15.2 | 64.1 | 66.0 ms | 68.5 ms |
+
+¹ The first explosion of the session, and it includes warm-up: a later T1 terrain hit took 1.8 ms.
+
+- **Accuracy.** All four arrived with a miss of 0.00. So did every other flight from item-built silos in phase 2:
+  4 in harmless mode and 7 tier 4 shots in the protection runs, 15 arrivals in all.
+- **Tier 4 is `Blast.MAX_POWER`.** The report reads `blast=16.0,blocks,fire`, and the value is the constant
+  itself.
+- **Crater repeatability.** Five unguarded tier 4 shots changed 1609, 1674, 1649, 1637 and 1681 blocks. A strike
+  aircraft with the same warhead changed 1709.
+- **Tick cost of a tier 4 detonation.** In five shots, the explode call took 66.0, 55.6, 35.0, 33.8 and 27.9 ms.
+  The first two had golems in range or came earlier in the session. That makes one tick of 31–69 ms (the P99),
+  while P50 stays 1.3–1.9 ms. The unguarded strike aircraft with the same warhead gave one tick of 79.8 ms. It is
+  a single long tick, the same one a strike aircraft already causes, not a stall. In two of the five shots it was
+  over the 50 ms budget.
+
+**Harmless mode** (`missile_explosions false`). Four flights, one per tier, gave `blast=inert` and a miss of
+0.00. **0 blocks changed** in each 133,209-block box. All 20 golems stayed at 100 health.
+
+**Protection: missiles and strike aircraft behave the same.**
+
+| Case | Missile T4 | Strike aircraft (16, blocks, fire) |
+|---|---|---|
+| downgrade zone (a claim: no craters, no fire) | `blast=guarded:16.0`, **0 blocks changed**; golems at 3/6/10 dead, 16: 15.0, 24: 64.0 | **0 blocks changed**; golems 3/6/10 dead, 16: 21.7, 24: 67.4 |
+| suppress zone | `blast=suppressed`, **0 blocks changed**, all golems 100 | **0 blocks changed**, all golems 100 |
+| zone registered, `/blastguard off` | 1674 blocks changed: the switch is respected | – |
+| no zone (control) | 1609–1681 blocks changed | 1709 blocks changed |
+
+**Other endings.**
+
+| Case | Report | Effect |
+|---|---|---|
+| T1 into a 130-high stone wall 60 blocks out | `TERRAIN at 60.00,6.15,0.50 … blast=2.0,blocks,1.8ms` | 3 stone blocks removed from the wall face |
+| `/missile abort all` mid-flight | `ABORTED … blast=none` | none |
+| tickets off, frozen at the edge of loaded ground | `STALLED … stalls=201 blast=none` | none |
+
+In the wall case the diff also shows 5 grass blocks under the new wall turned to dirt. That comes from covering
+them, not from the blast.
 
 ### Arrival (40 flights, flat world)
 
@@ -422,8 +731,18 @@ The same four flights on other bearings, with an earlier build, gave identical t
 
 ## 7. Known limitations
 
-- **No item.** Silos are placed and loaded by command only.
-- **Removing a silo** leaves an open shaft, and the blocks it replaced are not given back.
+- **Loading and launching are commands only.** There is no missile item and no launch interface (see below).
+- **Removing a silo** puts back what it displaced. A silo built by the phase 1 build has no record, and its
+  shaft is filled with dirt. A missile loaded in a broken silo is lost.
+- **Upgrading needs natural ground.** A silo surrounded by built blocks cannot go from 2 to 3 until one corner is
+  clear. That is by design: it never digs a player's blocks.
+- **Tier 4 cost.** One tick of 30–70 ms per detonation on this machine, the same as a strike aircraft with the
+  same warhead (§6a). Many simultaneous tier 4 impacts add up.
+- **Fire.** Tier 3 and 4 fires are vanilla fire. In a forest they spread as any fire does, subject to the
+  `fire_spread_radius_around_player` and related game rules.
+- **Translations.** The phase 2 messages and the tooltip are in `en_us.json` only.
+- **The item's look.** The item texture is a placeholder and has not been looked at on a client. The upgrade
+  messages mix the translated frame with an English reason.
 - **Missiles do not survive a restart.** Flights in progress are discarded at a server stop. A silo in the middle
   of a launch sequence is saved and finishes the sequence when its chunk next ticks. Its chunk ticket is not
   re-created at startup.
@@ -439,6 +758,12 @@ The same four flights on other bearings, with an earlier build, gave identical t
   deep shafts was not examined.
 
 ## Not done, planned next
+
+**Missile items and a launch interface.** These were suggested but left out on purpose: the request was the
+silo item only. A natural next step:
+
+- a missile item per tier, loaded by using it on a silo of that tier, replacing `/missile silo load`;
+- a launch terminal block or a targeting item that sets coordinates and fires, replacing `/missile launch`.
 
 **Interception.** None of it is implemented yet:
 

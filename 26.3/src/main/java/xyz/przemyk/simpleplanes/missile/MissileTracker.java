@@ -52,13 +52,13 @@ public final class MissileTracker {
 
     public record Report(int id, int tier, MissileEntity.Outcome outcome, Vec3 at, Vec3 target, double miss, double closest,
                          int flightTicks, long totalTicks, double pathLength, double launchRange, double maxAltitude,
-                         int stalls, BlockPos silo) {
+                         int stalls, BlockPos silo, String blast) {
         public String line() {
             return String.format(Locale.ROOT,
                 "#%d T%d %s at %.2f,%.2f,%.2f target %.2f,%.2f,%.2f miss=%.2f closest=%.2f flight=%dt total=%dt (%.1fs)"
-                    + " flown=%.1f range=%.1f max_y=%.1f stalls=%d silo=%s",
+                    + " flown=%.1f range=%.1f max_y=%.1f stalls=%d silo=%s blast=%s",
                 id, tier, outcome, at.x, at.y, at.z, target.x, target.y, target.z, miss, closest, flightTicks, totalTicks,
-                totalTicks / 20.0, pathLength, launchRange, maxAltitude, stalls, silo.toShortString());
+                totalTicks / 20.0, pathLength, launchRange, maxAltitude, stalls, silo.toShortString(), blast);
         }
     }
 
@@ -76,6 +76,7 @@ public final class MissileTracker {
         });
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             ticketsEnabled = true;
+            MissileTestGuard.clear();
             ACTIVE.clear();
             SILO_HOLDS.clear();
             REPORTS.clear();
@@ -124,12 +125,12 @@ public final class MissileTracker {
         }
     }
 
-    static void report(MissileEntity missile, MissileEntity.Outcome outcome, Vec3 at) {
+    static void report(MissileEntity missile, MissileEntity.Outcome outcome, Vec3 at, String blast) {
         ACTIVE.remove(missile.getId());
         long now = missile.level().getGameTime();
         Report r = new Report(missile.getId(), missile.tier().tier, outcome, at, missile.target(), at.distanceTo(missile.target()),
             Math.min(missile.closest(), at.distanceTo(missile.target())), missile.flightTicks(), now - missile.launchCommandTime(),
-            missile.pathLength(), missile.launchRange(), missile.maxAltitude(), missile.stalls(), missile.silo());
+            missile.pathLength(), missile.launchRange(), missile.maxAltitude(), missile.stalls(), missile.silo(), blast);
         REPORTS.addLast(r);
         while (REPORTS.size() > MAX_REPORTS) REPORTS.removeFirst();
         LOGGER.info("[missile] {}", r.line());
@@ -146,6 +147,7 @@ public final class MissileTracker {
     }
 
     private static void onLevelTick(ServerLevel level) {
+        SiloStructure.flushDeferred(level);
         Set<BlockPos> holds = SILO_HOLDS.get(level.dimension());
         if (holds != null && !holds.isEmpty() && level.getGameTime() % SILO_TICKET_INTERVAL == 0) {
             for (BlockPos p : holds) ticket(level, p.getX(), p.getZ());
@@ -157,7 +159,7 @@ public final class MissileTracker {
             if (m.isRemoved()) {
                 if (!m.isFinished()) {
                     ACTIVE.remove(m.getId());
-                    report(m, MissileEntity.Outcome.REMOVED, m.centre());
+                    report(m, MissileEntity.Outcome.REMOVED, m.centre(), "none");
                 }
                 continue;
             }

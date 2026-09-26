@@ -1,5 +1,7 @@
 package xyz.przemyk.simpleplanes.missile;
 
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.particles.ParticleTypes;
@@ -19,7 +21,11 @@ import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * State of one silo: the loaded missile, the hatch, the launch sequence, the cooldown, the target and the mode.
@@ -50,6 +56,16 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     private int launches;
     private int lastMissileId = -1;
     private long launchCommandTime;
+    /** What each silo block replaced, so removing the silo puts the ground back. Empty for silos built before this existed. */
+    private final Map<BlockPos, BlockState> displaced = new HashMap<>();
+
+    /** One block the silo replaced. */
+    public record Displaced(BlockPos pos, BlockState state) {
+        static final Codec<Displaced> CODEC = RecordCodecBuilder.create(i -> i.group(
+            BlockPos.CODEC.fieldOf("pos").forGetter(Displaced::pos),
+            BlockState.CODEC.fieldOf("state").forGetter(Displaced::state)
+        ).apply(i, Displaced::new));
+    }
 
     public LaunchSiloBlockEntity(BlockPos pos, BlockState state) {
         super(Missiles.LAUNCH_SILO_BE, pos, state);
@@ -68,6 +84,25 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     public int launches() { return launches; }
     public int lastMissileId() { return lastMissileId; }
     public int cooldown() { return cooldown; }
+
+    public Map<BlockPos, BlockState> displaced() {
+        return Map.copyOf(displaced);
+    }
+
+    void recordDisplaced(Map<BlockPos, BlockState> states) {
+        displaced.putAll(states);
+        setChanged();
+    }
+
+    /** Takes over the persistent state of the silo this one replaced when an upgrade moved the master block. */
+    void adopt(LaunchSiloBlockEntity old) {
+        mode = old.mode;
+        launches = old.launches;
+        lastMissileId = old.lastMissileId;
+        target = old.target;
+        displaced.putAll(old.displaced);
+        sync();
+    }
 
     /** The stowed missile is drawn by the block entity renderer until the missile entity exists. */
     public boolean showsStowedMissile() {
@@ -202,7 +237,10 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     @Override
     public void preRemoveSideEffects(BlockPos pos, BlockState state) {
-        if (level instanceof ServerLevel server) MissileTracker.releaseSilo(server, pos);
+        if (level instanceof ServerLevel server) {
+            MissileTracker.releaseSilo(server, pos);
+            SiloStructure.stashRecord(server, pos, displaced);
+        }
     }
 
     @Override
@@ -223,6 +261,9 @@ public class LaunchSiloBlockEntity extends BlockEntity {
             output.putDouble("ty", target.y);
             output.putDouble("tz", target.z);
         }
+        List<Displaced> list = new ArrayList<>();
+        displaced.forEach((pos, state) -> list.add(new Displaced(pos, state)));
+        output.store("displaced", Displaced.CODEC.listOf(), list);
     }
 
     @Override
@@ -240,6 +281,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         launchCommandTime = input.getLongOr("launch_time", 0L);
         target = input.getBooleanOr("has_target", false)
             ? new Vec3(input.getDoubleOr("tx", 0), input.getDoubleOr("ty", 0), input.getDoubleOr("tz", 0)) : null;
+        displaced.clear();
+        input.read("displaced", Displaced.CODEC.listOf()).ifPresent(list -> list.forEach(d -> displaced.put(d.pos(), d.state())));
     }
 
     private static <E extends Enum<E>> E parse(Class<E> type, String name, E fallback) {
@@ -257,7 +300,9 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     @Override
     public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
-        return saveCustomOnly(registries);
+        CompoundTag tag = saveCustomOnly(registries);
+        tag.remove("displaced");
+        return tag;
     }
 
     public String describe() {

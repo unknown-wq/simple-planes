@@ -1,0 +1,21 @@
+{
+    "replace": false,
+    "values": [
+        "#minecraft:substrate_overworld",
+        "#minecraft:base_stone_overworld",
+        "#minecraft:base_stone_nether",
+        "#minecraft:sand",
+        "#minecraft:terracotta",
+        "#minecraft:snow",
+        "#minecraft:ores",
+        "minecraft:gravel",
+        "minecraft:clay",
+        "minecraft:sandstone",
+        "minecraft:red_sandstone",
+        "minecraft:calcite",
+        "minecraft:dripstone_block",
+        "minecraft:end_stone",
+        "minecraft:soul_sand",
+        "minecraft:soul_soil"
+    ]
+}

@@ -215,5 +215,13 @@
 
     "entity.simpleplanes.missile": "Missile",
     "block.simpleplanes.launch_silo": "Launch Silo",
-    "block.simpleplanes.launch_silo_casing": "Launch Silo Casing"
+    "block.simpleplanes.launch_silo_casing": "Launch Silo Casing",
+    "simpleplanes.silo.tooltip.place": "Use on the top of the ground: sinks a tier 1 silo into it",
+    "simpleplanes.silo.tooltip.upgrade": "Use on a silo: one tier up, to tier 4 (tier 3 widens it to 2x2)",
+    "simpleplanes.silo.placed": "Tier 1 launch silo built at %s",
+    "simpleplanes.silo.upgraded": "Launch silo upgraded to tier %s: %sx%s, %s deep (grew %s)",
+    "simpleplanes.silo.cannot_place": "Cannot build a silo here: %s",
+    "simpleplanes.silo.cannot_upgrade": "Cannot upgrade this silo: %s",
+    "gamerule.simpleplanes.missile_explosions": "Missile warheads explode",
+    "gamerule.simpleplanes.missile_explosions.description": "Off: missiles end every flight with a harmless puff"
 }

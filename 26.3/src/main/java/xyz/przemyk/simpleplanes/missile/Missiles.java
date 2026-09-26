@@ -1,6 +1,8 @@
 package xyz.przemyk.simpleplanes.missile;
 
 import com.google.common.collect.ImmutableSet;
+import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
+import net.fabricmc.fabric.api.gamerule.v1.GameRuleBuilder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -8,6 +10,9 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.level.gamerules.GameRule;
+import net.minecraft.world.level.gamerules.GameRuleCategory;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -17,9 +22,9 @@ import net.minecraft.world.level.material.PushReaction;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 
 /**
- * Registration for the missile feature: one entity type, the silo's two blocks and its block entity, the
- * {@code /missile} command and the tracker that keeps missiles' chunks loaded. {@link #init()} is the single
- * call from the mod initialiser.
+ * Registration for the missile feature: one entity type, the silo's two blocks, its block entity and its item, the
+ * {@code missile_explosions} game rule, the {@code /missile} command and the tracker that keeps missiles' chunks
+ * loaded. {@link #init()} is the single call from the mod initialiser.
  */
 public final class Missiles {
 
@@ -41,9 +46,20 @@ public final class Missiles {
     public static final BlockEntityType<LaunchSiloBlockEntity> LAUNCH_SILO_BE = Registry.register(BuiltInRegistries.BLOCK_ENTITY_TYPE,
         id("launch_silo"), new BlockEntityType<>(LaunchSiloBlockEntity::new, ImmutableSet.of(LAUNCH_SILO)));
 
+    public static final LaunchSiloItem LAUNCH_SILO_ITEM = Registry.register(BuiltInRegistries.ITEM, id("launch_silo"),
+        new LaunchSiloItem(LAUNCH_SILO, new Item.Properties().useBlockDescriptionPrefix()
+            .setId(ResourceKey.create(Registries.ITEM, id("launch_silo")))));
+
+    /** {@code /gamerule simpleplanes:missile_explosions false} makes every missile harmless again (phase 1 behaviour). */
+    public static final GameRule<Boolean> EXPLOSIONS = GameRuleBuilder.forBoolean(true)
+        .category(GameRuleCategory.MISC)
+        .buildAndRegister(id("missile_explosions"));
+
     public static void init() {
         MissileTracker.init();
         MissileCommand.register();
+        CreativeModeTabEvents.modifyOutputEvent(ResourceKey.create(Registries.CREATIVE_MODE_TAB, id("planes_tab")))
+            .register(output -> output.accept(LAUNCH_SILO_ITEM));
     }
 
     private static <T extends Block> T registerBlock(String name, java.util.function.Function<BlockBehaviour.Properties, T> factory) {
