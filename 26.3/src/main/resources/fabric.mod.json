@@ -24,6 +24,7 @@
       "xyz.przemyk.simpleplanes.client.SimplePlanesClient"
     ]
   },
+  "accessWidener": "simpleplanes.accesswidener",
   "mixins": [
     "simpleplanes.mixins.json"
   ],
