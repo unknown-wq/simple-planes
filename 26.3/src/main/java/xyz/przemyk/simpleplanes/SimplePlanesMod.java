@@ -17,6 +17,7 @@ import xyz.przemyk.simpleplanes.commands.AirlinerCommand;
 import xyz.przemyk.simpleplanes.commands.AirshipCommand;
 import xyz.przemyk.simpleplanes.crane.CraneCommand;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
+import xyz.przemyk.simpleplanes.missile.Missiles;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesBlocks;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
@@ -86,6 +87,7 @@ public class SimplePlanesMod implements ModInitializer {
         AirlinerCommand.register();
         AirshipCommand.register();
         CraneCommand.register();
+        Missiles.init();
 
         registerUpgradeItems();
     }

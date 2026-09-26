@@ -121,5 +121,8 @@
     "simpleplanes.airline.4": "Coralline",
     "simpleplanes.airline.5": "Marigold Hop",
     "simpleplanes.autopilot.airframe.fighter": "fighter",
-    "simpleplanes.autopilot.airframe.airliner": "airliner"
+    "simpleplanes.autopilot.airframe.airliner": "airliner",
+    "entity.simpleplanes.missile": "Ракета",
+    "block.simpleplanes.launch_silo": "Пускова шахта",
+    "block.simpleplanes.launch_silo_casing": "Корпус пускової шахти"
 }
