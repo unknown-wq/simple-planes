@@ -19,6 +19,7 @@ import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.airdefence.AllegianceOption;
 import xyz.przemyk.simpleplanes.entities.HelicopterEntity;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
@@ -134,6 +135,7 @@ public final class GunshipCommand {
             return 0;
         }
         GunshipRegistry.add(sortie);
+        AllegianceOption.apply(context, sortie.helicopter());
         source.sendSuccess(() -> Component.literal(sortie.launchLine()), true);
         return 1;
     }

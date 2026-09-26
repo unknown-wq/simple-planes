@@ -7,8 +7,8 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Every visible effect of the feature, and nothing else: particles and sounds only. There is deliberately no
- * explosion, damage, fire or block change anywhere in here, and nothing calls the mod's blast code.
+ * The feature's particles and sounds, and nothing else: no damage, fire or block change comes from here. The warhead
+ * is {@code MissileEntity#detonate}.
  */
 public final class MissileFx {
 

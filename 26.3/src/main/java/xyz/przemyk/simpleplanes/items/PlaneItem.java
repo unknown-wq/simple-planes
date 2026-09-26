@@ -1,5 +1,6 @@
 package xyz.przemyk.simpleplanes.items;
 
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
@@ -23,6 +24,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.airdefence.Allegiance;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
 
@@ -55,6 +57,11 @@ public class PlaneItem extends Item {
                 .flatMap(BuiltInRegistries.BLOCK::getOptional)
                 .ifPresent(block -> builder.accept(
                     Component.translatable(SimplePlanesMod.MODID + ".material").append(block.getName())));
+
+            if (Allegiance.byName(entityTag.getStringOr(Allegiance.NBT_KEY, "")) == Allegiance.HOSTILE) {
+                builder.accept(Component.translatableWithFallback(SimplePlanesMod.MODID + ".allegiance.hostile", "Hostile")
+                    .withStyle(ChatFormatting.RED));
+            }
 
             CompoundTag upgradesNBT = entityTag.getCompoundOrEmpty("upgrades");
             for (String key : upgradesNBT.keySet()) {

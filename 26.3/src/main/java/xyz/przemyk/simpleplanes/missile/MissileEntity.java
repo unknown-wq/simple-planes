@@ -22,6 +22,11 @@ import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.airdefence.Interceptor;
+import xyz.przemyk.simpleplanes.airdefence.InterceptorSpec;
+import xyz.przemyk.simpleplanes.autopilot.Blast;
+import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 import java.util.Locale;
 
@@ -33,8 +38,9 @@ import java.util.Locale;
  * cube hitbox centred on it, as MISSILES-MODEL.md suggests. Impact and arrival are tested every tick on the
  * segment the nose swept, so neither depends on the hitbox.
  *
- * <p>Harmless by construction: nothing here creates an explosion, hurts an entity, sets a fire or changes a
- * block. Every way a flight can end goes through {@link #finish}, which makes a puff of particles and discards.
+ * <p>Every way a flight can end goes through {@link #finish}: a puff of particles, then, for an arrival or a
+ * terrain impact only, the tier's warhead through {@link Blast#detonate} (blast guards apply), unless the
+ * {@code simpleplanes:missile_explosions} game rule is off. Nothing else here hurts an entity or changes a block.
  */
 public class MissileEntity extends Entity {
 
@@ -45,9 +51,9 @@ public class MissileEntity extends Entity {
 
     private static final Vec3 UP = new Vec3(0, 1, 0);
 
-    public enum Phase { TUBE, DEPLOY, MIDCOURSE, TERMINAL }
+    public enum Phase { TUBE, DEPLOY, MIDCOURSE, TERMINAL, PURSUIT }
 
-    public enum Outcome { ARRIVED, TERRAIN, FUEL, TIMEOUT, OUT_OF_WORLD, STALLED, ABORTED, REMOVED }
+    public enum Outcome { ARRIVED, TERRAIN, FUEL, TIMEOUT, OUT_OF_WORLD, STALLED, ABORTED, REMOVED, INTERCEPTED, LOST, OUT_OF_RANGE }
 
     // server state
     private Vec3 target = Vec3.ZERO;
@@ -69,6 +75,9 @@ public class MissileEntity extends Entity {
     private long lastTickTime = -1;
     private boolean finished;
     private float lastYaw;
+    /** Set for an air-defence missile: pursuit instead of the climb-cruise-dive profile. */
+    private @Nullable Interceptor interceptor;
+    private double exitPath;
 
     // client state
     private float finsO;
@@ -98,6 +107,32 @@ public class MissileEntity extends Entity {
         level.addFreshEntity(m);
         MissileTracker.track(m);
         return m;
+    }
+
+    /** An air-defence missile: rises out of the tube like any other, deploys its fins, then pursues {@code aircraft}. */
+    public static MissileEntity launchInterceptor(ServerLevel level, BlockPos silo, MissileTier tier, PlaneEntity aircraft, long launchCommandTime) {
+        MissileEntity m = new MissileEntity(Missiles.MISSILE, level);
+        m.entityData.set(DATA_TIER, tier.tier);
+        m.refreshDimensions();
+        m.silo = silo.immutable();
+        m.mouth = SiloStructure.mouth(silo, tier);
+        m.interceptor = new Interceptor(InterceptorSpec.of(tier), aircraft, m.getId());
+        m.interceptor.track(level, m.mouth);
+        m.target = m.interceptor.aim();
+        m.launchCommandTime = launchCommandTime;
+        m.launchRange = m.target.distanceTo(m.mouth);
+        m.lastYaw = (float) Math.toDegrees(Math.atan2(-(m.target.x - m.mouth.x), m.target.z - m.mouth.z));
+        Vec3 base = m.mouth.subtract(0, tier.seatDepth, 0);
+        m.setCentre(base.add(0, tier.length / 2.0, 0));
+        m.applyRotation();
+        m.entityData.set(DATA_THRUST, 1.0F);
+        level.addFreshEntity(m);
+        MissileTracker.track(m);
+        return m;
+    }
+
+    public @Nullable Interceptor interceptor() {
+        return interceptor;
     }
 
     public MissileTier tier() {
@@ -137,6 +172,14 @@ public class MissileEntity extends Entity {
         flightTicks++;
         Vec3 prevNose = nose();
 
+        if (interceptor != null) {
+            if (!interceptor.track(level, prevNose)) {
+                finish(level, Outcome.LOST, prevNose);
+                return;
+            }
+            target = interceptor.aim();
+        }
+
         switch (phase) {
             case TUBE -> {
                 speed = Math.min(speed + MissileTier.TUBE_ACCEL, MissileTier.TUBE_MAX_SPEED);
@@ -147,7 +190,12 @@ public class MissileEntity extends Entity {
                 dir = UP;
                 float deployed = Math.min(1.0F, (flightTicks - exitTick) / (float) MissileTier.FIN_DEPLOY_TICKS);
                 entityData.set(DATA_FINS, deployed);
-                if (deployed >= 1.0F) phase = Phase.MIDCOURSE;
+                if (deployed >= 1.0F) phase = interceptor != null ? Phase.PURSUIT : Phase.MIDCOURSE;
+            }
+            case PURSUIT -> {
+                speed = Math.min(speed + tier.accel, tier.cruiseSpeed);
+                dir = interceptor.steer(level, prevNose, dir, speed);
+                target = interceptor.aim();
             }
             case MIDCOURSE -> {
                 speed = Math.min(speed + tier.accel, tier.cruiseSpeed);
@@ -169,6 +217,7 @@ public class MissileEntity extends Entity {
         if (phase == Phase.TUBE && tail().y >= mouth.y + 0.25) {
             phase = Phase.DEPLOY;
             exitTick = flightTicks;
+            exitPath = pathLength;
         }
 
         if (tier == MissileTier.T4 && exitTick >= 0 && entityData.get(DATA_BOOSTER)
@@ -181,9 +230,27 @@ public class MissileEntity extends Entity {
             case TUBE, DEPLOY -> 1.0F;
             case MIDCOURSE -> speed < tier.cruiseSpeed ? 1.0F : 0.55F;
             case TERMINAL -> 0.8F;
+            case PURSUIT -> 1.0F;
         });
 
         if (phase != Phase.TUBE && checkEnd(level, tier, prevNose)) return;
+
+        if (interceptor != null) {
+            Interceptor.Verdict verdict = phase == Phase.TUBE ? Interceptor.Verdict.NONE
+                : interceptor.check(level, prevNose, nose(), pathLength - exitPath);
+            if (verdict == Interceptor.Verdict.DETONATE) {
+                finish(level, Outcome.INTERCEPTED, interceptor.detonation());
+            } else if (verdict == Interceptor.Verdict.OUT_OF_RANGE) {
+                finish(level, Outcome.OUT_OF_RANGE, nose());
+            } else if (flightTicks > interceptor.spec.maxFlightTicks()) {
+                finish(level, Outcome.TIMEOUT, nose());
+            } else if (c.y < level.getMinY() - 16 || c.y > level.getMaxY() + 256) {
+                finish(level, Outcome.OUT_OF_WORLD, nose());
+            } else {
+                MissileTracker.telemetry(this);
+            }
+            return;
+        }
 
         if (pathLength > tier.maxRange * 1.3 + 200.0) {
             finish(level, Outcome.FUEL, nose());
@@ -202,6 +269,10 @@ public class MissileEntity extends Entity {
         BlockHitResult hit = level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.ANY, this));
         boolean blocked = hit.getType() != HitResult.Type.MISS;
         Vec3 end = blocked ? hit.getLocation() : to;
+        if (interceptor != null) {
+            if (blocked) finish(level, Outcome.TERRAIN, end);
+            return blocked;
+        }
         Vec3 nearest = closestPoint(from, end, target);
         double d = nearest.distanceTo(target);
         closest = Math.min(closest, d);
@@ -300,13 +371,31 @@ public class MissileEntity extends Entity {
         setXRot((float) Math.toDegrees(-Math.asin(Mth.clamp(dir.y, -1.0, 1.0))));
     }
 
-    /** Ends the flight: a harmless puff at {@code at}, a report, and the entity is removed. */
+    /** Ends the flight: a puff at {@code at}, the warhead if the flight hit something, a report, and the entity is removed. */
     void finish(ServerLevel level, Outcome outcome, Vec3 at) {
         if (finished) return;
         finished = true;
         MissileFx.puff(level, at, tier());
-        MissileTracker.report(this, outcome, at);
+        String blast = detonate(level, outcome, at);
+        if (interceptor != null) interceptor.end();
+        MissileTracker.report(this, outcome, at, blast);
         discard();
+    }
+
+    /** Sets the warhead off for an arrival or a terrain impact; returns the report's description of what happened. */
+    private String detonate(ServerLevel level, Outcome outcome, Vec3 at) {
+        // an air-defence missile detonates only on its proximity fuse; every other ending of it is harmless
+        if (interceptor != null ? outcome != Outcome.INTERCEPTED : outcome != Outcome.ARRIVED && outcome != Outcome.TERRAIN) return "none";
+        if (!level.getGameRules().get(Missiles.EXPLOSIONS)) return "inert";
+        Blast ordered = tier().warhead;
+        // a terrain hit lies on the block face; start the blast in the air cell in front of it
+        Vec3 centre = outcome == Outcome.TERRAIN ? at.subtract(dir.scale(0.05)) : at;
+        long t0 = System.nanoTime();
+        Blast applied = ordered.detonate(level, this, centre);
+        double ms = (System.nanoTime() - t0) / 1.0E6;
+        if (applied == null) return "suppressed";
+        return String.format(Locale.ROOT, "%s%.1f%s%s,%.1fms", applied.equals(ordered) ? "" : "guarded:", applied.power(),
+            applied.breaksBlocks() ? ",blocks" : "", applied.fire() ? ",fire" : "", ms);
     }
 
     public void abort() {

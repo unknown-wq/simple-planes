@@ -10,6 +10,7 @@ import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import xyz.przemyk.simpleplanes.airdefence.Allegiance;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 import java.util.ArrayList;
@@ -400,6 +401,7 @@ public final class AutopilotDispatcher {
         }
         // The hold goes now rather than when the ticket lapses. From here the aircraft is an active
         // autopilot and carries its own bubble.
+        plane.setAllegiance(shuttle.allegiance());
         release(level, shuttle);
         data.putShuttle(shuttle.departed(plane.getUUID(), now));
         progress(level, shuttle, "Shuttle " + shuttle.id() + ": plane #" + plane.getId()
@@ -567,7 +569,8 @@ public final class AutopilotDispatcher {
      * @return null on success, with the shuttle written to {@code data}
      */
     public static @Nullable String create(ServerLevel level, String fieldA, String fieldB,
-                                          int delaySeconds, AircraftType type, @Nullable Player owner) {
+                                          int delaySeconds, AircraftType type, @Nullable Player owner,
+                                          Allegiance allegiance) {
         AutopilotSavedData data = AutopilotSavedData.get(level);
         if (fieldA.equals(fieldB)) {
             return "A shuttle needs two different airfields; \"" + fieldA + "\" is both ends of this one.";
@@ -615,7 +618,7 @@ public final class AutopilotDispatcher {
                 + "/autopilot shuttle stop <id>.";
         }
         data.putShuttle(Shuttle.created(data.nextShuttleId(), fieldA, fieldB, delaySeconds * 20,
-            type, owner == null ? null : owner.getUUID(), level.getGameTime()));
+            type, owner == null ? null : owner.getUUID(), level.getGameTime(), allegiance));
         return null;
     }
 
@@ -667,7 +670,8 @@ public final class AutopilotDispatcher {
         for (Shuttle shuttle : all) {
             lines.add("  shuttle " + shuttle.id() + ": " + shuttle.fieldA() + " <-> " + shuttle.fieldB()
                 + ", " + shuttle.delayTicks() / 20 + "s turnaround, " + shuttle.legs()
-                + (shuttle.legs() == 1 ? " leg flown, " : " legs flown, ") + aircraftOf(level, shuttle));
+                + (shuttle.legs() == 1 ? " leg flown, " : " legs flown, ") + aircraftOf(level, shuttle)
+                + (shuttle.allegiance() == Allegiance.HOSTILE ? ", hostile" : ""));
             lines.add("    " + switch (shuttle.state()) {
                 case WAITING -> "waiting at " + shuttle.from() + ", next departure to " + shuttle.to()
                     + " in " + TowerWatch.clock(Math.max(0, shuttle.nextDeparture() - now))

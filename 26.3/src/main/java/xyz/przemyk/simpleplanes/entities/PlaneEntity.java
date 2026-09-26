@@ -48,6 +48,7 @@ import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
 import org.joml.Vector3f;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.airdefence.Allegiance;
 import xyz.przemyk.simpleplanes.api.BlastGuards;
 import xyz.przemyk.simpleplanes.autopilot.Blast; // autopilot:
 import xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot; // autopilot:
@@ -89,6 +90,8 @@ public class PlaneEntity extends Entity {
     public static final EntityDataAccessor<Boolean> AUTOPILOT_FLYING = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BOOLEAN);
     /** Roll input for an unmanned plane, set by the /aircraft test command. */
     public static final EntityDataAccessor<Byte> TEST_STRAFE = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BYTE);
+    // air defence: friendly or hostile, chosen at spawn; only hostile aircraft are engaged by AD silos.
+    public static final EntityDataAccessor<Byte> ALLEGIANCE = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BYTE);
     public static final int MAX_THROTTLE = 5;
     public Quaternionf Q_Client = new Quaternionf();
     public Quaternionf Q_Prev = new Quaternionf();
@@ -218,6 +221,20 @@ public class PlaneEntity extends Entity {
         pBuilder.define(YAW_RIGHT, (byte) 0);
         pBuilder.define(AUTOPILOT_FLYING, false);
         pBuilder.define(TEST_STRAFE, (byte) 0);
+        pBuilder.define(ALLEGIANCE, (byte) Allegiance.FRIENDLY.ordinal());
+    }
+
+    public Allegiance getAllegiance() {
+        byte b = entityData.get(ALLEGIANCE);
+        return b >= 0 && b < Allegiance.values().length ? Allegiance.values()[b] : Allegiance.FRIENDLY;
+    }
+
+    public void setAllegiance(Allegiance allegiance) {
+        entityData.set(ALLEGIANCE, (byte) allegiance.ordinal());
+    }
+
+    public boolean isHostile() {
+        return getAllegiance() == Allegiance.HOSTILE;
     }
 
     @Override
@@ -532,23 +549,12 @@ public class PlaneEntity extends Entity {
         if (engaged != null && engaged.getPlan() != null) {
             blast = engaged.getPlan().blast();
         }
-        // Extension point. Every blast this mod produces passes through this one line, so this is
-        // the only place a land-claim mod, a protection plugin or a server's own glue has to be
-        // consulted to cover all of them. Guards may weaken the warhead or refuse it outright; with
-        // none registered -- the default, and every installation that has not gone looking for it --
-        // this is one isEmpty() test and the blast is the one that was ordered. Nothing about the
-        // mods that register here is known to this one: see BlastGuard.
-        if (level() instanceof ServerLevel guardLevel) {
-            blast = BlastGuards.filter(guardLevel, this, position(), blast);
-            if (blast == null) {
-                // Suppressed. The aircraft is still destroyed and has already left its smoke; only
-                // the detonation is skipped.
-                return;
-            }
+        // Extension point: Blast#detonate runs the registered BlastGuards (see BlastGuard) and then the
+        // explosion. It is the one path every blast of this mod takes, aircraft and missiles alike.
+        if (level() instanceof ServerLevel serverLevel) {
+            blast.detonate(serverLevel, this, position());
+            return;
         }
-        // The fuller overload, because "does it break blocks" and "does it start fires" are separate
-        // arguments there: the interaction selects the block behaviour (TNT craters and drops, NONE
-        // leaves the world alone and only damages entities) and fire is its own flag.
         level().explode(this, getX(), getY(), getZ(), blast.power(), blast.fire(), blast.interaction());
     }
 
@@ -1322,6 +1328,7 @@ public class PlaneEntity extends Entity {
         entityData.set(HEALTH, input.getIntOr("health", getHealth()));
 
         input.getString("material").ifPresent(this::setMaterial);
+        input.getString(Allegiance.NBT_KEY).ifPresent(name -> setAllegiance(Allegiance.byNameOr(name, getAllegiance())));
 
         deserializeUpgrades(input);
 
@@ -1372,6 +1379,7 @@ public class PlaneEntity extends Entity {
         output.putInt("max_health", entityData.get(MAX_HEALTH));
         output.putFloat("max_speed", entityData.get(MAX_SPEED));
         output.putString("material", entityData.get(MATERIAL));
+        output.putString(Allegiance.NBT_KEY, getAllegiance().getSerializedName());
         writeUpgrades(output);
 
         // autopilot: persist an in-progress route (strike flights deliberately write nothing).

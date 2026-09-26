@@ -8,10 +8,11 @@ import xyz.przemyk.simpleplanes.autopilot.Blast;
 /**
  * A veto or a modifier consulted immediately before an aircraft's warhead is applied to the world.
  *
- * <p>Every blast this mod produces goes through one line — {@code PlaneEntity#explode} — whatever
+ * <p>Every blast this mod produces goes through one line — {@code Blast#detonate} — whatever
  * ordered it: the craftable strike tool, {@code /autopilot strike}, a gunship that ran out of sky,
- * or an ordinary plane a player flew into a hillside. A guard registered here sits on that line and
- * is therefore the complete list of this mod's explosions, with nothing to keep in sync.
+ * an ordinary plane a player flew into a hillside, or a missile arriving from a launch silo. A guard
+ * registered here sits on that line and is therefore the complete list of this mod's explosions,
+ * with nothing to keep in sync.
  *
  * <h2>What a guard may decide</h2>
  * A guard is handed the blast as it currently stands and returns the blast to apply:
@@ -29,8 +30,8 @@ import xyz.przemyk.simpleplanes.autopilot.Blast;
  * </ul>
  *
  * <h2>What a guard is told</h2>
- * Deliberately little, and all of it vanilla: the level, the aircraft (as a bare {@link Entity},
- * because nothing here should need to know what an aircraft is), the position the blast is centred
+ * Deliberately little, and all of it vanilla: the level, the aircraft or missile (as a bare
+ * {@link Entity}, because nothing here should need to know what an aircraft is), the position the blast is centred
  * on, and the blast itself. A guard that wants to know more — who was flying, what the flight plan
  * was — can cast {@code source} and ask; a guard that only cares about <em>where</em> does not have
  * to.
@@ -53,8 +54,8 @@ public interface BlastGuard {
      * guard had abstained.
      *
      * @param level  the server level the blast is about to happen in, never {@code null}.
-     * @param source the aircraft, or {@code null} if the blast has no entity behind it. Never
-     *               assume a type: cast and test.
+     * @param source the aircraft or missile, or {@code null} if the blast has no entity behind it.
+     *               Never assume a type: cast and test.
      * @param at     the centre of the blast, never {@code null}.
      * @param blast  the blast as it stands after every guard registered before this one, never
      *               {@code null}.
