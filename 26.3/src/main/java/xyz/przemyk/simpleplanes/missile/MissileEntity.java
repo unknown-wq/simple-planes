@@ -47,7 +47,7 @@ public class MissileEntity extends Entity {
 
     public enum Phase { TUBE, DEPLOY, MIDCOURSE, TERMINAL }
 
-    public enum Outcome { ARRIVED, TERRAIN, FUEL, TIMEOUT, OUT_OF_WORLD, ABORTED, REMOVED }
+    public enum Outcome { ARRIVED, TERRAIN, FUEL, TIMEOUT, OUT_OF_WORLD, STALLED, ABORTED, REMOVED }
 
     // server state
     private Vec3 target = Vec3.ZERO;
@@ -65,6 +65,7 @@ public class MissileEntity extends Entity {
     private double closest = Double.POSITIVE_INFINITY;
     private double launchRange;
     private int stalls;
+    private int stallRun;
     private long lastTickTime = -1;
     private boolean finished;
     private float lastYaw;
@@ -132,6 +133,7 @@ public class MissileEntity extends Entity {
     private void tickServer(ServerLevel level) {
         MissileTier tier = tier();
         lastTickTime = level.getGameTime();
+        stallRun = 0;
         flightTicks++;
         Vec3 prevNose = nose();
 
@@ -222,7 +224,7 @@ public class MissileEntity extends Entity {
         double hz = target.z - c.z;
         double hd = Math.sqrt(hx * hx + hz * hz);
         double depression = Math.toDegrees(Math.atan2(c.y - target.y, hd));
-        if (hd < 0.5 || depression >= MissileTier.DIVE_ANGLE) {
+        if (hd < 2.0 || depression >= MissileTier.DIVE_ANGLE && lineOfSight(level)) {
             phase = Phase.TERMINAL;
             terminal(tier);
             return;
@@ -236,6 +238,12 @@ public class MissileEntity extends Entity {
         double pr = Math.toRadians(pitch);
         Vec3 desired = new Vec3(ux * Math.cos(pr), Math.sin(pr), uz * Math.cos(pr));
         dir = rotateToward(dir, desired, Math.toRadians(tier.midcourseTurn));
+    }
+
+    /** True if nothing solid lies between the nose and the target (a hit right at the target does not count). */
+    private boolean lineOfSight(ServerLevel level) {
+        BlockHitResult hit = level.clip(new ClipContext(nose(), target, ClipContext.Block.COLLIDER, ClipContext.Fluid.ANY, this));
+        return hit.getType() == HitResult.Type.MISS || hit.getLocation().distanceTo(target) <= MissileTier.ARRIVAL_RADIUS;
     }
 
     /** Pure pursuit of the target from the nose. The turn limit rises as the range closes, so the missile cannot orbit. */
@@ -305,8 +313,10 @@ public class MissileEntity extends Entity {
         if (level() instanceof ServerLevel server) finish(server, Outcome.ABORTED, nose());
     }
 
-    void addStall() {
+    /** Counts a tick the missile missed; returns how many it has missed in a row. */
+    int addStall() {
         stalls++;
+        return ++stallRun;
     }
 
     private void tickClient() {
@@ -360,7 +370,7 @@ public class MissileEntity extends Entity {
             "#%d T%d t=%d %s pos=%.1f,%.1f,%.1f spd=%.2f pitch=%.1f agl=%.1f to_go=%.1f dist=%.1f flown=%.1f fins=%.2f booster=%s stalls=%d",
             getId(), tier().tier, flightTicks, phase.name().toLowerCase(Locale.ROOT), c.x, c.y, c.z, speed,
             -getXRot(), c.y - ground, hd, nose().distanceTo(target), pathLength, entityData.get(DATA_FINS),
-            boosterAttached() ? "on" : "off", stalls);
+            tier() != MissileTier.T4 ? "-" : boosterAttached() ? "on" : "off", stalls);
     }
 
     // ---- vanilla behaviour switched off ----

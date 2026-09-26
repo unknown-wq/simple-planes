@@ -41,11 +41,14 @@ public final class MissileTracker {
     private static final int[] LEAD_TICKS = {10, 20};
     private static final int SILO_TICKET_INTERVAL = 10;
     private static final int MAX_REPORTS = 64;
+    /** A missile that has missed this many ticks in a row is ended where it hangs rather than left frozen. */
+    private static final int MAX_STALL_RUN = 200;
 
     private static final Map<Integer, MissileEntity> ACTIVE = new LinkedHashMap<>();
     private static final Map<ResourceKey<Level>, Set<BlockPos>> SILO_HOLDS = new HashMap<>();
     private static final Deque<Report> REPORTS = new ArrayDeque<>();
     private static int telemetryInterval;
+    private static boolean ticketsEnabled = true;
 
     public record Report(int id, int tier, MissileEntity.Outcome outcome, Vec3 at, Vec3 target, double miss, double closest,
                          int flightTicks, long totalTicks, double pathLength, double launchRange, double maxAltitude,
@@ -72,6 +75,7 @@ public final class MissileTracker {
             SILO_HOLDS.clear();
         });
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            ticketsEnabled = true;
             ACTIVE.clear();
             SILO_HOLDS.clear();
             REPORTS.clear();
@@ -99,6 +103,15 @@ public final class MissileTracker {
 
     public static void setTelemetry(int interval) {
         telemetryInterval = Math.max(0, interval);
+    }
+
+    /** Test switch: with tickets off a missile flies only where something else keeps the ground loaded. */
+    public static void setTicketsEnabled(boolean enabled) {
+        ticketsEnabled = enabled;
+    }
+
+    public static boolean ticketsEnabled() {
+        return ticketsEnabled;
     }
 
     public static int telemetryInterval() {
@@ -148,12 +161,16 @@ public final class MissileTracker {
                 }
                 continue;
             }
-            if (m.lastTickTime() >= 0 && m.lastTickTime() < now) m.addStall();
+            if (m.lastTickTime() >= 0 && m.lastTickTime() < now && m.addStall() > MAX_STALL_RUN) {
+                m.finish(level, MissileEntity.Outcome.STALLED, m.nose());
+                continue;
+            }
             keepLoaded(level, m);
         }
     }
 
     private static void keepLoaded(ServerLevel level, MissileEntity m) {
+        if (!ticketsEnabled) return;
         Vec3 c = m.centre();
         ticket(level, Mth.floor(c.x), Mth.floor(c.z));
         Vec3 v = m.direction().scale(Math.max(m.speed(), m.tier().cruiseSpeed * 0.5));

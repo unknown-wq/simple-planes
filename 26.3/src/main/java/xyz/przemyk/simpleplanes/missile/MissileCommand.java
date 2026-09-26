@@ -67,9 +67,13 @@ public final class MissileCommand {
                 .then(Commands.argument("id", IntegerArgumentType.integer(0)).executes(MissileCommand::abort)));
             root.then(Commands.literal("telemetry")
                 .then(Commands.argument("interval", IntegerArgumentType.integer(0, 1200)).executes(MissileCommand::telemetry)));
+            root.then(Commands.literal("tickets")
+                .then(Commands.argument("enabled", BoolArgumentType.bool()).executes(MissileCommand::tickets)));
             root.then(Commands.literal("hash")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
-                    .then(Commands.argument("to", BlockPosArgument.blockPos()).executes(MissileCommand::hash))));
+                    .then(Commands.argument("to", BlockPosArgument.blockPos())
+                        .executes(c -> hash(c, false))
+                        .then(Commands.literal("census").executes(c -> hash(c, true))))));
 
             dispatcher.register(root);
         });
@@ -163,7 +167,13 @@ public final class MissileCommand {
         return ok(c, interval == 0 ? "Missile telemetry off." : "Missile telemetry every " + interval + " tick(s), to the server log.");
     }
 
-    private static int hash(CommandContext<CommandSourceStack> c) {
+    private static int tickets(CommandContext<CommandSourceStack> c) {
+        boolean enabled = BoolArgumentType.getBool(c, "enabled");
+        MissileTracker.setTicketsEnabled(enabled);
+        return ok(c, enabled ? "Missile chunk tickets on." : "Missile chunk tickets OFF: test use only, missiles will stall outside loaded ground.");
+    }
+
+    private static int hash(CommandContext<CommandSourceStack> c, boolean census) {
         ServerLevel level = c.getSource().getLevel();
         BlockPos a = BlockPosArgument.getBlockPos(c, "from");
         BlockPos b = BlockPosArgument.getBlockPos(c, "to");
@@ -173,6 +183,7 @@ public final class MissileCommand {
         if (volume > MAX_HASH_VOLUME) return fail(c, "Region is " + volume + " blocks; the limit is " + MAX_HASH_VOLUME + ".");
         long h = 0xcbf29ce484222325L;
         long nonAir = 0;
+        java.util.Map<BlockState, Integer> counts = new java.util.HashMap<>();
         BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
         for (int x = min.getX(); x <= max.getX(); x++)
             for (int z = min.getZ(); z <= max.getZ(); z++)
@@ -180,13 +191,20 @@ public final class MissileCommand {
                     BlockState state = level.getBlockState(p.set(x, y, z));
                     int id = Block.getId(state);
                     if (!state.isAir()) nonAir++;
+                    if (census) counts.merge(state, 1, Integer::sum);
                     for (int k = 0; k < 4; k++) {
                         h ^= (id >>> (8 * k)) & 0xFF;
                         h *= 0x100000001b3L;
                     }
                 }
-        return ok(c, String.format(Locale.ROOT, "Region %s .. %s: %d blocks, %d non-air, hash %016x",
+        ok(c, String.format(Locale.ROOT, "Region %s .. %s: %d blocks, %d non-air, hash %016x",
             min.toShortString(), max.toShortString(), volume, nonAir, h));
+        if (census) {
+            counts.entrySet().stream()
+                .sorted(java.util.Map.Entry.<BlockState, Integer>comparingByValue().reversed())
+                .forEach(e -> ok(c, "  " + e.getValue() + " x " + e.getKey()));
+        }
+        return 1;
     }
 
     private static @Nullable LaunchSiloBlockEntity resolve(ServerLevel level, BlockPos pos) {

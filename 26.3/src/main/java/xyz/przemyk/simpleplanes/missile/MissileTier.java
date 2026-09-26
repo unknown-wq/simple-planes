@@ -65,8 +65,8 @@ public enum MissileTier {
     /** Tier 4: ticks after leaving the tube until the booster is dropped. */
     public static final int BOOSTER_BURN_TICKS = 60;
     public static final double ARRIVAL_RADIUS = 1.5;
-    /** Line-of-sight depression at which the missile leaves cruise and dives on the target. */
-    public static final double DIVE_ANGLE = 35.0;
+    /** Line-of-sight depression at which the missile leaves cruise and dives, if the line of sight is clear. */
+    public static final double DIVE_ANGLE = 45.0;
     public static final double MAX_CLIMB = 50.0;
     public static final double MAX_DESCENT = 30.0;
     public static final double TERRAIN_CLEARANCE = 12.0;

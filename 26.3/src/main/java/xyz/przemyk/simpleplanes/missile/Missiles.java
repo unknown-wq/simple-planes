@@ -47,11 +47,11 @@ public final class Missiles {
     }
 
     private static <T extends Block> T registerBlock(String name, java.util.function.Function<BlockBehaviour.Properties, T> factory) {
+        // Opaque on purpose: a see-through shaft lets skylight down it and grass spreads to the dirt below.
         BlockBehaviour.Properties properties = BlockBehaviour.Properties.of()
             .mapColor(MapColor.METAL)
             .strength(5.0F, 1200.0F)
             .sound(SoundType.METAL)
-            .noOcclusion()
             .pushReaction(PushReaction.IMMOVEABLE)
             .setId(ResourceKey.create(Registries.BLOCK, id(name)));
         return Registry.register(BuiltInRegistries.BLOCK, id(name), factory.apply(properties));
