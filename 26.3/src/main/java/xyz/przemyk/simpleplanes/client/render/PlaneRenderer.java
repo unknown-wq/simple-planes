@@ -91,6 +91,7 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
         state.elevator = planeEntity.getPitchUp();
         state.metalSkin = false;
         state.airlinerLogo = 0;
+        state.airlinerHiddenSeat = -1;
         state.medicalLivery = false;
 
         state.upgradeTypes.clear();

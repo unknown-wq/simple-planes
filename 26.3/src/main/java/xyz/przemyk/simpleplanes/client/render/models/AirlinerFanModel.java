@@ -31,20 +31,22 @@ public class AirlinerFanModel extends EntityModel<PlaneRenderState> {
 
         PartDefinition Fans = partdefinition.addOrReplaceChild("Fans", CubeListBuilder.create(), PartPose.offset(0.0F, 24.0F, 0.0F));
 
-        addFan(Fans, "fan_left", 32.0F);
-        addFan(Fans, "fan_right", -32.0F);
+        addFan(Fans, "fan_left", AirlinerMetalModel.ENGINE_X);
+        addFan(Fans, "fan_right", -AirlinerMetalModel.ENGINE_X);
 
         return LayerDefinition.create(meshdefinition, 256, 256);
     }
 
     /** One fan disc, pivoted on the nacelle axis, 2 px behind the front of the intake lip. */
     private static void addFan(PartDefinition parent, String name, float x) {
+        int[] spinner = AirlinerMetalModel.uv("spinner");
+        int[] blade = AirlinerMetalModel.uv("blade");
         PartDefinition fan = parent.addOrReplaceChild(name, CubeListBuilder.create()
-                .texOffs(243, 6).addBox(-1.5F, -1.5F, -2.0F, 3.0F, 3.0F, 3.0F, new CubeDeformation(0.0F)),
-                PartPose.offset(x, -10.0F, -24.0F));
+                .texOffs(spinner[0], spinner[1]).addBox(-1.5F, -1.5F, -2.0F, 3.0F, 3.0F, 3.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(x, AirlinerMetalModel.ENGINE_Y, -26.0F));
         for (int i = 0; i < 4; i++) {
             fan.addOrReplaceChild("blades_" + i, CubeListBuilder.create()
-                    .texOffs(147, 14).addBox(-5.0F, -1.0F, -0.5F, 10.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
+                    .texOffs(blade[0], blade[1]).addBox(-6.0F, -1.0F, -0.5F, 12.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
                     PartPose.offsetAndRotation(0.0F, 0.0F, 0.0F, BLADE_PITCH, 0.0F, i * (float) Math.PI / 4.0F));
         }
     }

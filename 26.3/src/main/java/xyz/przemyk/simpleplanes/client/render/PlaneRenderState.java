@@ -53,6 +53,9 @@ public class PlaneRenderState extends EntityRenderState {
 
     public int airlinerLogo;
 
+    /** Airliner seat whose back and headrest are hidden: the one the first-person camera sits in, or -1. */
+    public int airlinerHiddenSeat = -1;
+
     public boolean medicalLivery;
 
     /** Model-space point the mini helicopter's glass is submitted from (translucent sort order). */
