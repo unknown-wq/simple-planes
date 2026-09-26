@@ -3,11 +3,13 @@ package xyz.przemyk.simpleplanes.autopilot;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * What the aircraft has been told to do. Fully codec-serialisable, so it round-trips through the
@@ -63,8 +65,25 @@ public class FlightPlan {
         Blast.CODEC.optionalFieldOf("blast", Blast.DEFAULT).forGetter(plan -> plan.blast),
         Codec.DOUBLE.optionalFieldOf("cruise_speed", AutopilotConfig.CRUISE_SPEED)
             .forGetter(plan -> plan.cruiseSpeed),
-        Codec.INT.optionalFieldOf("departure_delay", 0).forGetter(plan -> plan.departureDelayTicks)
+        Codec.INT.optionalFieldOf("departure_delay", 0).forGetter(plan -> plan.departureDelayTicks),
+        // Dispatch legs: unregistered landing zones and the order they belong to. Optional.
+        DispatchLeg.CODEC.optionalFieldOf("dispatch").forGetter(plan -> Optional.ofNullable(plan.dispatchLeg()))
     ).apply(instance, FlightPlan::new));
+
+    /** The dispatch part of a plan, grouped so the record codec stays within its field limit. */
+    record DispatchLeg(Optional<Helipad> from, Optional<Helipad> to, boolean provisional, UUID order) {
+        static final Codec<DispatchLeg> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+            Helipad.CODEC.optionalFieldOf("ad_hoc_from").forGetter(DispatchLeg::from),
+            Helipad.CODEC.optionalFieldOf("ad_hoc_to").forGetter(DispatchLeg::to),
+            Codec.BOOL.optionalFieldOf("provisional", false).forGetter(DispatchLeg::provisional),
+            UUIDUtil.STRING_CODEC.fieldOf("order").forGetter(DispatchLeg::order)
+        ).apply(instance, DispatchLeg::new));
+    }
+
+    private @org.jspecify.annotations.Nullable DispatchLeg dispatchLeg() {
+        return orderId == null ? null
+            : new DispatchLeg(Optional.ofNullable(adHocFrom), Optional.ofNullable(adHocTo), provisional, orderId);
+    }
 
     private final Kind kind;
     private final List<BlockPos> waypoints;
@@ -72,7 +91,7 @@ public class FlightPlan {
     private int direction;
     private int legsFlown;
     private final int maxLegs;
-    private final int cruiseAltitude;
+    private int cruiseAltitude;
     private String airfieldName;
     private final BlockPos strikeTarget;
     private final String departureAirfield;
@@ -96,6 +115,29 @@ public class FlightPlan {
      * {@code PlaneAutopilot}'s business.
      */
     private final int departureDelayTicks;
+
+    /** Unregistered departure pad (a landing zone the previous leg ended on), or null. */
+    private @org.jspecify.annotations.Nullable Helipad adHocFrom;
+    /** Unregistered destination pad, or null when {@link #airfieldName} names a registered one. */
+    private @org.jspecify.annotations.Nullable Helipad adHocTo;
+    /** True while {@link #adHocTo} is only the search target: hold near it, do not land. */
+    private boolean provisional;
+    /** Dispatch order this leg belongs to, or null. */
+    private @org.jspecify.annotations.Nullable UUID orderId;
+
+    public FlightPlan(Kind kind, List<BlockPos> waypoints, int index, int direction, int legsFlown, int maxLegs,
+                      int cruiseAltitude, Optional<String> airfieldName, Optional<BlockPos> strikeTarget,
+                      Optional<String> departureAirfield, Blast blast, double cruiseSpeed,
+                      int departureDelayTicks, Optional<DispatchLeg> leg) {
+        this(kind, waypoints, index, direction, legsFlown, maxLegs, cruiseAltitude, airfieldName, strikeTarget,
+            departureAirfield, blast, cruiseSpeed, departureDelayTicks);
+        leg.ifPresent(dispatch -> {
+            this.adHocFrom = dispatch.from().orElse(null);
+            this.adHocTo = dispatch.to().orElse(null);
+            this.provisional = dispatch.provisional();
+            this.orderId = dispatch.order();
+        });
+    }
 
     public FlightPlan(Kind kind, List<BlockPos> waypoints, int index, int direction, int legsFlown, int maxLegs,
                       int cruiseAltitude, Optional<String> airfieldName, Optional<BlockPos> strikeTarget,
@@ -174,6 +216,55 @@ public class FlightPlan {
         return new FlightPlan(Kind.HELI, List.of(destination), 0, 1, 0, 1, cruiseAltitude,
             Optional.ofNullable(destinationPad), Optional.empty(), Optional.ofNullable(departurePad),
             Blast.DEFAULT, cruiseSpeed, departureDelayTicks);
+    }
+
+    /**
+     * One dispatch leg between two pads, either of which may be an unregistered landing zone.
+     *
+     * @param from registered departure pad name, or null
+     * @param adHocFrom unregistered departure pad, or null
+     * @param to registered destination pad name, or null
+     * @param adHocTo unregistered destination (or search target while provisional), or null
+     */
+    public static FlightPlan dispatchLeg(@org.jspecify.annotations.Nullable String from,
+                                         @org.jspecify.annotations.Nullable Helipad adHocFrom,
+                                         @org.jspecify.annotations.Nullable String to,
+                                         @org.jspecify.annotations.Nullable Helipad adHocTo,
+                                         boolean provisional, int cruiseAltitude, double cruiseSpeed,
+                                         UUID orderId) {
+        BlockPos aim = adHocTo != null ? adHocTo.centre() : BlockPos.ZERO;
+        return new FlightPlan(Kind.HELI, List.of(aim), 0, 1, 0, 1, cruiseAltitude,
+            Optional.ofNullable(to), Optional.empty(), Optional.ofNullable(from), Blast.DEFAULT,
+            cruiseSpeed, 0, Optional.of(new DispatchLeg(Optional.ofNullable(adHocFrom),
+                Optional.ofNullable(adHocTo), provisional, orderId)));
+    }
+
+    public @org.jspecify.annotations.Nullable Helipad adHocFrom() {
+        return adHocFrom;
+    }
+
+    public @org.jspecify.annotations.Nullable Helipad adHocTo() {
+        return adHocTo;
+    }
+
+    public boolean provisional() {
+        return provisional;
+    }
+
+    public @org.jspecify.annotations.Nullable UUID orderId() {
+        return orderId;
+    }
+
+    public void setCruiseAltitude(int cruiseAltitude) {
+        this.cruiseAltitude = cruiseAltitude;
+    }
+
+    /** Re-aims a dispatch leg; the plan is what a restart resumes from. */
+    public void retarget(@org.jspecify.annotations.Nullable String to,
+                         @org.jspecify.annotations.Nullable Helipad adHocTo, boolean provisional) {
+        this.airfieldName = to;
+        this.adHocTo = adHocTo;
+        this.provisional = provisional;
     }
 
     /** Ticks to wait on the parking spot before asking for the runway; 0 for an immediate departure. */
@@ -308,8 +399,10 @@ public class FlightPlan {
                 + ", blast " + blast.describe();
         }
         if (kind == Kind.HELI) {
-            return (departureAirfield == null ? "inbound" : "helipad " + departureAirfield)
-                + " -> " + (airfieldName == null ? "?" : airfieldName)
+            String from = adHocFrom != null ? adHocFrom.name() : departureAirfield;
+            String to = adHocTo != null ? adHocTo.name() + (provisional ? " (searching)" : "") : airfieldName;
+            return (from == null ? "inbound" : "helipad " + from)
+                + " -> " + (to == null ? "?" : to)
                 + " alt " + cruiseAltitude + String.format(", cruise %.2f", cruiseSpeed)
                 + (departureDelayTicks > 0 ? ", delay " + departureDelayTicks / 20 + "s" : "");
         }
