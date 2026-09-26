@@ -14,9 +14,10 @@ import static java.util.Map.entry;
 /**
  * Mini helicopter, air-ambulance material layer: the same {@link MiniHeliAirframe} geometry as
  * {@link MiniHeliModel}, with every cube's UV net laid out once in {@link #TEXTURE} (128x64) instead of tiling
- * a block texture. The livery is white with a red cheat line, high-visibility yellow-green bands and an
- * invented medical mark (a white cross on a green square) on both sides of the rear pod and on the belly.
- * Pair it with the unchanged {@link MiniHeliMetalModel} and {@link MiniHeliRotorModel}.
+ * a block texture. The livery is white, body, pillars and roof alike, with a red cheat line, high-visibility
+ * yellow-green bands and an invented medical mark (a white cross on a green square) on both sides of the rear pod,
+ * on the roof and on the belly. Pair it with the unchanged {@link MiniHeliMetalModel}, {@link MiniHeliRotorModel}
+ * and {@link MiniHeliGlassModel}.
  *
  * <p>Default render type ({@code entityCutout}), like {@link MiniHeliModel}. The texOffs table is generated
  * with the texture.
@@ -28,13 +29,17 @@ public class MiniHeliMedicalModel extends EntityModel<PlaneRenderState> {
 
     private static final Map<String, int[]> SKIN_UV = Map.ofEntries(
             entry("hull", new int[]{0, 0}),
-            entry("nose", new int[]{72, 17}),
-            entry("pod", new int[]{72, 0}),
-            entry("boom", new int[]{42, 0}),
+            entry("nose", new int[]{0, 30}),
+            entry("chin", new int[]{98, 0}),
+            entry("roof", new int[]{56, 28}),
+            entry("a_pillar", new int[]{14, 0}),
+            entry("b_pillar", new int[]{124, 0}),
+            entry("pod", new int[]{50, 0}),
+            entry("boom", new int[]{68, 0}),
             entry("fin_lo", new int[]{0, 0}),
-            entry("fin_hi", new int[]{50, 0}),
-            entry("ventral", new int[]{56, 4}),
-            entry("stab", new int[]{104, 0}));
+            entry("fin_hi", new int[]{82, 0}),
+            entry("ventral", new int[]{116, 9}),
+            entry("stab", new int[]{98, 9}));
 
     public MiniHeliMedicalModel(ModelPart root) {
         super(root);
