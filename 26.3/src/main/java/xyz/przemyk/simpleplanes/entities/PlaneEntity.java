@@ -1422,6 +1422,10 @@ public class PlaneEntity extends Entity {
             autopilot.reportOutcome(this);
             autopilot.stop(this);
         }
+        if (reason == RemovalReason.KILLED || reason == RemovalReason.DISCARDED
+            || reason == RemovalReason.CHANGED_DIMENSION) {
+            xyz.przemyk.simpleplanes.autopilot.DispatchService.aircraftRemoved(this, reason);
+        }
         super.remove(reason);
     }
 

@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "p p",
+    "isi",
+    "p p"
+  ],
+  "key": {
+    "p": "simpleplanes:propeller",
+    "i": "minecraft:iron_ingot",
+    "s": "minecraft:spyglass"
+  },
+  "result": {
+    "id": "simpleplanes:patrol_drone"
+  }
+}

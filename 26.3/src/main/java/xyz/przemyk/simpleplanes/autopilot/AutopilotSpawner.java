@@ -11,6 +11,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.airdefence.Allegiance;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
@@ -113,6 +114,8 @@ public final class AutopilotSpawner {
         plane.setThrottle(BoosterUpgrade.MAX_THROTTLE);
         Vec3 run = targetVec.subtract(spawn.x, altitude, spawn.z).normalize();
         plane.setDeltaMovement(run.scale(STRIKE_LAUNCH_SPEED));
+        // Every strike aircraft is hostile, from the tool and from the command alike.
+        plane.setAllegiance(Allegiance.HOSTILE);
 
         addToWorld(level, plane);
 
@@ -410,6 +413,15 @@ public final class AutopilotSpawner {
     public static @Nullable PlaneEntity launchHelicopterSortie(ServerLevel level, Helipad departure,
                                                                Helipad destination, @Nullable Player owner,
                                                                double cruiseSpeed, int departureDelayTicks) {
+        return launchHelicopterSortie(level, departure, destination, owner, cruiseSpeed, departureDelayTicks,
+            AircraftType.HELICOPTER);
+    }
+
+    /** {@link #launchHelicopterSortie} with the rotorcraft airframe named. */
+    public static @Nullable PlaneEntity launchHelicopterSortie(ServerLevel level, Helipad departure,
+                                                               Helipad destination, @Nullable Player owner,
+                                                               double cruiseSpeed, int departureDelayTicks,
+                                                               AircraftType type) {
         HelipadReport.load(level, departure);
         HelipadReport.load(level, destination);
 
@@ -421,17 +433,17 @@ public final class AutopilotSpawner {
         // or nothing. Reuse here never moves anything: the machine is claimed off the square it is
         // already standing on and set down again facing the new destination.
         Departing departing = departing(level, departure.name(), List.of(departure.centre()),
-            AircraftType.HELICOPTER, spawn, heading, owner, null);
+            type, spawn, heading, owner, null);
         if (departing == null) {
             return null;
         }
         PlaneEntity plane = departing.plane();
-        fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
+        fitRotorcraft(plane);
         plane.setDeltaMovement(Vec3.ZERO);
         plane.setThrottle(0);
         departing.enterWorld(level);
 
-        int cruiseAltitude = Helipad.cruiseAltitude(level, departure, destination);
+        int cruiseAltitude = RotorcraftProfile.of(plane).cruiseAltitude(level, departure, destination);
         PlaneAutopilot autopilot = new PlaneAutopilot();
         plane.setAutopilot(autopilot);
         autopilot.start(plane, FlightPlan.heliSortie(destination.centre(), cruiseAltitude,
@@ -447,17 +459,25 @@ public final class AutopilotSpawner {
     public static @Nullable PlaneEntity launchHelicopterInbound(ServerLevel level, Vec3 from,
                                                                 Helipad destination, @Nullable Player owner,
                                                                 double cruiseSpeed) {
+        return launchHelicopterInbound(level, from, destination, owner, cruiseSpeed, AircraftType.HELICOPTER);
+    }
+
+    /** {@link #launchHelicopterInbound} with the rotorcraft airframe named. */
+    public static @Nullable PlaneEntity launchHelicopterInbound(ServerLevel level, Vec3 from,
+                                                                Helipad destination, @Nullable Player owner,
+                                                                double cruiseSpeed, AircraftType type) {
         HelipadReport.load(level, destination);
-        int cruiseAltitude = Math.max((int) from.y,
-            Helipad.cruiseAltitude(level, destination, destination));
+        RotorcraftProfile profile = RotorcraftProfile.of(type);
+        int cruiseAltitude = profile.capAltitude(Math.max((int) from.y,
+            profile.cruiseAltitude(level, destination, destination)));
         Vec3 start = new Vec3(from.x, cruiseAltitude, from.z);
         double heading = AutopilotMath.headingTo(start, destination.touchdown());
 
-        PlaneEntity plane = create(level, start.x, start.y, start.z, heading, AircraftType.HELICOPTER);
+        PlaneEntity plane = create(level, start.x, start.y, start.z, heading, type);
         if (plane == null) {
             return null;
         }
-        fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
+        fitRotorcraft(plane);
         // Launched already making way, like every other airborne launch here: a machine dropped in
         // with no speed spends its first seconds accelerating, which on a rotorcraft it does by
         // pitching its nose down and descending.
@@ -465,7 +485,7 @@ public final class AutopilotSpawner {
         if (run.lengthSqr() > 1.0E-6) {
             plane.setDeltaMovement(run.normalize().scale(cruiseSpeed).multiply(1, 0, 1));
         }
-        plane.setThrottle(BoosterUpgrade.MAX_THROTTLE);
+        plane.setThrottle(profile.boosted() ? BoosterUpgrade.MAX_THROTTLE : PlaneEntity.MAX_THROTTLE);
         addToWorld(level, plane);
 
         PlaneAutopilot autopilot = new PlaneAutopilot();
@@ -473,6 +493,16 @@ public final class AutopilotSpawner {
         autopilot.start(plane, FlightPlan.heliSortie(destination.centre(), cruiseAltitude,
             destination.name(), null, cruiseSpeed, 0), true, true, owner);
         return plane;
+    }
+
+    /**
+     * The big helicopter gets a booster like every autopilot aircraft; the mini helicopter does not,
+     * because a booster doubles its collective and removes the ceiling its airframe is built around.
+     */
+    static void fitRotorcraft(PlaneEntity plane) {
+        if (RotorcraftProfile.of(plane).boosted()) {
+            fitBooster(plane, AutopilotConfig.ROUTE_MAX_SPEED);
+        }
     }
 
     /** Cruise altitude for a sortie: clear of the terrain at both fields and everything between. */
@@ -669,7 +699,7 @@ public final class AutopilotSpawner {
             // "Helicopter" or "Plane", the same two words every other report about an aircraft
             // uses, so a reader does not have to work out which kind of field this was.
             AutopilotFeedback.progress(owner,
-                (type == AircraftType.HELICOPTER ? "Helicopter #" : "Plane #") + plane.getId()
+                (type.isRotorcraft() ? "Helicopter #" : "Plane #") + plane.getId()
                     + " taken from stand " + claimed.stand().toShortString() + " at " + field
                     + " and re-tasked; no new airframe built.");
             return new Departing(plane, true);

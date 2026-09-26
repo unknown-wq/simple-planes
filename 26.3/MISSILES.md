@@ -428,7 +428,8 @@ It is chosen when the aircraft is spawned:
 |---|---|
 | `/summon` | `/summon simpleplanes:plane ~ ~ ~ {allegiance:"hostile"}` (any aircraft type; case-insensitive) |
 | Plane item | The item's entity tag: `/give @s simpleplanes:plane[simpleplanes:entity_tag={allegiance:"hostile"}]`, or `/airdefence item hostile` on the plane item in hand. A hostile item shows a red **Hostile** line in its tooltip; the placed aircraft is hostile |
-| Autopilot | A trailing `hostile` on `/autopilot strike`, `route`, `flight`, `inbound`, `heliflight`, `heliinbound` and `shuttle add`, at every point where the command may end: `/autopilot route 0 -19 0 600 -19 0 1.2 type cargo hostile` |
+| Strike | Always hostile: every aircraft from the strike tool and from `/autopilot strike` (drones included) is spawned hostile. A trailing `hostile` on `/autopilot strike` is still accepted and changes nothing |
+| Autopilot | A trailing `hostile` on `route`, `flight`, `inbound`, `heliflight`, `heliinbound` and `shuttle add`, at every point where the command may end: `/autopilot route 0 -19 0 600 -19 0 1.2 type cargo hostile` |
 | Dispatcher (shuttles) | `/autopilot shuttle add "a" "b" 30 hostile` stores the allegiance in the shuttle record (`allegiance` field, default friendly) and applies it to the aircraft of every leg |
 | Gunship | `/gunship launch <at> ... hostile` |
 | Changing it later | `/airdefence allegiance <targets> friendly\|hostile` (operators only) |
@@ -802,7 +803,7 @@ Outside `/missile`:
 
 | Command | Example |
 |---|---|
-| `/autopilot strike <target> [distance] [bearing] [blast] [blocks] [fire] [hostile]` | `/autopilot strike 0 -19 0 800 90 hostile` |
+| `/autopilot strike <target> [distance] [bearing] [blast] [blocks] [fire] [hostile]` | `/autopilot strike 0 -19 0 800 90` (always hostile; the keyword is accepted and changes nothing) |
 | `/autopilot route <from> <to> [speed] [type <t>] [hostile]` | `/autopilot route 0 -19 0 600 -19 0 2.8 hostile` |
 | `/autopilot flight <from> <to> [speed] [delay <s>] [type <t>] [hostile]` | `/autopilot flight "a" "b" type cargo hostile` |
 | `/autopilot inbound <from> <airfield> [speed] [type <t>] [hostile]` | `/autopilot inbound 2000 60 0 "a" hostile` |
