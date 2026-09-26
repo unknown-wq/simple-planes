@@ -3205,6 +3205,34 @@ chunk for the whole turnaround, so the normal departure walks no field at all.
 
 ---
 
+## 9a. The airspace snapshot for maps
+
+Airfields, helipads, shuttles and autopilot flights are exposed to client-side map mods. The same payload also
+carries missile silos. It is read-only. Launching from a map is covered in `MISSILES.md` §8, which also has the
+payload table and the client API (`xyz.przemyk.simpleplanes.api.map.AviationMap`).
+
+A client asks with `simpleplanes:aviation_request`, at most once every 500 ms. The server answers with
+`simpleplanes:aviation_snapshot`, built by `AviationService.snapshot` for the player's dimension. Everything is cut
+to 12000 blocks horizontally around the player and sorted by distance.
+
+| List | Source | Cap | Per entry |
+|---|---|---|---|
+| Airfields | `AutopilotSavedData.airfieldList()` | 128 | name, both thresholds, width, both runway designators, `usable` (`AirfieldBrowser.isUsable`) |
+| Helipads | `AutopilotSavedData.helipadList()` | 128 | name, centre, radius |
+| Routes | `AutopilotSavedData.shuttles()`, when either field is in range | 128 | shuttle id, both field names and centres, state, aircraft type, hostile, legs flown, note (the last error) |
+| Flights | `AutopilotRegistry.active()` with a flight plan, in this dimension | 64 | entity id, aircraft type, hostile, position, plan kind, autopilot mode, destination (last waypoint or strike target) and field name |
+
+It adds nothing to the autopilot. It reads the saved data and the in-memory registry that `/autopilot airfields`,
+`/autopilot helipads`, `/autopilot shuttle list` and `/autopilot tower` already use. Two consequences follow:
+
+- A flight whose aircraft is not in `AutopilotRegistry` is not listed. This includes a sortie after a restart
+  (§10) until its chunk loads.
+- Positions are as recent as the last snapshot. The world map polls every 2 seconds, so aircraft move in steps.
+
+`/aviation snapshot` prints the same picture in chat.
+
+---
+
 ## 10. Limitations and what is not implemented
 
 * **Helicopters fly pad to pad only.** `/autopilot heliflight` and `/autopilot heliinbound` are the
