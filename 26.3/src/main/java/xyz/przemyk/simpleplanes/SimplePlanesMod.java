@@ -16,6 +16,8 @@ import xyz.przemyk.simpleplanes.commands.AircraftCommand;
 import xyz.przemyk.simpleplanes.commands.AirlinerCommand;
 import xyz.przemyk.simpleplanes.commands.AirshipCommand;
 import xyz.przemyk.simpleplanes.crane.CraneCommand;
+import xyz.przemyk.simpleplanes.drone.DroneCommand;
+import xyz.przemyk.simpleplanes.drone.DroneRegistry;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
 import xyz.przemyk.simpleplanes.missile.Missiles;
 import xyz.przemyk.simpleplanes.airdefence.AirDefence;
@@ -89,6 +91,9 @@ public class SimplePlanesMod implements ModInitializer {
         AirlinerCommand.register();
         AirshipCommand.register();
         CraneCommand.register();
+        // patrol drones: roster and chunk tickets, /drone; api.drone.PatrolDrones for other mods.
+        DroneRegistry.init();
+        DroneCommand.register();
         Missiles.init();
         AirDefence.init();
         // aviation map: silo index, snapshot and launch payloads for a world map mod, /aviation.
