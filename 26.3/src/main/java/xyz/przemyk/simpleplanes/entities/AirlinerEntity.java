@@ -41,6 +41,7 @@ import java.util.UUID;
 /**
  * 22-seat mini airliner: heavy, slow to turn, long take-off run, nose clamped on the ground below the
  * tail-strike angle. Numbers: design/DESIGN.md section 4; seats, skin and logos: AIRLINER-MODEL.md.
+ * {@link RegionalAirlinerEntity} is the narrow size: everything here is shared, driven by the {@link AirlinerLayout}.
  *
  * <p>Seats are assigned, not implied by the passenger order: each seat holds the id of its rider in synched
  * data, so server and client place every rider in the same seat. A player boards the seat nearest to where
@@ -52,7 +53,7 @@ public class AirlinerEntity extends PlaneEntity {
     public static final int LOGO_COUNT = 6;
     public static final EntityDataAccessor<Integer> LOGO = SynchedEntityData.defineId(AirlinerEntity.class, EntityDataSerializers.INT);
     @SuppressWarnings("unchecked")
-    private static final EntityDataAccessor<Integer>[] SEATS = new EntityDataAccessor[AirlinerSeats.COUNT];
+    private static final EntityDataAccessor<Integer>[] SEATS = new EntityDataAccessor[AirlinerLayout.MAX_SEATS];
     public static final TagKey<Block> METAL_SKIN_TAG = TagKey.create(Registries.BLOCK,
         Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner_metal_skin"));
 
@@ -62,13 +63,8 @@ public class AirlinerEntity extends PlaneEntity {
         }
     }
 
-    /** Entity z (blocks) of each {@link AirlinerPartEntity}, nose to tail. */
-    public static final float[] PART_STATIONS = {4.5F, 1.5F, -1.5F, -4.5F};
-
     private static final String THROTTLE_KEY = "throttle";
     private static final String SEATS_KEY = "Seats";
-    /** The fuselage as a box in the entity frame, blocks: half width, belly, crown, tail end, nose tip. */
-    private static final float HULL_X = 1.8125F, HULL_Y0 = 0.8125F, HULL_Y1 = 3.1875F, HULL_Z0 = -5.625F, HULL_Z1 = 6.0625F;
     /** A client's hit location further than this from the eye ray's hit on the hull is used as it is. */
     private static final float RAY_TRUST = 2.0F;
 
@@ -76,14 +72,21 @@ public class AirlinerEntity extends PlaneEntity {
     /** Keel end touches at 14.5 deg nose-up. */
     public static final float GROUND_PITCH_LIMIT = 12.0f;
 
-    private final AirlinerPartEntity[] parts = new AirlinerPartEntity[PART_STATIONS.length];
+    private final AirlinerLayout layout;
+    private final AirlinerPartEntity[] parts;
     /** Seats read from the save, by rider, until the rider is back aboard. */
     private final Map<UUID, Integer> savedSeats = new HashMap<>();
     private @Nullable UUID boardingPlayer;
     private int boardingSeat = -1;
 
     public AirlinerEntity(EntityType<? extends AirlinerEntity> entityType, Level level) {
+        this(entityType, level, AirlinerLayout.WIDE);
+    }
+
+    protected AirlinerEntity(EntityType<? extends AirlinerEntity> entityType, Level level, AirlinerLayout layout) {
         super(entityType, level);
+        this.layout = layout;
+        this.parts = new AirlinerPartEntity[layout.partCount()];
         setMaxSpeed(MAX_SPEED_DATA);
         // Rolled before the spawn packet; a saved or item Logo overrides it in readAdditionalSaveData.
         if (!level.isClientSide()) {
@@ -155,6 +158,15 @@ public class AirlinerEntity extends PlaneEntity {
         entityData.set(LOGO, logo);
     }
 
+    public AirlinerLayout layout() {
+        return layout;
+    }
+
+    /** The hitbox entity type, sized to the fuselage. */
+    protected EntityType<AirlinerPartEntity> partType() {
+        return SimplePlanesEntities.AIRLINER_PART.get();
+    }
+
     public boolean hasMetalSkin() {
         return getMaterial().builtInRegistryHolder().is(METAL_SKIN_TAG);
     }
@@ -175,7 +187,7 @@ public class AirlinerEntity extends PlaneEntity {
         for (int i = 0; i < parts.length; i++) {
             AirlinerPartEntity part = parts[i];
             if (part == null || part.isRemoved() || part.level() != level()) {
-                part = SimplePlanesEntities.AIRLINER_PART.get().create(level(), EntitySpawnReason.EVENT);
+                part = partType().create(level(), EntitySpawnReason.EVENT);
                 if (part == null) {
                     return;
                 }
@@ -200,7 +212,7 @@ public class AirlinerEntity extends PlaneEntity {
 
     /** Where hitbox {@code station} stands: on the fuselage axis, rotated with the airliner. */
     public Vec3 partPosition(int station) {
-        Vector3f p = new Vector3f(0, 0, PART_STATIONS[station]);
+        Vector3f p = new Vector3f(0, 0, layout.partStation(station));
         p = level().isClientSide() ? transformPos(p) : transformPosPhysics(p);
         return position().add(p.x(), p.y(), p.z());
     }
@@ -214,7 +226,7 @@ public class AirlinerEntity extends PlaneEntity {
         for (ValueInput seat : input.childrenListOrEmpty(SEATS_KEY)) {
             int index = seat.getIntOr("Seat", -1);
             seat.read("UUID", UUIDUtil.CODEC).ifPresent(uuid -> {
-                if (index >= 0 && index < AirlinerSeats.COUNT) {
+                if (index >= 0 && index < layout.count()) {
                     savedSeats.put(uuid, index);
                 }
             });
@@ -253,7 +265,7 @@ public class AirlinerEntity extends PlaneEntity {
 
     // ---- seats ----
 
-    /** Seat of a passenger, 0 (captain) to 21, or -1. */
+    /** Seat of a passenger, 0 (captain) to {@code layout().count() - 1}, or -1. */
     public int seatOf(Entity passenger) {
         int id = passenger.getId();
         for (int i = 0; i < SEATS.length; i++) {
@@ -284,7 +296,7 @@ public class AirlinerEntity extends PlaneEntity {
 
     /** Players may take any seat; anyone else only the cabin. */
     private static boolean mayTake(Entity passenger, int seat) {
-        return passenger instanceof Player || !AirlinerSeats.isCockpit(seat);
+        return passenger instanceof Player || !AirlinerLayout.isCockpit(seat);
     }
 
     /**
@@ -292,17 +304,17 @@ public class AirlinerEntity extends PlaneEntity {
      * clicking the cockpit or the nose while it is free, otherwise the nearest free seat the passenger may take.
      */
     public int chooseSeat(boolean player, float x, float z) {
-        if (player && z >= AirlinerSeats.COCKPIT_Z && isSeatFree(AirlinerSeats.PILOT)) {
-            return AirlinerSeats.PILOT;
+        if (player && z >= layout.cockpitZ() && isSeatFree(AirlinerLayout.PILOT)) {
+            return AirlinerLayout.PILOT;
         }
         int best = -1;
         float bestDistance = Float.MAX_VALUE;
-        for (int seat = 0; seat < AirlinerSeats.COUNT; seat++) {
-            if (!(player || !AirlinerSeats.isCockpit(seat)) || !isSeatFree(seat)) {
+        for (int seat = 0; seat < layout.count(); seat++) {
+            if (!(player || !AirlinerLayout.isCockpit(seat)) || !isSeatFree(seat)) {
                 continue;
             }
-            float dx = x - AirlinerSeats.x(seat);
-            float dz = z - AirlinerSeats.z(seat);
+            float dx = x - layout.x(seat);
+            float dz = z - layout.z(seat);
             float distance = dx * dx + dz * dz;
             if (distance < bestDistance) {
                 bestDistance = distance;
@@ -314,15 +326,15 @@ public class AirlinerEntity extends PlaneEntity {
 
     /** Without a click: a player takes the captain's seat if it is free, anyone else the front-most free cabin seat. */
     private int defaultSeat(Entity passenger) {
-        if (passenger instanceof Player && isSeatFree(AirlinerSeats.PILOT)) {
-            return AirlinerSeats.PILOT;
+        if (passenger instanceof Player && isSeatFree(AirlinerLayout.PILOT)) {
+            return AirlinerLayout.PILOT;
         }
-        for (int seat = AirlinerSeats.FIRST_CABIN_SEAT; seat < AirlinerSeats.COUNT; seat++) {
+        for (int seat = AirlinerLayout.FIRST_CABIN_SEAT; seat < layout.count(); seat++) {
             if (isSeatFree(seat)) {
                 return seat;
             }
         }
-        return passenger instanceof Player && isSeatFree(AirlinerSeats.FIRST_OFFICER) ? AirlinerSeats.FIRST_OFFICER : -1;
+        return passenger instanceof Player && isSeatFree(AirlinerLayout.FIRST_OFFICER) ? AirlinerLayout.FIRST_OFFICER : -1;
     }
 
     @Override
@@ -330,7 +342,7 @@ public class AirlinerEntity extends PlaneEntity {
         if (passenger instanceof PlaneEntity) {
             return false;
         }
-        for (int seat = 0; seat < AirlinerSeats.COUNT; seat++) {
+        for (int seat = 0; seat < layout.count(); seat++) {
             if (mayTake(passenger, seat) && isSeatFree(seat)) {
                 return true;
             }
@@ -381,7 +393,7 @@ public class AirlinerEntity extends PlaneEntity {
         if (isAutopilotFlying()) {
             return null;
         }
-        return occupant(AirlinerSeats.PILOT) instanceof Player pilot ? pilot : null;
+        return occupant(AirlinerLayout.PILOT) instanceof Player pilot ? pilot : null;
     }
 
     @Override
@@ -389,7 +401,7 @@ public class AirlinerEntity extends PlaneEntity {
         positionRiderGeneric(passenger);
         int seat = seatOf(passenger);
         if (seat >= 0) {
-            Vector3f pos = new Vector3f(AirlinerSeats.x(seat), AirlinerSeats.y(seat), AirlinerSeats.z(seat));
+            Vector3f pos = new Vector3f(layout.x(seat), AirlinerLayout.y(seat), layout.z(seat));
             // Server: Q_Client is stale without a pilot aboard.
             pos = level().isClientSide() ? transformPos(pos) : transformPosPhysics(pos);
             moveFunction.accept(passenger, getX() + pos.x(), getY() + pos.y(), getZ() + pos.z());
@@ -398,7 +410,7 @@ public class AirlinerEntity extends PlaneEntity {
 
     @Override
     public float getPassengersRidingOffset() {
-        return AirlinerSeats.CABIN_Y;
+        return AirlinerLayout.CABIN_Y;
     }
 
     // ---- boarding by click ----
@@ -459,9 +471,9 @@ public class AirlinerEntity extends PlaneEntity {
     }
 
     /** Distance along the ray to the hull box, or -1. */
-    private static float rayToHull(Vector3f o, Vector3f d) {
-        float[] min = {-HULL_X, HULL_Y0, HULL_Z0};
-        float[] max = {HULL_X, HULL_Y1, HULL_Z1};
+    private float rayToHull(Vector3f o, Vector3f d) {
+        float[] min = {-layout.hullHalfWidth(), AirlinerLayout.HULL_Y0, -layout.hullTail()};
+        float[] max = {layout.hullHalfWidth(), AirlinerLayout.HULL_Y1, AirlinerLayout.HULL_NOSE};
         float[] origin = {o.x(), o.y(), o.z()};
         float[] dir = {d.x(), d.y(), d.z()};
         float near = 0, far = Float.MAX_VALUE;

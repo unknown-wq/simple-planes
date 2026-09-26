@@ -13,11 +13,11 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import org.joml.Quaternionf;
 import xyz.przemyk.simpleplanes.entities.AirlinerPartEntity;
-import xyz.przemyk.simpleplanes.entities.AirlinerSeats;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
@@ -34,8 +34,9 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * {@code /airliner} test aids, permission 2: {@code status}, {@code board <id>}, {@code logo <id> <0..5>},
- * {@code click <id> <x> <y> <z> [player]}. Every line also goes to the log at INFO. See AIRLINER-MODEL.md.
+ * {@code /airliner} test aids for both sizes (mini and regional airliner), permission 2: {@code status},
+ * {@code board <id>}, {@code logo <id> <0..5>}, {@code click <id> <x> <y> <z> [player]}. Every line also goes to
+ * the log at INFO. See AIRLINER-MODEL.md.
  */
 public final class AirlinerCommand {
 
@@ -99,7 +100,7 @@ public final class AirlinerCommand {
             if (villager.startRiding(airliner)) {
                 boarded++;
                 report(context.getSource(), String.format(Locale.ROOT, "Airliner #%d: villager #%d boarded, seat %d",
-                    airliner.getId(), villager.getId(), airliner.seatOf(villager)) + " (" + seatName(airliner.seatOf(villager)) + ")");
+                    airliner.getId(), villager.getId(), airliner.seatOf(villager)) + " (" + airliner.layout().seatName(airliner.seatOf(villager)) + ")");
             } else {
                 report(context.getSource(), String.format(Locale.ROOT, "Airliner #%d: villager #%d refused, no free passenger seat",
                     airliner.getId(), villager.getId()));
@@ -135,7 +136,7 @@ public final class AirlinerCommand {
         if (!asPlayer) {
             int seat = airliner.chooseSeat(true, local.x(), local.z());
             report(context.getSource(), String.format(Locale.ROOT, "Airliner #%d: a player clicking %.2f, %.2f, %.2f boards seat %d (%s)",
-                airliner.getId(), local.x(), local.y(), local.z(), seat, seatName(seat)));
+                airliner.getId(), local.x(), local.y(), local.z(), seat, airliner.layout().seatName(seat)));
             return seat >= 0 ? 1 : 0;
         }
         ServerPlayer player = EntityArgument.getPlayer(context, "player");
@@ -144,22 +145,8 @@ public final class AirlinerCommand {
         int seat = player.getVehicle() == airliner ? airliner.seatOf(player) : -1;
         report(context.getSource(), String.format(Locale.ROOT, "Airliner #%d: %s clicked %.2f, %.2f, %.2f -> %s, seat %d (%s), controlling=%s",
             airliner.getId(), player.getScoreboardName(), local.x(), local.y(), local.z(), result.getClass().getSimpleName(), seat,
-            seatName(seat), airliner.getControllingPassenger() == player));
+            airliner.layout().seatName(seat), airliner.getControllingPassenger() == player));
         return seat >= 0 ? 1 : 0;
-    }
-
-    private static String seatName(int seat) {
-        if (seat < 0) {
-            return "none";
-        }
-        if (seat == AirlinerSeats.PILOT) {
-            return "captain";
-        }
-        if (seat == AirlinerSeats.FIRST_OFFICER) {
-            return "first officer";
-        }
-        int cabin = seat - AirlinerSeats.FIRST_CABIN_SEAT;
-        return "row " + (cabin / 4 + 1) + (char) ('A' + cabin % 4);
     }
 
     private static String statusLine(AirlinerEntity airliner) {
@@ -173,12 +160,12 @@ public final class AirlinerCommand {
             seats.append(seats.isEmpty() ? "" : ",").append(airliner.seatOf(passenger))
                 .append(String.format(Locale.ROOT, "@%.2f/%.2f", l.x(), l.z()));
         }
-        long parts = airliner.level().getEntitiesOfClass(AirlinerPartEntity.class, airliner.getBoundingBox().inflate(8),
+        long parts = airliner.level().getEntitiesOfClass(AirlinerPartEntity.class, airliner.getBoundingBox().inflate(9),
             p -> p.parent() == airliner).size();
         return String.format(Locale.ROOT,
-            "#%d logo=%d item-logo=%s skin=%s riders=%d seats=[%s] pilot=%s parts=%d pos=%.2f,%.2f,%.2f spd=%.3f pitch=%.1f og=%b thr=%d health=%d",
-            airliner.getId(), airliner.getLogo(), itemLogo(airliner), airliner.hasMetalSkin() ? "metal" : "wood",
-            airliner.getPassengers().size(), seats,
+            "#%d %s logo=%d item-logo=%s skin=%s riders=%d/%d seats=[%s] pilot=%s parts=%d pos=%.2f,%.2f,%.2f spd=%.3f pitch=%.1f og=%b thr=%d health=%d",
+            airliner.getId(), EntityType.getKey(airliner.getType()).getPath(), airliner.getLogo(), itemLogo(airliner), airliner.hasMetalSkin() ? "metal" : "wood",
+            airliner.getPassengers().size(), airliner.layout().count(), seats,
             airliner.getControllingPassenger() == null ? "none" : airliner.getControllingPassenger().getScoreboardName(), parts, airliner.getX(), airliner.getY(), airliner.getZ(), v.length(),
             airliner.getXRot(), airliner.getOnGround(), airliner.getThrottle(), airliner.getHealth());
     }

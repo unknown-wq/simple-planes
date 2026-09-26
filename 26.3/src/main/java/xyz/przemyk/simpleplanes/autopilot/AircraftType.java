@@ -76,7 +76,8 @@ public enum AircraftType implements StringRepresentable {
     RANDOM("random"),
     /** Test tooling: flyable by name, never drawn by {@link #RANDOM}. */
     FIGHTER("fighter"),
-    AIRLINER("airliner");
+    AIRLINER("airliner"),
+    REGIONAL_AIRLINER("regional_airliner");
 
     /**
      * The three fixed-wing airframes, in the order {@link #RANDOM} draws from.
@@ -88,7 +89,7 @@ public enum AircraftType implements StringRepresentable {
     private static final AircraftType[] FLYABLE = {PLANE, LARGE, CARGO};
 
     /** Fixed-wing types that {@link #of} recognises but {@link #RANDOM} never draws. */
-    private static final AircraftType[] TESTABLE = {FIGHTER, AIRLINER};
+    private static final AircraftType[] TESTABLE = {FIGHTER, AIRLINER, REGIONAL_AIRLINER};
 
     public static final Codec<AircraftType> CODEC = StringRepresentable.fromEnum(AircraftType::values);
 
@@ -128,6 +129,7 @@ public enum AircraftType implements StringRepresentable {
             case HELICOPTER -> SimplePlanesEntities.HELICOPTER;
             case FIGHTER -> SimplePlanesEntities.FIGHTER;
             case AIRLINER -> SimplePlanesEntities.AIRLINER;
+            case REGIONAL_AIRLINER -> SimplePlanesEntities.REGIONAL_AIRLINER;
             // RANDOM only reaches here if resolve() was skipped; the starter plane is the safe answer.
             default -> SimplePlanesEntities.PLANE;
         };

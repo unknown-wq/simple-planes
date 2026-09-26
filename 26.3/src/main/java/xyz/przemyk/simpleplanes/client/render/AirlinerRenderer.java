@@ -7,25 +7,26 @@ import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
-import xyz.przemyk.simpleplanes.client.render.models.AirlinerSkinModel;
+import xyz.przemyk.simpleplanes.client.render.models.AirlinerShape;
 import xyz.przemyk.simpleplanes.entities.AirlinerEntity;
 
-/** Mini airliner: wooden or metal-skinned body by material, and the airline logo. */
+/** Airliner of either size: wooden or metal-skinned body by material, and the airline logo. */
 @Environment(EnvType.CLIENT)
 public class AirlinerRenderer extends PlaneRenderer<AirlinerEntity> {
 
     protected final EntityModel<PlaneRenderState> skinModel;
+    private final AirlinerShape shape;
 
     public AirlinerRenderer(EntityRendererProvider.Context context,
+                            AirlinerShape shape,
                             EntityModel<PlaneRenderState> woodenModel,
                             EntityModel<PlaneRenderState> skinModel,
                             EntityModel<PlaneRenderState> metalModel,
                             EntityModel<PlaneRenderState> fanModel,
-                            float shadowSize,
-                            Identifier metalTexture,
-                            Identifier propellerTexture) {
-        super(context, woodenModel, metalModel, fanModel, shadowSize, metalTexture, propellerTexture);
+                            float shadowSize) {
+        super(context, woodenModel, metalModel, fanModel, shadowSize, shape.metalTexture(), shape.metalTexture());
         this.skinModel = skinModel;
+        this.shape = shape;
     }
 
     @Override
@@ -47,6 +48,6 @@ public class AirlinerRenderer extends PlaneRenderer<AirlinerEntity> {
 
     @Override
     protected Identifier bodyTexture(PlaneRenderState state) {
-        return state.metalSkin ? AirlinerSkinModel.TEXTURE : state.materialTexture;
+        return state.metalSkin ? shape.skinTexture() : state.materialTexture;
     }
 }

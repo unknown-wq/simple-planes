@@ -79,6 +79,7 @@ public final class AircraftCommand {
         TYPES.put("helicopter", SimplePlanesEntities.HELICOPTER);
         TYPES.put("fighter", SimplePlanesEntities.FIGHTER);
         TYPES.put("airliner", SimplePlanesEntities.AIRLINER);
+        TYPES.put("regional_airliner", SimplePlanesEntities.REGIONAL_AIRLINER);
         TYPES.put("airship", SimplePlanesEntities.AIRSHIP);
         TYPES.put("mini_helicopter", SimplePlanesEntities.MINI_HELICOPTER);
         TYPES.put("quadcopter", SimplePlanesEntities.QUADCOPTER);
