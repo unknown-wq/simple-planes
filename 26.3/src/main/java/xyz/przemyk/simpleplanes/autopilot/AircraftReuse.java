@@ -162,6 +162,10 @@ public final class AircraftReuse {
             if (AutopilotDispatcher.owns(level, plane.getUUID())) {
                 continue;
             }
+            // Nor one the dispatch API has deployed: it waits on its pad for its own orders.
+            if (DispatchService.manages(level, plane.getUUID())) {
+                continue;
+            }
             // Nearest to where it is going, so the shortest tow across the apron wins. Only a
             // tie-break: every candidate is equally flyable.
             double distance = AutopilotMath.horizontalDistance(plane.position(), spawn);

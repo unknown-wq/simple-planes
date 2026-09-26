@@ -22,6 +22,7 @@ import xyz.przemyk.simpleplanes.items.DescriptionItem;
 import xyz.przemyk.simpleplanes.items.DroneItem;
 import xyz.przemyk.simpleplanes.items.HelipadToolItem;
 import xyz.przemyk.simpleplanes.items.ParachuteItem;
+import xyz.przemyk.simpleplanes.items.PatrolDroneItem;
 import xyz.przemyk.simpleplanes.items.PlaneArmorItem;
 import xyz.przemyk.simpleplanes.items.PlaneItem;
 import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
@@ -119,6 +120,7 @@ public class SimplePlanesItems {
     public static final Supplier<DroneItem> FPV_DRONE_ITEM = register("fpv_drone",
         properties -> new DroneItem(properties, SimplePlanesEntities.FPV_DRONE), new Item.Properties());
     public static final Supplier<CraneRemoteItem> CRANE_REMOTE = register("crane_remote", CraneRemoteItem::new, new Item.Properties());
+    public static final Supplier<PatrolDroneItem> PATROL_DRONE_ITEM = register("patrol_drone", PatrolDroneItem::new, new Item.Properties());
 
     public static final Supplier<ParachuteItem> PARACHUTE_ITEM = register("parachute", ParachuteItem::new, new Item.Properties());
 
@@ -192,6 +194,7 @@ public class SimplePlanesItems {
             output.accept(RUNWAY_TOOL.get());
             output.accept(HELIPAD_TOOL.get());
             output.accept(CRANE_REMOTE.get());
+            output.accept(PATROL_DRONE_ITEM.get());
 
             BuiltInRegistries.BLOCK.get(PlaneWorkbenchContainer.PLANE_MATERIALS_TAG).ifPresent(tag -> tag.forEach(block -> {
                 for (Supplier<? extends Item> item : PER_MATERIAL_AIRCRAFT) {

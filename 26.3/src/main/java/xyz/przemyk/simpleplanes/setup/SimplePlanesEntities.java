@@ -9,6 +9,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.drone.PatrolDroneEntity;
 import xyz.przemyk.simpleplanes.entities.*;
 
 import java.util.function.Supplier;
@@ -144,6 +145,8 @@ public class SimplePlanesEntities {
     public static final Supplier<EntityType<AirshipEntity>> AIRSHIP = register("airship", AirshipEntity::new, 3.0F, 2.5F);
     public static final Supplier<EntityType<MiniHelicopterEntity>> MINI_HELICOPTER = register("mini_helicopter", MiniHelicopterEntity::new, 1.5F, 1.95F);
     public static final Supplier<EntityType<QuadcopterEntity>> QUADCOPTER = register("quadcopter", QuadcopterEntity::new, 1.0F, 0.875F);
+    /** Recon drone; not a PlaneEntity, so no air defence engages it. */
+    public static final Supplier<EntityType<PatrolDroneEntity>> PATROL_DRONE = register("patrol_drone", PatrolDroneEntity::new, 0.8F, 0.5F);
     public static final Supplier<EntityType<StrikeDroneEntity>> STRIKE_DRONE = register("strike_drone", StrikeDroneEntity::new, 1.5F, 0.75F);
     // The crane's hitbox at the FPV's render scale (FpvDroneRenderer.SCALE).
     public static final Supplier<EntityType<FpvDroneEntity>> FPV_DRONE = register("fpv_drone", FpvDroneEntity::new, 0.6F, 0.525F);

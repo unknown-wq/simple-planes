@@ -1,6 +1,6 @@
 # dist
 
-## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.5.jar`
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.7.jar`
 
 A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
 has had a full play-through yet; most of it was tested on a headless dedicated server, and the fighter
@@ -12,7 +12,7 @@ glass, the airliner cabin and the world-map tab also in a real client.
 | Loader | Fabric, loader ≥ 0.19.5 |
 | Java | 25 |
 | Requires | Fabric API 0.160.5+26.3 or newer |
-| sha256 | `774ea7c3bf4c7bbf6e39dba48912ac5387ad0fc3adbc5e9035f41c336c5cb6f7` |
+| sha256 | `c7eeb2f77c88aecfddc8b600c6a4a60dacd6b7191f5108f3aa45670acf1ce756` |
 
 What it adds on top of 5.3.14:
 
@@ -53,6 +53,15 @@ What it adds on top of 5.3.14:
 - Creative tab: one entry per new aircraft type; the built-in four keep one per material. Material
   textures are read from the block model, so no more purple aircraft for logs, wood, hyphae, quartz or
   waxed copper.
+- Rotorcraft dispatch API for other mods (`api/dispatch/RotorcraftDispatch`): the mini helicopter flies on
+  its own to a point with no pad, lands on an ad-hoc zone it finds, waits, and flies home; the medical
+  livery seats a crew member and a stretcher. Operators: `/autopilot medevac`, `/autopilot dispatch`.
+  Air defence never engages dispatch aircraft.
+- Strike aircraft are always hostile: everything launched by the Plane Strike Tool or `/autopilot strike`,
+  drones included.
+- Patrol drone: a recon quadcopter other mods fly on routes through `api/drone/PatrolDrones` (MineColonies
+  barracks use it). Flies 20 blocks above ground, spots within 16 blocks, range up to 1000 blocks; air
+  defence ignores it. `/drone` for operators.
 - Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`, `/airdefence`, `/aviation`.
 
 Design and test reports are in `../26.3/design/` and `../26.3/MISSILES.md`. Checked here: a clean
@@ -63,6 +72,9 @@ strike from the strike command hitting 3 blocks off, and the silo and all four m
 beta.4 also: an operator load through the map request path, then a tier 1 launch arriving with a miss of 0.00.
 On beta.5: a boot with no errors, the regional airliner, fighter, crane and strike drone spawning and a
 silo placed; each merged feature was tested on its own branch (PRs #44–#49).
+On beta.6: a boot with no errors, a strike launched hostile, the dispatch list and a landing-zone search
+answering; the dispatch API and the hostile strikes were tested on their branches (PRs #50, #51).
+On beta.7: a clean build; the patrol drones were tested on their branch (PR #52).
 
 ## Stable builds
 
