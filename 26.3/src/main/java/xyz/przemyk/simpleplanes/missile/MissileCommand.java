@@ -1,6 +1,7 @@
 package xyz.przemyk.simpleplanes.missile;
 
 import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.FloatArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -88,6 +89,10 @@ public final class MissileCommand {
             root.then(Commands.literal("abort")
                 .then(Commands.literal("all").executes(MissileCommand::abortAll))
                 .then(Commands.argument("id", IntegerArgumentType.integer(0)).executes(MissileCommand::abort)));
+            root.then(Commands.literal("fuel")
+                .then(Commands.argument("id", IntegerArgumentType.integer(0))
+                    .then(Commands.argument("blocks", DoubleArgumentType.doubleArg(0.0))
+                        .executes(MissileCommand::fuel))));
             root.then(Commands.literal("telemetry")
                 .then(Commands.argument("interval", IntegerArgumentType.integer(0, 1200)).executes(MissileCommand::telemetry)));
             root.then(Commands.literal("tickets")
@@ -369,6 +374,16 @@ public final class MissileCommand {
         List<MissileEntity> active = MissileTracker.active();
         active.forEach(MissileEntity::abort);
         return ok(c, "Aborted " + active.size() + " missile(s).");
+    }
+
+    /** Test: sets the fuel left of a missile in flight, to make it burn out where a test wants it. */
+    private static int fuel(CommandContext<CommandSourceStack> c) {
+        int id = IntegerArgumentType.getInteger(c, "id");
+        MissileEntity m = MissileTracker.byId(id);
+        if (m == null) return fail(c, "No missile #" + id + " in flight.");
+        if (m.phase() == MissileEntity.Phase.UNPOWERED) return fail(c, "Missile #" + id + " has already burnt out.");
+        m.setFuel(DoubleArgumentType.getDouble(c, "blocks"));
+        return ok(c, "Missile #" + id + ": " + m.fuelLine() + ".");
     }
 
     private static int abort(CommandContext<CommandSourceStack> c) {

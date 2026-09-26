@@ -48,9 +48,12 @@ public final class AircraftRoster {
         return new ArrayList<>(set);
     }
 
-    /** A hostile aircraft AD may engage: alive, loaded, in this level. */
+    /**
+     * A hostile aircraft AD may engage: alive, loaded, in this level, and not already shot down. An aircraft at
+     * 0 health keeps falling until it crashes; it is not a target, so no missile is wasted on the wreck.
+     */
     public static boolean isEngageable(PlaneEntity plane, ServerLevel level) {
-        return plane.isHostile() && plane.isAlive() && !plane.isRemoved() && plane.level() == level;
+        return plane.isHostile() && plane.isAlive() && !plane.isRemoved() && plane.getHealth() > 0 && plane.level() == level;
     }
 
     /** Nearest engageable hostile aircraft within {@code radius} of {@code from} (3D), or null. */

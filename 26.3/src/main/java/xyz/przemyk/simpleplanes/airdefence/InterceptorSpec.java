@@ -1,5 +1,7 @@
 package xyz.przemyk.simpleplanes.airdefence;
 
+import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.autopilot.Blast;
 import xyz.przemyk.simpleplanes.missile.MissileTier;
 
 /**
@@ -16,8 +18,17 @@ public enum InterceptorSpec {
 
     /** Detection radius as a fraction of the range: leaves room for a tail chase against slower aircraft. */
     public static final double DETECTION_FRACTION = 0.25;
-    /** Missiles in flight (or in a launch sequence) against one aircraft, across all silos. */
-    public static final int MAX_PER_TARGET = 2;
+    /**
+     * Missiles in flight (or in a launch sequence) against one aircraft, across all silos. One: a second missile
+     * is fired only once the first has ended without killing the aircraft (see {@link Engagements}).
+     */
+    public static final int MAX_PER_TARGET = 1;
+    /**
+     * What an interceptor that ran out of fuel does when it falls on something: nothing (a puff), like a powered
+     * interceptor hitting terrain, so spent interceptors raining on the defended area do no harm. A small blast
+     * would be {@code new Blast(1.0F, false, false)}: hurts entities within 2 blocks, no blocks broken.
+     */
+    public static final @Nullable Blast SPENT_WARHEAD = null;
     /** Silo scan interval while idle and loaded. */
     public static final int SCAN_INTERVAL = 10;
     /** Fuse arms this many blocks of path after leaving the tube. */
@@ -26,7 +37,7 @@ public enum InterceptorSpec {
     public static final double RETARGET_FRACTION = 1.0;
 
     public final MissileTier tier;
-    /** Motor path length. A missile that has flown this far without a fuse trigger ends harmless. */
+    /** Fuel: the motor path past the tube. Once it is flown the motor stops and the missile falls unguided. */
     public final double range;
     public final double fuseRadius;
     public final double turnRate;
@@ -49,7 +60,7 @@ public enum InterceptorSpec {
         return range * DETECTION_FRACTION;
     }
 
-    /** Flight time limit: the motor path at full speed plus the climb out. */
+    /** Powered flight time limit (the motor path at full speed plus the climb out); the motor stops after it. */
     public int maxFlightTicks() {
         return (int) Math.ceil(range / tier.cruiseSpeed) + 80;
     }

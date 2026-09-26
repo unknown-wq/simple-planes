@@ -266,7 +266,7 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         phase = Phase.OPENING;
         phaseTicks = 0;
         launchCommandTime = level.getGameTime();
-        AirDefenceSilo.claim(level, worldPosition, adTarget, InterceptorSpec.of(tier));
+        AirDefenceSilo.claim(level, worldPosition, aircraft, InterceptorSpec.of(tier));
         level.playSound(null, worldPosition, SoundEvents.PISTON_EXTEND, SoundSource.BLOCKS, 1.0F, 0.9F);
         sync();
         return null;
@@ -350,9 +350,13 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         MissileEntity missile;
         if (adLaunch) {
             PlaneEntity aircraft = AirDefenceSilo.resolve(level, adTarget);
-            AirDefenceSilo.release(level, worldPosition);
-            if (aircraft == null) return;
+            if (aircraft == null) {
+                AirDefenceSilo.release(level, worldPosition);
+                return;
+            }
             missile = MissileEntity.launchInterceptor(level, worldPosition, tier, aircraft, launchCommandTime);
+            // the missile claimed the aircraft on creation; the silo's claim ends in the same tick
+            AirDefenceSilo.handOver(level, worldPosition, missile);
         } else {
             missile = MissileEntity.launch(level, worldPosition, tier, aim, launchCommandTime);
         }
@@ -459,7 +463,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         MissileTier tier = tier();
         return String.format(Locale.ROOT, "silo T%d at %s: %s, %s, hatch %.2f, mode %s%s, launches %d, last missile #%d%s",
             tier.tier, worldPosition.toShortString(), isLoaded() ? "loaded" : "empty",
-            phase.name().toLowerCase(Locale.ROOT), hatch, mode.label + (adLaunch && adTarget != null && phase == Phase.OPENING ? " (engaging)" : ""),
+            phase.name().toLowerCase(Locale.ROOT), hatch, mode.label + (adLaunch && adTarget != null && phase == Phase.OPENING ? " (engaging)" : "")
+                + (level instanceof ServerLevel sl ? AirDefenceSilo.holding(sl, worldPosition) : ""),
             phase == Phase.COOLDOWN ? ", cooldown " + cooldown + "t" : "", launches, lastMissileId,
             target == null ? "" : String.format(Locale.ROOT, ", target %.1f %.1f %.1f", target.x, target.y, target.z))
             + (phase != Phase.IDLE && level != null && frozen(level) ? ", GAME FROZEN (/tick freeze): nothing moves until /tick unfreeze" : "");
