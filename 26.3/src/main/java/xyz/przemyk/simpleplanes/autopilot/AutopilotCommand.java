@@ -25,6 +25,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.airdefence.Allegiance;
+import xyz.przemyk.simpleplanes.airdefence.AllegianceOption;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
 
@@ -526,6 +528,7 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
         }
+        AllegianceOption.apply(context, plane);
         source.sendSuccess(() -> Component.literal(
             AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
                 + " Warhead: " + blast.describe() + "."), true);
@@ -617,6 +620,7 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
         }
+        AllegianceOption.apply(context, plane);
         source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " flying "
             + from.toShortString() + " -> " + to.toShortString() + " -> " + from.toShortString()
             + " at altitude " + cruiseAltitude + describeSpeed(cruiseSpeed) + ", "
@@ -684,6 +688,7 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
         }
+        AllegianceOption.apply(context, plane);
         double distance = AutopilotMath.horizontalDistance(from.centre(), to.centre());
         source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " parked at "
             + from.name() + " (" + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
@@ -735,6 +740,7 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
         }
+        AllegianceOption.apply(context, plane);
         source.sendSuccess(() -> Component.literal("Plane #" + plane.getId() + " inbound to "
             + destination.name() + " from " + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
             + ", " + Math.round(plane.getZ()) + " - "
@@ -919,6 +925,7 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the helicopter."));
             return 0;
         }
+        AllegianceOption.apply(context, plane);
         double distance = AutopilotMath.horizontalDistance(from.touchdown(), to.touchdown());
         source.sendSuccess(() -> Component.literal("Helicopter #" + plane.getId() + " on the pad at "
             + from.name() + " (" + String.format("%.1f, %.1f, %.1f",
@@ -954,6 +961,7 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the helicopter."));
             return 0;
         }
+        AllegianceOption.apply(context, plane);
         source.sendSuccess(() -> Component.literal("Helicopter #" + plane.getId() + " inbound to "
             + destination.name() + " from " + Math.round(plane.getX()) + ", " + Math.round(plane.getY())
             + ", " + Math.round(plane.getZ()) + " - "
@@ -1100,7 +1108,7 @@ public final class AutopilotCommand {
         for (PlaneEntity plane : planes) {
             PlaneAutopilot autopilot = plane.getAutopilot();
             if (autopilot != null) {
-                source.sendSuccess(() -> Component.literal("  " + autopilot.statusLine(plane)), false);
+                source.sendSuccess(() -> Component.literal("  " + autopilot.statusLine(plane) + Allegiance.tag(plane)), false);
             }
         }
         return planes.size();
@@ -1128,7 +1136,7 @@ public final class AutopilotCommand {
             source.sendFailure(notFlying(plane));
             return 0;
         }
-        source.sendSuccess(() -> Component.literal("  " + autopilot.statusLine(plane)), false);
+        source.sendSuccess(() -> Component.literal("  " + autopilot.statusLine(plane) + Allegiance.tag(plane)), false);
         return 1;
     }
 
@@ -1213,7 +1221,7 @@ public final class AutopilotCommand {
         String toName = StringArgumentType.getString(context, "to");
         int seconds = IntegerArgumentType.getInteger(context, "seconds");
         String refusal = AutopilotDispatcher.create(level, fromName, toName, seconds,
-            aircraftType(context), source.getPlayer());
+            aircraftType(context), source.getPlayer(), AllegianceOption.of(context));
         if (refusal != null) {
             source.sendFailure(Component.literal(refusal));
             return 0;

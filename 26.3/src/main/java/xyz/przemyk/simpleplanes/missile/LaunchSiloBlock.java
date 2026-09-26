@@ -17,6 +17,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import org.jspecify.annotations.Nullable;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.phys.BlockHitResult;
+import xyz.przemyk.simpleplanes.airdefence.AirDefenceSilo;
 
 /**
  * The master block of a launch silo: the top-layer block at the minimum X/Z corner of the footprint. It carries
@@ -71,6 +75,12 @@ public class LaunchSiloBlock extends Block implements EntityBlock {
     public void playerDestroy(ServerLevel level, ServerPlayer player, BlockPos pos, BlockState state, @Nullable BlockEntity blockEntity, ItemStack destroyedWith) {
         super.playerDestroy(level, player, pos, state, blockEntity, destroyedWith);
         SiloStructure.dropItems(level, pos);
+    }
+
+    @Override
+    protected InteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos, Player player,
+                                          InteractionHand hand, BlockHitResult hit) {
+        return AirDefenceSilo.use(stack, level, pos, player);
     }
 
     @Override

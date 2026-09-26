@@ -20,12 +20,16 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.airdefence.AirDefenceSilo;
+import xyz.przemyk.simpleplanes.airdefence.InterceptorSpec;
+import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * State of one silo: the loaded missile, the hatch, the launch sequence, the cooldown, the target and the mode.
@@ -39,8 +43,16 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     public enum Phase { IDLE, OPENING, LAUNCHING, CLOSING, COOLDOWN }
 
-    /** Only manual launches exist so far; the field is persisted so other modes can be added without a format change. */
-    public enum Mode { MANUAL }
+    /** {@code MANUAL} is strike (launch to coordinates, saved under its old name); {@code AIR_DEFENCE} engages hostile aircraft. */
+    public enum Mode {
+        MANUAL("strike"), AIR_DEFENCE("air defence");
+
+        public final String label;
+
+        Mode(String label) {
+            this.label = label;
+        }
+    }
 
     /** Ticks the hatch stays open after ignition before it starts closing. */
     private static final int LAUNCH_HOLD_TICKS = 60;
@@ -56,6 +68,9 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     private int launches;
     private int lastMissileId = -1;
     private long launchCommandTime;
+    /** The current sequence is an air-defence launch (faster hatch, aircraft target, no chunk ticket). */
+    private boolean adLaunch;
+    private @Nullable UUID adTarget;
     /** What each silo block replaced, so removing the silo puts the ground back. Empty for silos built before this existed. */
     private final Map<BlockPos, BlockState> displaced = new HashMap<>();
 
@@ -84,6 +99,27 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     public int launches() { return launches; }
     public int lastMissileId() { return lastMissileId; }
     public int cooldown() { return cooldown; }
+    public boolean isAirDefenceLaunch() { return adLaunch; }
+    public @Nullable UUID airDefenceTarget() { return adTarget; }
+
+    /** Switches strike / air defence, or says why not. */
+    public @Nullable String setMode(Mode next) {
+        if (next == mode) return null;
+        if (phase == Phase.OPENING || phase == Phase.LAUNCHING) return "busy (" + phase.name().toLowerCase(Locale.ROOT) + ")";
+        mode = next;
+        sync();
+        return null;
+    }
+
+    /** The aircraft went away while the hatch opened and another was chosen. */
+    public void retarget(UUID aircraft) {
+        adTarget = aircraft;
+        setChanged();
+    }
+
+    public @Nullable String toggleMode() {
+        return setMode(mode == Mode.AIR_DEFENCE ? Mode.MANUAL : Mode.AIR_DEFENCE);
+    }
 
     public Map<BlockPos, BlockState> displaced() {
         return Map.copyOf(displaced);
@@ -128,9 +164,9 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     /** Starts the launch sequence, or says why not. */
     public @Nullable String launch(ServerLevel level, Vec3 aim) {
         MissileTier tier = tier();
-        if (phase != Phase.IDLE) return "busy (" + phase.name().toLowerCase(Locale.ROOT) + ")";
-        if (!isLoaded()) return "no missile loaded";
-        if (!SiloStructure.isIntact(level, worldPosition, tier)) return "the silo structure is damaged";
+        if (mode == Mode.AIR_DEFENCE) return "the silo is in air-defence mode";
+        String problem = readiness(level, tier);
+        if (problem != null) return problem;
         Vec3 mouth = SiloStructure.mouth(worldPosition, tier);
         double range = Math.hypot(aim.x - mouth.x, aim.z - mouth.z);
         if (range < tier.minRange)
@@ -138,6 +174,23 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         if (range > tier.maxRange)
             return String.format(Locale.ROOT, "target is %.1f blocks away, beyond the tier %d range of %.0f", range, tier.tier, tier.maxRange);
         if (aim.y < level.getMinY() || aim.y > level.getMaxY()) return "target is outside the world's height range";
+        target = aim;
+        adLaunch = false;
+        adTarget = null;
+        phase = Phase.OPENING;
+        phaseTicks = 0;
+        launchCommandTime = level.getGameTime();
+        MissileTracker.holdSilo(level, worldPosition);
+        level.playSound(null, worldPosition, SoundEvents.PISTON_EXTEND, SoundSource.BLOCKS, 1.0F, 0.6F);
+        sync();
+        return null;
+    }
+
+    /** Idle, loaded, intact and a clear hatch: the checks every launch shares. */
+    public @Nullable String readiness(ServerLevel level, MissileTier tier) {
+        if (phase != Phase.IDLE) return "busy (" + phase.name().toLowerCase(Locale.ROOT) + ")";
+        if (!isLoaded()) return "no missile loaded";
+        if (!SiloStructure.isIntact(level, worldPosition, tier)) return "the silo structure is damaged";
         for (int k = 1; k <= tier.tier + 3; k++)
             for (int dx = 0; dx < tier.footprint; dx++)
                 for (int dz = 0; dz < tier.footprint; dz++) {
@@ -145,12 +198,23 @@ public class LaunchSiloBlockEntity extends BlockEntity {
                     if (!level.getBlockState(p).getCollisionShape(level, p).isEmpty())
                         return "the hatch is obstructed at " + p.toShortString();
                 }
-        target = aim;
+        return null;
+    }
+
+    /** Starts an air-defence launch at {@code aircraft}. No chunk ticket: the sequence runs only while the chunk is loaded. */
+    public @Nullable String launchAirDefence(ServerLevel level, PlaneEntity aircraft) {
+        MissileTier tier = tier();
+        if (mode != Mode.AIR_DEFENCE) return "the silo is in strike mode";
+        String problem = readiness(level, tier);
+        if (problem != null) return problem;
+        target = aircraft.getBoundingBox().getCenter();
+        adLaunch = true;
+        adTarget = aircraft.getUUID();
         phase = Phase.OPENING;
         phaseTicks = 0;
         launchCommandTime = level.getGameTime();
-        MissileTracker.holdSilo(level, worldPosition);
-        level.playSound(null, worldPosition, SoundEvents.PISTON_EXTEND, SoundSource.BLOCKS, 1.0F, 0.6F);
+        AirDefenceSilo.claim(level, worldPosition, adTarget, InterceptorSpec.of(tier));
+        level.playSound(null, worldPosition, SoundEvents.PISTON_EXTEND, SoundSource.BLOCKS, 1.0F, 0.9F);
         sync();
         return null;
     }
@@ -161,12 +225,16 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     public static void clientTick(Level level, BlockPos pos, BlockState state, LaunchSiloBlockEntity be) {
         be.hatchO = be.hatch;
-        be.hatch = stepHatch(be.phase, be.hatch, be.tier());
+        be.hatch = stepHatch(be.phase, be.hatch, be.openTicks(be.tier()));
     }
 
-    private static float stepHatch(Phase phase, float hatch, MissileTier tier) {
+    private int openTicks(MissileTier tier) {
+        return adLaunch ? InterceptorSpec.of(tier).hatchTicks : tier.hatchTicks;
+    }
+
+    private static float stepHatch(Phase phase, float hatch, int openTicks) {
         return switch (phase) {
-            case OPENING, LAUNCHING -> Math.min(1.0F, hatch + 1.0F / tier.hatchTicks);
+            case OPENING, LAUNCHING -> Math.min(1.0F, hatch + 1.0F / openTicks);
             case CLOSING, COOLDOWN, IDLE -> Math.max(0.0F, hatch - 1.0F / MissileTier.HATCH_CLOSE_TICKS);
         };
     }
@@ -177,10 +245,16 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         Vec3 mouth = SiloStructure.mouth(worldPosition, tier);
         switch (phase) {
             case IDLE -> {
+                if (mode == Mode.AIR_DEFENCE) AirDefenceSilo.idleTick(level, this);
                 return;
             }
             case OPENING -> {
-                hatch = stepHatch(phase, hatch, tier);
+                if (adLaunch && !AirDefenceSilo.keepTarget(level, this)) {
+                    adTarget = null;
+                    setPhase(Phase.CLOSING);
+                    return;
+                }
+                hatch = stepHatch(phase, hatch, openTicks(tier));
                 if (hatch >= 1.0F) {
                     ignite(level, tier);
                     return;
@@ -193,7 +267,7 @@ public class LaunchSiloBlockEntity extends BlockEntity {
                 if (phaseTicks >= LAUNCH_HOLD_TICKS) setPhase(Phase.CLOSING);
             }
             case CLOSING -> {
-                hatch = stepHatch(phase, hatch, tier);
+                hatch = stepHatch(phase, hatch, openTicks(tier));
                 if (hatch <= 0.0F) {
                     cooldown = MissileTier.COOLDOWN_TICKS;
                     level.playSound(null, worldPosition, SoundEvents.PISTON_CONTRACT, SoundSource.BLOCKS, 1.0F, 0.6F);
@@ -217,7 +291,15 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         loadedTier = 0;
         setPhase(Phase.LAUNCHING);
         if (aim == null) return;
-        MissileEntity missile = MissileEntity.launch(level, worldPosition, tier, aim, launchCommandTime);
+        MissileEntity missile;
+        if (adLaunch) {
+            PlaneEntity aircraft = AirDefenceSilo.resolve(level, adTarget);
+            AirDefenceSilo.release(level, worldPosition);
+            if (aircraft == null) return;
+            missile = MissileEntity.launchInterceptor(level, worldPosition, tier, aircraft, launchCommandTime);
+        } else {
+            missile = MissileEntity.launch(level, worldPosition, tier, aim, launchCommandTime);
+        }
         lastMissileId = missile.getId();
         launches++;
         level.playSound(null, worldPosition, SoundEvents.FIREWORK_ROCKET_LAUNCH, SoundSource.BLOCKS, 4.0F, 0.5F);
@@ -252,6 +334,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         output.putInt("cooldown", cooldown);
         output.putFloat("hatch", hatch);
         output.putString("mode", mode.name());
+        output.putBoolean("ad_launch", adLaunch);
+        if (adTarget != null) output.putString("ad_target", adTarget.toString());
         output.putInt("launches", launches);
         output.putInt("last_missile", lastMissileId);
         output.putLong("launch_time", launchCommandTime);
@@ -276,6 +360,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         float h = input.getFloatOr("hatch", 0.0F);
         if (level == null || !level.isClientSide()) hatch = hatchO = h;
         mode = parse(Mode.class, input.getStringOr("mode", "MANUAL"), Mode.MANUAL);
+        adLaunch = input.getBooleanOr("ad_launch", false);
+        adTarget = input.getString("ad_target").map(LaunchSiloBlockEntity::uuid).orElse(null);
         launches = input.getIntOr("launches", 0);
         lastMissileId = input.getIntOr("last_missile", -1);
         launchCommandTime = input.getLongOr("launch_time", 0L);
@@ -283,6 +369,14 @@ public class LaunchSiloBlockEntity extends BlockEntity {
             ? new Vec3(input.getDoubleOr("tx", 0), input.getDoubleOr("ty", 0), input.getDoubleOr("tz", 0)) : null;
         displaced.clear();
         input.read("displaced", Displaced.CODEC.listOf()).ifPresent(list -> list.forEach(d -> displaced.put(d.pos(), d.state())));
+    }
+
+    private static @Nullable UUID uuid(String s) {
+        try {
+            return UUID.fromString(s);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private static <E extends Enum<E>> E parse(Class<E> type, String name, E fallback) {
@@ -309,7 +403,7 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         MissileTier tier = tier();
         return String.format(Locale.ROOT, "silo T%d at %s: %s, %s, hatch %.2f, mode %s%s, launches %d, last missile #%d%s",
             tier.tier, worldPosition.toShortString(), isLoaded() ? "loaded" : "empty",
-            phase.name().toLowerCase(Locale.ROOT), hatch, mode.name().toLowerCase(Locale.ROOT),
+            phase.name().toLowerCase(Locale.ROOT), hatch, mode.label + (adLaunch && adTarget != null && phase == Phase.OPENING ? " (engaging)" : ""),
             phase == Phase.COOLDOWN ? ", cooldown " + cooldown + "t" : "", launches, lastMissileId,
             target == null ? "" : String.format(Locale.ROOT, ", target %.1f %.1f %.1f", target.x, target.y, target.z));
     }
