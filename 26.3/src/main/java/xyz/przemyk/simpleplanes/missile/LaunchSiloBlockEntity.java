@@ -56,6 +56,11 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     /** Ticks the hatch stays open after ignition before it starts closing. */
     private static final int LAUNCH_HOLD_TICKS = 60;
+    /**
+     * Game ticks after the launch command by which any sequence has ended (the longest takes about 230). A silo
+     * still busy after this was not ticking, e.g. its chunk was unloaded; game time does not advance while frozen.
+     */
+    static final int STALE_TICKS = 600;
 
     private int loadedTier;
     private Phase phase = Phase.IDLE;
@@ -105,7 +110,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     /** Switches strike / air defence, or says why not. */
     public @Nullable String setMode(Mode next) {
         if (next == mode) return null;
-        if (phase == Phase.OPENING || phase == Phase.LAUNCHING) return "busy (" + phase.name().toLowerCase(Locale.ROOT) + ")";
+        recoverIfStale();
+        if (phase == Phase.OPENING || phase == Phase.LAUNCHING) return busy();
         mode = next;
         sync();
         return null;
@@ -147,7 +153,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     public @Nullable String load() {
         if (isLoaded()) return "already loaded";
-        if (phase != Phase.IDLE && phase != Phase.COOLDOWN) return "busy (" + phase.name().toLowerCase(Locale.ROOT) + ")";
+        recoverIfStale();
+        if (phase != Phase.IDLE && phase != Phase.COOLDOWN) return busy();
         loadedTier = tier().tier;
         sync();
         return null;
@@ -155,7 +162,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     public @Nullable String unload() {
         if (!isLoaded()) return "not loaded";
-        if (phase != Phase.IDLE && phase != Phase.COOLDOWN) return "busy (" + phase.name().toLowerCase(Locale.ROOT) + ")";
+        recoverIfStale();
+        if (phase != Phase.IDLE && phase != Phase.COOLDOWN) return busy();
         loadedTier = 0;
         sync();
         return null;
@@ -169,10 +177,12 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         if (problem != null) return problem;
         Vec3 mouth = SiloStructure.mouth(worldPosition, tier);
         double range = Math.hypot(aim.x - mouth.x, aim.z - mouth.z);
-        if (range < tier.minRange)
-            return String.format(Locale.ROOT, "target is %.1f blocks away, inside the tier %d minimum range of %.0f", range, tier.tier, tier.minRange);
-        if (range > tier.maxRange)
-            return String.format(Locale.ROOT, "target is %.1f blocks away, beyond the tier %d range of %.0f", range, tier.tier, tier.maxRange);
+        if (range < tier.minRange || range > tier.maxRange) {
+            // a target on or next to the silo is usually the looked-at block that Tab filled in
+            String hint = range < 8.0 ? " (the target is the silo itself or right next to it; Tab fills in the block you look at, so type the target's x y z)" : "";
+            return String.format(Locale.ROOT, "target too %s: %.1f blocks from the silo; a tier %d missile needs at least %.0f and at most %.0f blocks horizontally%s",
+                range < tier.minRange ? "close" : "far", range, tier.tier, tier.minRange, tier.maxRange, hint);
+        }
         if (aim.y < level.getMinY() || aim.y > level.getMaxY()) return "target is outside the world's height range";
         target = aim;
         adLaunch = false;
@@ -188,7 +198,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     /** Idle, loaded, intact and a clear hatch: the checks every launch shares. */
     public @Nullable String readiness(ServerLevel level, MissileTier tier) {
-        if (phase != Phase.IDLE) return "busy (" + phase.name().toLowerCase(Locale.ROOT) + ")";
+        recoverIfStale();
+        if (phase != Phase.IDLE) return busy();
         if (!isLoaded()) return "no missile loaded";
         if (!SiloStructure.isIntact(level, worldPosition, tier)) return "the silo structure is damaged";
         for (int k = 1; k <= tier.tier + 3; k++)
@@ -199,6 +210,43 @@ public class LaunchSiloBlockEntity extends BlockEntity {
                         return "the hatch is obstructed at " + p.toShortString();
                 }
         return null;
+    }
+
+    /** True while {@code /tick freeze} stops block entities, and with them every hatch, from ticking. */
+    public static boolean frozen(Level level) {
+        return !level.tickRateManager().runsNormally();
+    }
+
+    private String busy() {
+        String busy = "busy (" + phase.name().toLowerCase(Locale.ROOT) + ")";
+        return level != null && frozen(level)
+            ? busy + "; the game is frozen (/tick freeze), so the hatch won't move until /tick unfreeze" : busy;
+    }
+
+    /**
+     * Ends a sequence that has lasted {@link #STALE_TICKS} of game time, which only a silo that was not ticking
+     * can do. Before ignition it aborts and keeps the missile; after it, it just finishes. Returns what it did.
+     */
+    public @Nullable String recoverIfStale() {
+        if (phase == Phase.IDLE || !(level instanceof ServerLevel server)) return null;
+        long age = server.getGameTime() - launchCommandTime;
+        if (age >= 0 && age <= STALE_TICKS) return null;
+        return reset(server, "stale after " + age + " game ticks");
+    }
+
+    /** Puts the silo back to idle with the hatch shut; a missile not yet fired stays loaded. Returns what it did. */
+    public String reset(ServerLevel level, String why) {
+        String was = describe();
+        boolean aborted = phase == Phase.OPENING;
+        if (adLaunch) AirDefenceSilo.release(level, worldPosition);
+        MissileTracker.releaseSilo(level, worldPosition);
+        adTarget = null;
+        hatch = hatchO = 0.0F;
+        cooldown = 0;
+        setPhase(Phase.IDLE);
+        String did = (aborted ? "launch aborted, missile kept" : "sequence finished") + " (" + why + "); was: " + was;
+        MissileTracker.LOGGER.info("[silo] {} reset: {}", worldPosition.toShortString(), did);
+        return did;
     }
 
     /** Starts an air-defence launch at {@code aircraft}. No chunk ticket: the sequence runs only while the chunk is loaded. */
@@ -240,6 +288,9 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     }
 
     private void tickServer(ServerLevel level) {
+        if (recoverIfStale() != null) return;
+        // the hold is in memory only: take it again after a restart or a reload mid-sequence
+        if (phase != Phase.IDLE && !adLaunch && !MissileTracker.holdsSilo(level, worldPosition)) MissileTracker.holdSilo(level, worldPosition);
         hatchO = hatch;
         MissileTier tier = tier();
         Vec3 mouth = SiloStructure.mouth(worldPosition, tier);
@@ -405,6 +456,7 @@ public class LaunchSiloBlockEntity extends BlockEntity {
             tier.tier, worldPosition.toShortString(), isLoaded() ? "loaded" : "empty",
             phase.name().toLowerCase(Locale.ROOT), hatch, mode.label + (adLaunch && adTarget != null && phase == Phase.OPENING ? " (engaging)" : ""),
             phase == Phase.COOLDOWN ? ", cooldown " + cooldown + "t" : "", launches, lastMissileId,
-            target == null ? "" : String.format(Locale.ROOT, ", target %.1f %.1f %.1f", target.x, target.y, target.z));
+            target == null ? "" : String.format(Locale.ROOT, ", target %.1f %.1f %.1f", target.x, target.y, target.z))
+            + (phase != Phase.IDLE && level != null && frozen(level) ? ", GAME FROZEN (/tick freeze): nothing moves until /tick unfreeze" : "");
     }
 }
