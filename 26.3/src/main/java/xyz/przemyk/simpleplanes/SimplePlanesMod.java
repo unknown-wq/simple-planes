@@ -14,6 +14,7 @@ import xyz.przemyk.simpleplanes.combat.GunshipCommand;
 import xyz.przemyk.simpleplanes.combat.GunshipRegistry;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
 import xyz.przemyk.simpleplanes.missile.Missiles;
+import xyz.przemyk.simpleplanes.airdefence.AirDefence;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesBlocks;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
@@ -79,6 +80,7 @@ public class SimplePlanesMod implements ModInitializer {
         AirspaceGuardCommand.register();
 
         Missiles.init();
+        AirDefence.init();
 
         registerUpgradeItems();
     }

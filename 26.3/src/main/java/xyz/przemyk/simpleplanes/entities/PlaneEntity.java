@@ -48,6 +48,7 @@ import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
 import org.joml.Vector3f;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.airdefence.Allegiance;
 import xyz.przemyk.simpleplanes.api.BlastGuards;
 import xyz.przemyk.simpleplanes.autopilot.Blast; // autopilot:
 import xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot; // autopilot:
@@ -87,6 +88,8 @@ public class PlaneEntity extends Entity {
     // PlaneAutopilot object lives on the server only, so without it a riding player's client still
     // believes it is the pilot and keeps steering the aircraft out from under the flight director.
     public static final EntityDataAccessor<Boolean> AUTOPILOT_FLYING = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BOOLEAN);
+    // air defence: friendly or hostile, chosen at spawn; only hostile aircraft are engaged by AD silos.
+    public static final EntityDataAccessor<Byte> ALLEGIANCE = SynchedEntityData.defineId(PlaneEntity.class, EntityDataSerializers.BYTE);
     public static final int MAX_THROTTLE = 5;
     public Quaternionf Q_Client = new Quaternionf();
     public Quaternionf Q_Prev = new Quaternionf();
@@ -215,6 +218,20 @@ public class PlaneEntity extends Entity {
         pBuilder.define(PITCH_UP, (byte) 0);
         pBuilder.define(YAW_RIGHT, (byte) 0);
         pBuilder.define(AUTOPILOT_FLYING, false);
+        pBuilder.define(ALLEGIANCE, (byte) Allegiance.FRIENDLY.ordinal());
+    }
+
+    public Allegiance getAllegiance() {
+        byte b = entityData.get(ALLEGIANCE);
+        return b >= 0 && b < Allegiance.values().length ? Allegiance.values()[b] : Allegiance.FRIENDLY;
+    }
+
+    public void setAllegiance(Allegiance allegiance) {
+        entityData.set(ALLEGIANCE, (byte) allegiance.ordinal());
+    }
+
+    public boolean isHostile() {
+        return getAllegiance() == Allegiance.HOSTILE;
     }
 
     @Override
@@ -1277,6 +1294,7 @@ public class PlaneEntity extends Entity {
         entityData.set(HEALTH, input.getIntOr("health", getHealth()));
 
         input.getString("material").ifPresent(this::setMaterial);
+        input.getString(Allegiance.NBT_KEY).ifPresent(name -> setAllegiance(Allegiance.byNameOr(name, getAllegiance())));
 
         deserializeUpgrades(input);
 
@@ -1327,6 +1345,7 @@ public class PlaneEntity extends Entity {
         output.putInt("max_health", entityData.get(MAX_HEALTH));
         output.putFloat("max_speed", entityData.get(MAX_SPEED));
         output.putString("material", entityData.get(MATERIAL));
+        output.putString(Allegiance.NBT_KEY, getAllegiance().getSerializedName());
         writeUpgrades(output);
 
         // autopilot: persist an in-progress route (strike flights deliberately write nothing).

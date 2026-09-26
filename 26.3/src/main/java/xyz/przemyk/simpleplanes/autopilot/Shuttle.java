@@ -6,6 +6,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.util.StringRepresentable;
 import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.airdefence.Allegiance;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -64,7 +65,7 @@ import java.util.UUID;
 public record Shuttle(int id, String fieldA, String fieldB, int delayTicks, AircraftType type,
                       Optional<UUID> aircraft, Optional<BlockPos> parked, boolean outbound,
                       State state, long nextDeparture, int legs, int misses,
-                      Optional<UUID> owner, String note) {
+                      Optional<UUID> owner, String note, Allegiance allegiance) {
 
     /** Where a shuttle is in its cycle. */
     public enum State implements StringRepresentable {
@@ -126,14 +127,15 @@ public record Shuttle(int id, String fieldA, String fieldB, int delayTicks, Airc
         Codec.INT.optionalFieldOf("legs", 0).forGetter(Shuttle::legs),
         Codec.INT.optionalFieldOf("misses", 0).forGetter(Shuttle::misses),
         UUIDUtil.STRING_CODEC.optionalFieldOf("owner").forGetter(Shuttle::owner),
-        Codec.STRING.optionalFieldOf("note", "").forGetter(Shuttle::note)
+        Codec.STRING.optionalFieldOf("note", "").forGetter(Shuttle::note),
+        Allegiance.CODEC.optionalFieldOf("allegiance", Allegiance.FRIENDLY).forGetter(Shuttle::allegiance)
     ).apply(instance, Shuttle::new));
 
     /** A brand new shuttle, due to depart immediately so a player sees it work. */
     public static Shuttle created(int id, String fieldA, String fieldB, int delayTicks,
-                                  AircraftType type, @Nullable UUID owner, long now) {
+                                  AircraftType type, @Nullable UUID owner, long now, Allegiance allegiance) {
         return new Shuttle(id, fieldA, fieldB, delayTicks, type, Optional.empty(), Optional.empty(),
-            true, State.WAITING, now, 0, 0, Optional.ofNullable(owner), "");
+            true, State.WAITING, now, 0, 0, Optional.ofNullable(owner), "", allegiance);
     }
 
     /** The field the next departure leaves from. */
@@ -168,7 +170,7 @@ public record Shuttle(int id, String fieldA, String fieldB, int delayTicks, Airc
     /** A leg has just been launched with this airframe. */
     public Shuttle departed(UUID airframe, long now) {
         return new Shuttle(id, fieldA, fieldB, delayTicks, type, Optional.of(airframe),
-            Optional.empty(), outbound, State.FLYING, now, legs, 0, owner, "");
+            Optional.empty(), outbound, State.FLYING, now, legs, 0, owner, "", allegiance);
     }
 
     /**
@@ -181,24 +183,24 @@ public record Shuttle(int id, String fieldA, String fieldB, int delayTicks, Airc
      */
     public Shuttle arrivedAt(String airfield, BlockPos where, long now, String problem) {
         return new Shuttle(id, fieldA, fieldB, delayTicks, type, aircraft, Optional.of(where),
-            fieldA.equals(airfield), State.WAITING, now + delayTicks, legs + 1, 0, owner, problem);
+            fieldA.equals(airfield), State.WAITING, now + delayTicks, legs + 1, 0, owner, problem, allegiance);
     }
 
     /** A due departure could not be flown; try again later and remember why. */
     public Shuttle deferred(long retryAt, String problem) {
         return new Shuttle(id, fieldA, fieldB, delayTicks, type, aircraft, parked, outbound,
-            State.WAITING, retryAt, legs, misses + 1, owner, problem);
+            State.WAITING, retryAt, legs, misses + 1, owner, problem, allegiance);
     }
 
     /** Stopped, with the reason kept for the listing. */
     public Shuttle paused(String problem) {
         return new Shuttle(id, fieldA, fieldB, delayTicks, type, aircraft, parked, outbound,
-            State.PAUSED, nextDeparture, legs, misses, owner, problem);
+            State.PAUSED, nextDeparture, legs, misses, owner, problem, allegiance);
     }
 
     /** The not-seen counter while a leg is in the air, reused as the lost-aircraft clock. */
     public Shuttle withMisses(int value) {
         return new Shuttle(id, fieldA, fieldB, delayTicks, type, aircraft, parked, outbound,
-            state, nextDeparture, legs, value, owner, note);
+            state, nextDeparture, legs, value, owner, note, allegiance);
     }
 }
