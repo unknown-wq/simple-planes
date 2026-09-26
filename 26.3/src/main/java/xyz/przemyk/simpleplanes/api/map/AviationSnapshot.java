@@ -67,8 +67,10 @@ public record AviationSnapshot(String dimension, long gameTime, int nearRadius, 
      * @param distance    3D distance from the player to the silo mouth when the snapshot was built
      * @param minRange    strike minimum horizontal range of the tier
      * @param maxRange    strike maximum horizontal range of the tier
-     * @param usable      whether this player could launch from it right now (target and permission aside)
-     * @param status      why not, or "ready"
+     * @param usable      whether this player could launch from it right now (target and permission aside). Since
+     *                    API 3 this is true at any distance and for a silo in an unloaded chunk (remote launch,
+     *                    judged from the index's last known state; the server loads the chunk and checks again)
+     * @param status      why not, or "ready" (a remote-launch variant of "ready" when out of reach or unloaded)
      * @param serviceable whether this player could load or unload it right now (permission and the silo's own
      *                    state aside): near enough and the chunk loaded. True for air-defence silos too
      * @param serviceStatus why not, or "ready"

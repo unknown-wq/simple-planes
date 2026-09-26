@@ -144,13 +144,14 @@ final class AviationCommand {
         LaunchResult result = AviationService.handleLaunch(player, new AviationPayloads.LaunchRequest(silo, tx, y, tz));
         String line = String.format(Locale.ROOT, "Test launch as %s from %.1f %.1f %.1f, silo %s, target %d %s %d: %s -- %s",
             op ? "operator" : "non-operator", player.getX(), player.getY(), player.getZ(), silo.toShortString(), tx,
-            y == AviationMap.SURFACE ? "surface" : Integer.toString(y), tz, result.accepted() ? "ACCEPTED" : "REFUSED",
+            y == AviationMap.SURFACE ? "surface" : Integer.toString(y), tz,
+            result.accepted() ? "ACCEPTED" : result.pending() ? "PENDING" : "REFUSED",
             result.message().getString());
         if (result.accepted()) {
             line += String.format(Locale.ROOT, " [resolved target %.1f %.1f %.1f]", result.targetX(), result.targetY(), result.targetZ());
         }
         if (player.lastMessage() != null) line += " | action bar: " + player.lastMessage().getString();
-        return result.accepted() ? ok(c, line) : fail(c, line);
+        return result.accepted() || result.pending() ? ok(c, line) : fail(c, line);
     }
 
     private static int service(CommandContext<CommandSourceStack> c, SiloAction action, boolean op) {

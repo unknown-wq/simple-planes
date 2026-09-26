@@ -175,14 +175,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         if (mode == Mode.AIR_DEFENCE) return "the silo is in air-defence mode";
         String problem = readiness(level, tier);
         if (problem != null) return problem;
-        Vec3 mouth = SiloStructure.mouth(worldPosition, tier);
-        double range = Math.hypot(aim.x - mouth.x, aim.z - mouth.z);
-        if (range < tier.minRange || range > tier.maxRange) {
-            // a target on or next to the silo is usually the looked-at block that Tab filled in
-            String hint = range < 8.0 ? " (the target is the silo itself or right next to it; Tab fills in the block you look at, so type the target's x y z)" : "";
-            return String.format(Locale.ROOT, "target too %s: %.1f blocks from the silo; a tier %d missile needs at least %.0f and at most %.0f blocks horizontally%s",
-                range < tier.minRange ? "close" : "far", range, tier.tier, tier.minRange, tier.maxRange, hint);
-        }
+        String outOfRange = rangeProblem(worldPosition, tier, aim);
+        if (outOfRange != null) return outOfRange;
         if (aim.y < level.getMinY() || aim.y > level.getMaxY()) return "target is outside the world's height range";
         target = aim;
         adLaunch = false;
@@ -194,6 +188,17 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         level.playSound(null, worldPosition, SoundEvents.PISTON_EXTEND, SoundSource.BLOCKS, 1.0F, 0.6F);
         sync();
         return null;
+    }
+
+    /** Why {@code aim} is outside the horizontal range of a tier {@code tier} silo at {@code master}; null when inside. */
+    public static @Nullable String rangeProblem(BlockPos master, MissileTier tier, Vec3 aim) {
+        Vec3 mouth = SiloStructure.mouth(master, tier);
+        double range = Math.hypot(aim.x - mouth.x, aim.z - mouth.z);
+        if (range >= tier.minRange && range <= tier.maxRange) return null;
+        // a target on or next to the silo is usually the looked-at block that Tab filled in
+        String hint = range < 8.0 ? " (the target is the silo itself or right next to it; Tab fills in the block you look at, so type the target's x y z)" : "";
+        return String.format(Locale.ROOT, "target too %s: %.1f blocks from the silo; a tier %d missile needs at least %.0f and at most %.0f blocks horizontally%s",
+            range < tier.minRange ? "close" : "far", range, tier.tier, tier.minRange, tier.maxRange, hint);
     }
 
     /** Idle, loaded, intact and a clear hatch: the checks every launch shares. */
