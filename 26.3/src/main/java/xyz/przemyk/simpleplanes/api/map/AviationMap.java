@@ -22,14 +22,19 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * AviationMap.addListener(listener);    // snapshots and launch results arrive on the client thread
  * AviationMap.requestSnapshot();        // when the map's aviation view opens, then every few seconds
  * AviationMap.requestLaunch(silo, x, AviationMap.SURFACE, z);
+ * AviationMap.requestLoad(silo);        // operators, near the silo
  * </pre>
  */
 public final class AviationMap {
 
     private AviationMap() {}
 
-    /** Version of this API. 1: snapshot, launch request, launch result. */
-    public static final int API_VERSION = 1;
+    /**
+     * Version of this API. 1: snapshot, launch request, launch result. 2: load / unload requests
+     * ({@link SiloAction}), the action on {@link LaunchResult}, and the service and air-defence fields on
+     * {@link AviationSnapshot.Silo}.
+     */
+    public static final int API_VERSION = 2;
 
     /** Target height meaning "the server picks the surface". */
     public static final int SURFACE = Integer.MIN_VALUE;
@@ -59,6 +64,34 @@ public final class AviationMap {
     }
 
     /**
+     * Whether the connected server also takes load and unload requests. True whenever {@link #isAvailable()} is,
+     * on a server of this version.
+     */
+    public static boolean canService() {
+        return ClientPlayNetworking.canSend(AviationPayloads.SiloRequest.TYPE);
+    }
+
+    /**
+     * Asks the server to load a missile of the silo's own tier into {@code silo}, like {@code /missile silo load}.
+     * Operators only, from near the silo; works in strike and air-defence mode. The answer arrives as
+     * {@link Listener#onLaunchResult} with {@link SiloAction#LOAD}.
+     */
+    public static boolean requestLoad(BlockPos silo) {
+        return requestService(silo, SiloAction.LOAD);
+    }
+
+    /** Asks the server to take the missile out of {@code silo}, like {@code /missile silo unload}. See {@link #requestLoad}. */
+    public static boolean requestUnload(BlockPos silo) {
+        return requestService(silo, SiloAction.UNLOAD);
+    }
+
+    private static boolean requestService(BlockPos silo, SiloAction action) {
+        if (!canService()) return false;
+        ClientPlayNetworking.send(new AviationPayloads.SiloRequest(silo.immutable(), action));
+        return true;
+    }
+
+    /**
      * Asks the server to launch from {@code silo} (the master position from the snapshot) at the block column
      * {@code x, z}. {@code y} is the first free block above the surface as the map knows it, or {@link #SURFACE}.
      * The answer arrives as {@link Listener#onLaunchResult}.
@@ -74,7 +107,7 @@ public final class AviationMap {
         return latest;
     }
 
-    /** The last launch result received on this connection, or null. */
+    /** The last answer to a launch, load or unload request received on this connection, or null. */
     public static @Nullable LaunchResult lastResult() {
         return lastResult;
     }

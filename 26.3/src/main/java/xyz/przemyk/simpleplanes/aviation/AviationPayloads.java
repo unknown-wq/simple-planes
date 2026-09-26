@@ -11,6 +11,7 @@ import net.minecraft.resources.Identifier;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.api.map.AviationSnapshot;
 import xyz.przemyk.simpleplanes.api.map.LaunchResult;
+import xyz.przemyk.simpleplanes.api.map.SiloAction;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,7 +19,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
- * The four payloads of the aviation map. Registered on both sides from {@link AviationService#init()}.
+ * The five payloads of the aviation map. Registered on both sides from {@link AviationService#init()}.
  * Clientbound payloads are only ever sent in reply to a request, and only to a player whose client
  * registered the channel ({@code ServerPlayNetworking.canSend}).
  */
@@ -26,8 +27,12 @@ public final class AviationPayloads {
 
     private AviationPayloads() {}
 
-    /** Protocol version carried by the snapshot request; bumped on an incompatible payload change. */
-    public static final int PROTOCOL = 1;
+    /**
+     * Protocol version carried by the snapshot request; bumped on an incompatible payload change. The server
+     * answers only a client that asked with this version (see {@code AviationService}). 2: load / unload
+     * request, action on the reply, service and air-defence fields on each silo.
+     */
+    public static final int PROTOCOL = 2;
 
     public static final int MAX_AIRFIELDS = 128;
     public static final int MAX_HELIPADS = 128;
@@ -79,7 +84,23 @@ public final class AviationPayloads {
         }
     }
 
-    /** S2C: the answer to a {@link LaunchRequest}. */
+    /** C2S: load or unload {@code silo}. {@link SiloAction#LAUNCH} is not valid here and is refused. */
+    public record SiloRequest(BlockPos silo, SiloAction action) implements CustomPacketPayload {
+        public static final Type<SiloRequest> TYPE = new Type<>(id("aviation_silo"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, SiloRequest> CODEC = StreamCodec.of(
+            (buf, p) -> {
+                BlockPos.STREAM_CODEC.encode(buf, p.silo());
+                buf.writeVarInt(p.action().ordinal());
+            },
+            buf -> new SiloRequest(BlockPos.STREAM_CODEC.decode(buf), decodeAction(buf.readVarInt())));
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** S2C: the answer to a {@link LaunchRequest} or {@link SiloRequest}. */
     public record LaunchReply(LaunchResult result) implements CustomPacketPayload {
         public static final Type<LaunchReply> TYPE = new Type<>(id("aviation_launch_result"));
         public static final StreamCodec<RegistryFriendlyByteBuf, LaunchReply> CODEC = StreamCodec.of(
@@ -91,9 +112,11 @@ public final class AviationPayloads {
                 buf.writeDouble(r.targetX());
                 buf.writeDouble(r.targetY());
                 buf.writeDouble(r.targetZ());
+                buf.writeVarInt(r.action().ordinal());
             },
             buf -> new LaunchReply(new LaunchResult(BlockPos.STREAM_CODEC.decode(buf), buf.readBoolean(),
-                ComponentSerialization.STREAM_CODEC.decode(buf), buf.readDouble(), buf.readDouble(), buf.readDouble())));
+                ComponentSerialization.STREAM_CODEC.decode(buf), buf.readDouble(), buf.readDouble(), buf.readDouble(),
+                decodeAction(buf.readVarInt()))));
 
         @Override
         public Type<? extends CustomPacketPayload> type() {
@@ -163,6 +186,10 @@ public final class AviationPayloads {
             b.writeDouble(o.distance());
             b.writeBoolean(o.usable());
             ComponentSerialization.STREAM_CODEC.encode(b, o.status());
+            b.writeBoolean(o.serviceable());
+            ComponentSerialization.STREAM_CODEC.encode(b, o.serviceStatus());
+            b.writeDouble(o.detectionRadius());
+            b.writeDouble(o.engagementRange());
         });
     }
 
@@ -187,7 +214,8 @@ public final class AviationPayloads {
         List<AviationSnapshot.Silo> silos = readList(buf, MAX_SILOS, b -> new AviationSnapshot.Silo(
             BlockPos.STREAM_CODEC.decode(b), b.readVarInt(), b.readBoolean(), b.readBoolean(), b.readUtf(32),
             b.readBoolean(), b.readDouble(), b.readDouble(), b.readVarInt(), b.readVarInt(), b.readDouble(),
-            b.readBoolean(), ComponentSerialization.STREAM_CODEC.decode(b)));
+            b.readBoolean(), ComponentSerialization.STREAM_CODEC.decode(b), b.readBoolean(),
+            ComponentSerialization.STREAM_CODEC.decode(b), b.readDouble(), b.readDouble()));
         return new AviationSnapshot(dimension, gameTime, nearRadius, permitted, radius,
             airfields, helipads, routes, flights, silos);
     }
@@ -205,6 +233,12 @@ public final class AviationPayloads {
         List<T> out = new ArrayList<>(n);
         for (int i = 0; i < n; i++) out.add(reader.apply(buf));
         return List.copyOf(out);
+    }
+
+    private static SiloAction decodeAction(int id) {
+        SiloAction action = SiloAction.byId(id);
+        if (action == null) throw new IllegalArgumentException("unknown silo action " + id);
+        return action;
     }
 
     private static Identifier id(String path) {

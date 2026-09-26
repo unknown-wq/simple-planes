@@ -17,12 +17,13 @@ import net.minecraft.world.phys.Vec3;
 import xyz.przemyk.simpleplanes.api.map.AviationMap;
 import xyz.przemyk.simpleplanes.api.map.AviationSnapshot;
 import xyz.przemyk.simpleplanes.api.map.LaunchResult;
+import xyz.przemyk.simpleplanes.api.map.SiloAction;
 
 import java.util.Locale;
 
 /**
  * {@code /aviation}: diagnostics for the silo index and the map's snapshot, and a fake-player driver for the
- * map's launch handler. Permission level 2, console-friendly. Documented in {@code MISSILES.md}.
+ * map's launch, load and unload handlers. Permission level 2, console-friendly. Documented in {@code MISSILES.md}.
  */
 final class AviationCommand {
 
@@ -59,6 +60,8 @@ final class AviationCommand {
                         .then(Commands.argument("silo", BlockPosArgument.blockPos())
                             .then(Commands.argument("tx", IntegerArgumentType.integer())
                                 .then(tz)))))
+                .then(service(SiloAction.LOAD))
+                .then(service(SiloAction.UNLOAD))
                 .then(Commands.literal("resetlimits").executes(c -> {
                     AviationService.resetLimits();
                     return ok(c, "Aviation rate limits cleared.");
@@ -66,6 +69,16 @@ final class AviationCommand {
 
             dispatcher.register(root);
         });
+    }
+
+    /** {@code load|unload <at> <silo> [op|nonop]}. */
+    private static LiteralArgumentBuilder<CommandSourceStack> service(SiloAction action) {
+        return Commands.literal(action.name().toLowerCase(Locale.ROOT))
+            .then(Commands.argument("at", Vec3Argument.vec3())
+                .then(Commands.argument("silo", BlockPosArgument.blockPos())
+                    .executes(c -> service(c, action, true))
+                    .then(Commands.literal("op").executes(c -> service(c, action, true)))
+                    .then(Commands.literal("nonop").executes(c -> service(c, action, false)))));
     }
 
     private static AviationTestPlayer fake(CommandContext<CommandSourceStack> c, boolean op) {
@@ -113,10 +126,12 @@ final class AviationCommand {
                 f.mode(), f.x(), f.y(), f.z(), f.hasDestination() ? String.format(Locale.ROOT, "%.0f %.0f %s", f.destX(), f.destZ(), f.destination()) : "-"));
         }
         for (AviationSnapshot.Silo o : s.silos()) {
-            ok(c, String.format(Locale.ROOT, "  silo %s T%d %s %s %s chunk=%s dist=%.1f range=%d-%d usable=%s status=%s",
+            ok(c, String.format(Locale.ROOT, "  silo %s T%d %s %s %s chunk=%s dist=%.1f range=%d-%d ad=%.0f/%.0f "
+                    + "usable=%s status=%s serviceable=%s service=%s",
                 o.pos().toShortString(), o.tier(), o.strike() ? "strike" : "air_defence", o.loaded() ? "loaded" : "empty",
-                o.phase(), o.chunkLoaded() ? "loaded" : "unloaded", o.distance(), o.minRange(), o.maxRange(), o.usable(),
-                o.status().getString()));
+                o.phase(), o.chunkLoaded() ? "loaded" : "unloaded", o.distance(), o.minRange(), o.maxRange(),
+                o.detectionRadius(), o.engagementRange(), o.usable(), o.status().getString(), o.serviceable(),
+                o.serviceStatus().getString()));
         }
         return s.silos().size();
     }
@@ -134,6 +149,17 @@ final class AviationCommand {
         if (result.accepted()) {
             line += String.format(Locale.ROOT, " [resolved target %.1f %.1f %.1f]", result.targetX(), result.targetY(), result.targetZ());
         }
+        if (player.lastMessage() != null) line += " | action bar: " + player.lastMessage().getString();
+        return result.accepted() ? ok(c, line) : fail(c, line);
+    }
+
+    private static int service(CommandContext<CommandSourceStack> c, SiloAction action, boolean op) {
+        AviationTestPlayer player = fake(c, op);
+        BlockPos silo = BlockPosArgument.getBlockPos(c, "silo");
+        LaunchResult result = AviationService.handleService(player, new AviationPayloads.SiloRequest(silo, action));
+        String line = String.format(Locale.ROOT, "Test %s as %s from %.1f %.1f %.1f, silo %s: %s -- %s",
+            action.name().toLowerCase(Locale.ROOT), op ? "operator" : "non-operator", player.getX(), player.getY(),
+            player.getZ(), silo.toShortString(), result.accepted() ? "ACCEPTED" : "REFUSED", result.message().getString());
         if (player.lastMessage() != null) line += " | action bar: " + player.lastMessage().getString();
         return result.accepted() ? ok(c, line) : fail(c, line);
     }

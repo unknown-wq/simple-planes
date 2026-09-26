@@ -13,7 +13,7 @@ installed.
 | Where | What |
 |---|---|
 | `api/map/AviationMap` | The client API: `isAvailable`, `requestSnapshot`, `requestLaunch`, `latest`, `lastResult`, listeners, `SURFACE`. `API_VERSION = 1`. |
-| `api/map/AviationSnapshot`, `LaunchResult` | Records for the snapshot and the launch answer. |
+| `api/map/AviationSnapshot`, `LaunchResult` | Records for the snapshot and the answer to a launch, load or unload. |
 | `aviation/AviationPayloads` | Four payloads, protocol 1, with capped lists and strings. |
 | `aviation/AviationService` | Snapshot builder, launch handler, rate limits, silo-index upkeep through Fabric events. |
 | `aviation/SiloIndex` | Per-dimension `SavedData` `simpleplanes:silos`. |
@@ -66,9 +66,66 @@ for the UI cases.
 - **Near radius 24.** Picked so that the silo is always inside the player's simulation distance. A console or
   terminal block could replace the "stand at the silo" rule later.
 - **World-border check.** This is the one check beyond what `/missile launch` does.
-- **The `protocol` field in `aviation_request` is sent but not checked.** Version 1 is the only version.
+- **The `protocol` field in `aviation_request`:** checked since protocol 2 (see the follow-up below).
 - **Missiles in flight are not in the snapshot.**
 - **Flight positions** are only as fresh as the map's poll (2 s on the world map).
 - **Translations:** `en_us` only.
 - **Existing issue in the test world:** shuttle 1 waited at Eastfield with "could not be put on a departure spot".
   This is unrelated to this work and was not investigated.
+
+## Follow-up: load and unload, range data
+
+The table above describes the first version (protocol 1, API 1). The follow-up adds the following.
+
+| Where | What |
+|---|---|
+| `api/map/SiloAction` | New enum: `LAUNCH`, `LOAD`, `UNLOAD`. |
+| `api/map/AviationMap` | `API_VERSION = 2`. Adds `canService`, `requestLoad` and `requestUnload`. |
+| `api/map/AviationSnapshot.Silo` | Adds `serviceable`, `serviceStatus`, `detectionRadius` and `engagementRange`. The last two come from `InterceptorSpec.of(tier)` (100/150/225/350 and 400/600/900/1400). |
+| `api/map/LaunchResult` | Adds `action`. |
+| `aviation/AviationPayloads` | Protocol 2. Adds a fifth payload, `simpleplanes:aviation_silo` (silo position and action). The reply carries the action. |
+| `aviation/AviationService` | Shares the launch checks with load and unload (`locate`), handles `aviation_silo`, and answers only players whose request carried protocol 2. |
+| `aviation/AviationCommand` | `/aviation test load\|unload <at> <silo> [op\|nonop]`. |
+| `lang/en_us.json` | 8 more `simpleplanes.aviation.*` keys. |
+
+**Rules for load and unload:**
+
+- Operators only, the same as `/missile silo load|unload`.
+- One rate limit is shared by launch, load and unload: one request per second.
+- The player must be within 24 blocks of the silo mouth, and the silo chunk must be loaded.
+- Then the server calls `LaunchSiloBlockEntity#load()` or `unload()`. These are the calls the command makes. No
+  item is needed, and an unloaded missile is gone, as with the command.
+- A load also checks `SiloStructure.isIntact`. This is the one check beyond the command.
+- Strike and air-defence silos can both be loaded and unloaded. Only a strike silo can be launched.
+- Refusals carry the silo's own reason: already loaded, not loaded, busy (phase), damaged.
+
+**Protocol check:** a client that asks with a protocol other than 2 gets no snapshot and no replies. The server
+logs one line for it. A map built against API 1 fails the version check on its side, so it does not start its
+integration.
+
+### Tests (follow-up)
+
+Same server and client as above.
+
+| Case | Result |
+|---|---|
+| Non-operator loads a strike silo / loads or unloads an AD silo | refused: operator permission is required to load or unload |
+| Player 200 blocks away | refused: too far away |
+| Silo in an unloaded chunk | refused: the silo's chunk is not loaded |
+| Load of a loaded T4 | refused: already loaded |
+| Unload of an empty silo | refused: not loaded |
+| Unload while the hatch is opening | refused: busy (opening) |
+| Operator load and unload, strike T3 | accepted both ways |
+| Operator unload and load, air-defence T3 | accepted both ways |
+| Unload, then load 150 ms later; then a launch | second and third refused: too many silo requests |
+| UI load of an empty T2 on the client | accepted; the panel shows the missile |
+| UI unload and reload of an AD silo | accepted |
+| UI as a non-operator | Load and Unload disabled, with the operator tooltip |
+
+### Open points (follow-up)
+
+- **Damaged silo:** not reached in a test. Breaking a casing block dismantles the whole silo.
+- **Protocol mismatch:** not tested with a real older client.
+- **Engagement range** is the length of the interceptor's motor path. It is an upper bound, not a guaranteed
+  kill range.
+- **Detection radius** is a 3D sphere around the silo mouth. The map draws it as a circle at ground level.
