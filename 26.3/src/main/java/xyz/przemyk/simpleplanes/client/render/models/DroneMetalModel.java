@@ -5,19 +5,19 @@ import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.model.geom.PartPose;
 import net.minecraft.client.model.geom.builders.*;
 import xyz.przemyk.simpleplanes.client.render.PlaneRenderState;
+import xyz.przemyk.simpleplanes.client.render.QuadcopterRenderState;
 
 /**
  * Mini reconnaissance quadcopter, metal layer: electronics shell, battery pack, GPS puck, the two antennas,
  * the four motors, landing legs, the camera gimbal and the drop-release clamp with its payload.
  * Uses {@code textures/plane_upgrades/drone_metal.png} (64x32).
  *
- * <p>Animation hook: {@link #setPayloadAttached(boolean)} hides the payload and opens the clamp jaws.
- * {@link PlaneRenderState} carries no payload flag yet, so {@link #setupAnim} currently passes
- * {@link #DEFAULT_PAYLOAD_ATTACHED}; see DRONE-MODEL.md for how to wire it.
+ * <p>Animation hook: {@link #setPayloadAttached(boolean)} opens or closes the clamp jaws, fed from
+ * {@code QuadcopterRenderState.carrying} in {@link #setupAnim}.
  */
 public class DroneMetalModel extends EntityModel<PlaneRenderState> {
 
-    /** Payload state used until the render state carries a real one: payload loaded, clamp closed. */
+    /** Clamp closed. */
     public static final boolean DEFAULT_PAYLOAD_ATTACHED = true;
     /** Outward swing of each clamp jaw once the payload is released, in radians. */
     public static final float JAW_OPEN_ANGLE = 0.6109F;
@@ -118,8 +118,7 @@ public class DroneMetalModel extends EntityModel<PlaneRenderState> {
     @Override
     public void setupAnim(PlaneRenderState state) {
         super.setupAnim(state);
-        // Hook for the drone entity: replace DEFAULT_PAYLOAD_ATTACHED with a flag copied into the render state.
-        setPayloadAttached(DEFAULT_PAYLOAD_ATTACHED);
+        setPayloadAttached(state instanceof QuadcopterRenderState q && q.carrying);
     }
 
     /**

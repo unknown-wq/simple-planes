@@ -13,12 +13,11 @@ import xyz.przemyk.simpleplanes.client.render.PlaneRenderState;
  * {@link FighterMetalModel} ({@code textures/plane_upgrades/fighter_metal.png}).
  *
  * <p>Animation hook: {@link #applyThrottle(float)} opens the petals and grows the flame for a throttle in
- * [0, 1]. {@link PlaneRenderState} carries no throttle yet, so {@link #setupAnim} currently passes
- * {@link #IDLE_THROTTLE}; see FIGHTER-MODEL.md for how to wire it.
+ * [0, 1]; {@link #setupAnim} passes {@code PlaneRenderState.throttle}.
  */
 public class FighterExhaustModel extends EntityModel<PlaneRenderState> {
 
-    /** Throttle used until the render state carries a real one: nozzle closed, no flame. */
+    /** Nozzle closed, no flame. */
     public static final float IDLE_THROTTLE = 0.0F;
     /** Petal deflection at full throttle, in radians. */
     public static final float PETAL_OPEN_ANGLE = 0.2618F;
@@ -69,8 +68,7 @@ public class FighterExhaustModel extends EntityModel<PlaneRenderState> {
     @Override
     public void setupAnim(PlaneRenderState state) {
         super.setupAnim(state);
-        // Hook for the jet entity: replace IDLE_THROTTLE with the throttle copied into the render state.
-        applyThrottle(IDLE_THROTTLE);
+        applyThrottle(state.throttle);
     }
 
     /**

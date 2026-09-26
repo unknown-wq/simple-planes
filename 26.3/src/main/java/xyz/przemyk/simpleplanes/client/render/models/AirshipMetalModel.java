@@ -16,8 +16,8 @@ import xyz.przemyk.simpleplanes.client.render.PlaneRenderState;
  * <p>The window panes and the gaps between the rail balusters and helm spokes are alpha 0 (the default
  * {@code entityCutout} render type cuts them out), so the people in the gondola can see out and be seen.
  *
- * <p>Animation hook: {@link #applyControls(float, float)}. {@link PlaneRenderState} carries no control
- * inputs yet, so {@link #setupAnim} passes neutral controls. See AIRSHIP-MODEL.md. The numbers were produced
+ * <p>Animation hook: {@link #applyControls(float, float)}, fed from {@code PlaneRenderState.rudder} and
+ * {@code elevator} in {@link #setupAnim}. See AIRSHIP-MODEL.md. The numbers were produced
  * by a generator script that is not in the repository; this file can be edited by hand, but texOffs point
  * into the packed atlas, so a new cube needs a free region of airship_metal.png.
  */
@@ -110,8 +110,8 @@ public class AirshipMetalModel extends EntityModel<PlaneRenderState> {
     @Override
     public void setupAnim(PlaneRenderState state) {
         super.setupAnim(state);
-        // Hook for the airship entity: replace the zeros with control inputs copied into the render state.
-        applyControls(0.0F, 0.0F);
+        // state.rudder is positive for a right yaw; this model's rudder > 0 yaws the nose left.
+        applyControls(-state.rudder, state.elevator);
     }
 
     /**

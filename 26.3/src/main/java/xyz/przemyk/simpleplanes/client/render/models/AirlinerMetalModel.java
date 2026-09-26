@@ -26,10 +26,7 @@ import xyz.przemyk.simpleplanes.client.render.PlaneRenderState;
 public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
     /** Number of airline logos: 0 Terntide, 1 Glimmerwing, 2 Pinewind, 3 Puffcloud Express, 4 Coralline, 5 Marigold Hop. */
     public static final int LOGO_COUNT = 6;
-    /**
-     * Logo used until the render state carries the aircraft's own: replace it in {@link #setupAnim} with the
-     * logo index from {@code PlaneRenderState} (see AIRLINER-MODEL.md).
-     */
+    /** Logo shown before {@link #setupAnim} has run. */
     public static final int DEFAULT_LOGO = 0;
 
     private final ModelPart Metal;
@@ -144,6 +141,6 @@ public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
     @Override
     public void setupAnim(PlaneRenderState state) {
         super.setupAnim(state);
-        setLogo(DEFAULT_LOGO);
+        setLogo(state.airlinerLogo);
     }
 }

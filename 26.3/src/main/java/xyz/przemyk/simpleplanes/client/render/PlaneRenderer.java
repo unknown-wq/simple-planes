@@ -86,6 +86,12 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
         state.timeSinceHit = planeEntity.getTimeSinceHit() - partialTicks;
         state.materialTexture = getMaterialTexture(planeEntity.getMaterial());
         state.isCargoPlane = planeEntity instanceof CargoPlaneEntity;
+        state.throttle = Math.min(1f, planeEntity.getThrottle() / 5f);
+        state.rudder = planeEntity.getYawRight();
+        state.elevator = planeEntity.getPitchUp();
+        state.metalSkin = false;
+        state.airlinerLogo = 0;
+        state.medicalLivery = false;
 
         state.upgradeTypes.clear();
         state.hasSeatsUpgrade = false;
@@ -118,13 +124,14 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
 
         if (state.timeSinceHit > 0.0F) {
             float angle = Mth.clamp(state.timeSinceHit / 10.0F, -30.0F, 30.0F);
-            poseStack.rotate(Axis.ZP.rotationDegrees(Mth.sin(state.ageInTicks) * angle));
+            poseStack.rotate(Axis.ZP.rotationDegrees(Mth.sin(state.ageInTicks) * angle * wobbleScale(state)));
         }
 
         poseStack.translate(0.0F, -1.1F, 0.0F);
 
-        collector.submitModel(this.planeEntityModel, state, poseStack,
-                this.planeEntityModel.renderType(state.materialTexture),
+        EntityModel<PlaneRenderState> body = bodyModel(state);
+        collector.submitModel(body, state, poseStack,
+                body.renderType(bodyTexture(state)),
                 state.lightCoords, OverlayTexture.NO_OVERLAY, state.outlineColor);
 
         collector.submitModel(this.propellerModel, state, poseStack,
@@ -134,6 +141,8 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
         collector.submitModel(this.planeMetalModel, state, poseStack,
                 this.planeMetalModel.renderType(this.metalTexture),
                 state.lightCoords, OverlayTexture.NO_OVERLAY, state.outlineColor);
+
+        submitExtraLayers(state, poseStack, collector);
 
         UpgradesModels.submitUpgrades(state, poseStack, collector, state.lightCoords);
 
@@ -149,6 +158,26 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
 
         poseStack.popPose();
         super.submit(state, poseStack, collector, camera);
+    }
+
+    /** Multiplier on the damage wobble angle. */
+    protected float wobbleScale(PlaneRenderState state) {
+        return 1.0F;
+    }
+
+    protected EntityModel<PlaneRenderState> bodyModel(PlaneRenderState state) {
+        return planeEntityModel;
+    }
+
+    protected Identifier bodyTexture(PlaneRenderState state) {
+        return state.materialTexture;
+    }
+
+    /**
+     * Further layers, drawn after the metal layer under the same pose. Any render type may be used
+     * here, including translucent ones.
+     */
+    protected void submitExtraLayers(PlaneRenderState state, PoseStack poseStack, SubmitNodeCollector collector) {
     }
 
     /**
