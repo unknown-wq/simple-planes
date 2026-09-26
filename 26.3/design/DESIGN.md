@@ -17,7 +17,7 @@ for b/s. Accelerations are b/t².
 | aircraft | class | family | headline numbers |
 |---|---|---|---|
 | Fighter | `FighterEntity extends PlaneEntity` | fixed-wing | cruise 2.30 b/t (46 b/s) at throttle 5, 3.1x the starter plane; take-off 0.45 b/t after a 12-block run; realised turn 58 deg/s, pitch 7 deg/tick, roll 8 deg/tick |
-| Mini airliner | `AirlinerEntity extends PlaneEntity` | fixed-wing | 6 seats; cruise 1.25 b/t (25 b/s); take-off 0.60 b/t, rotation at 34 blocks, airborne at 51 blocks; realised turn 10 deg/s; ground pitch clamped at 12 deg (tail strike at 14.5 deg); metal skin by material tag, 6 logos rolled on placement |
+| Mini airliner | `AirlinerEntity extends PlaneEntity` | fixed-wing | 22 seats (2 crew, 20 passengers, boarded by where you click; AIRLINER-MODEL.md); cruise 1.25 b/t (25 b/s); take-off 0.60 b/t, rotation at 34 blocks, airborne at 51 blocks; realised turn 10 deg/s; ground pitch clamped at 12 deg (tail strike at 14.5 deg); metal skin by material tag, 6 logos rolled on placement |
 | Airship | `AirshipEntity extends PlaneEntity` (all six flight hooks overridden, like the helicopter) | plane family, own physics | 7 seats; buoyancy + ballast trim, fly-by-wire altitude hold (captures with 0.08 b overshoot); cruise 0.81 b/t (16 b/s); 12 deg/s turn, radius 77 b; static climb/sink limit 0.2 b/t |
 | Quadcopter crane | `QuadcopterEntity extends Entity` (new family) | multirotor, server-flown | thrust-to-weight 3.0; position controller settles a 20-block move in 4.4 s empty, 5.8 s with a cow; rope 1..12 b, winch 0.15 b/t; load limit 1.55 drone masses (cow yes, horse no); carried mob is a passenger placed at the rope end, rope drawn with vanilla's leash renderer |
 | Mini helicopter | `MiniHelicopterEntity extends HelicopterEntity` | rotorcraft (existing model, smaller numbers) | one seat; hover at notch 2 (helicopter: 3), climb to +0.40 b/t at notch 5 (helicopter +0.24), level top speed 0.75 b/t (helicopter 1.11), pedal 90 deg/s, full cyclic in 8.6 ticks; thrust fades above y 100, absolute ceiling y 160; standard or medical livery by material tag |
@@ -251,9 +251,23 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
 
 ### 4.3 Seats, skin and logo
 
-- Six seats on the centre line: feet points `(0, 0.375, z)` with `z = 4.25, 2.34375, 1.21875, 0.09375,
-  -1.03125, -2.15625` (contract, plain `PlaneEntity`, `getPassengersRidingOffset() = 0.375`). `canAddPassenger`
-  allows 6; index 0 is the pilot. No seats upgrade is needed or accepted.
+- 22 seats (`entities/AirlinerSeats`): captain (seat 0, the pilot) and first officer side by side in the
+  cockpit, feet at `(±0.6875, 0.6875, 3.75)`; 20 cabin seats in five rows two by two either side of the
+  aisle, feet at `x = ±1.3125, ±0.5625`, `y = 0.5625`, `z = 2.5, 1.375, 0.25, -0.875, -2.0`. No seats upgrade
+  is needed or accepted.
+- A seat belongs to its rider: one synched int per seat holds the rider's entity id, assigned in
+  `addPassenger`, cleared in `removePassenger`, saved as a `Seats` list of `{UUID, Seat}`. A player boards the
+  seat nearest to where he clicked, the captain's when he clicks the cockpit or the nose; anyone else takes
+  the front-most free cabin seat and never a crew seat. The controlling passenger is the player in the
+  captain's seat, or nobody.
+- The nose and tail are clickable through four `AirlinerPartEntity` hitboxes (`sized(3.4, 3.3)`, never saved)
+  that follow the airliner; its own bounding box stays `sized(3.0, 2.6)`. Details, the options weighed and the
+  test command `airliner click` are in AIRLINER-MODEL.md.
+- The widened fuselage (3.625 wide, 22 seats) changes nothing in flight. Measured with one procedure on the
+  5.4.0-beta.2 jar and on the cabin jar (`aircraft takeoff`; `hold`, throttle 5 and 1500 ticks; `launch 1.25`,
+  `hold`, throttle 5, 300 ticks, then `set yaw 1`), both give: rotation at 33.8 b (90 t), airborne at 52.1 b
+  (118 t) at 0.71 b/t; level speed 1.250 b/t at throttle 5; heading 53.0, 73.7, 94.7 deg at ticks 100, 140
+  and 180 of the turn (0.52 deg/t). With 20 villagers aboard: airborne at 51.4 b (117 t) at 0.71 b/t.
 - Metal skin: `metalSkin = material block is in the new block tag simpleplanes:airliner_metal_skin`
   (`iron_block`, `copper_block`, `waxed_copper_block`, `gold_block`, `netherite_block`; the same blocks
   are added to `simpleplanes:plane_materials` so the workbench builds one). The renderer draws
@@ -631,7 +645,7 @@ Power: the quadcopter is electric and always powered (no fuel, no engine upgrade
 | new class | extends | why |
 |---|---|---|
 | `entities/FighterEntity` | `PlaneEntity` | fixed-wing; one seat; only numbers and two clamps differ |
-| `entities/AirlinerEntity` | `PlaneEntity` | fixed-wing, 6 seats by its own `canAddPassenger`/`positionRider`; not `LargeAirframeEntity` because of the livestock magnet, the large-upgrade bay and the -0.4 player offset |
+| `entities/AirlinerEntity` | `PlaneEntity` | fixed-wing, 22 assigned seats (`AirlinerSeats`, synched per seat) by its own `canAddPassenger`/`addPassenger`/`positionRider`, the captain is the controlling passenger, nose-to-tail hitboxes `AirlinerPartEntity`; not `LargeAirframeEntity` because of the livestock magnet, the large-upgrade bay and the -0.4 player offset |
 | `entities/AirshipEntity` | `PlaneEntity` | overrides all six flight hooks (helicopter pattern); inherits controls, rendering, riders, persistence, collisions |
 | `entities/QuadcopterEntity` | `Entity` | own physics, server-authoritative, load as passenger; no plane plumbing |
 | `entities/MiniHelicopterEntity` | `HelicopterEntity` | the helicopter's model with smaller numbers through new getters; one rider; a ceiling |
@@ -716,7 +730,8 @@ constants remain public for the callers outside the class.
 
 ### 8.4 Registration (all in the foundation)
 
-- `SimplePlanesEntities`: `FIGHTER sized(3.0, 2.0)`, `AIRLINER sized(3.0, 2.6)`, `AIRSHIP sized(3.0, 2.5)`,
+- `SimplePlanesEntities`: `FIGHTER sized(3.0, 2.0)`, `AIRLINER sized(3.0, 2.6)` (plus the `AIRLINER_PART` hitboxes,
+  `sized(3.4, 3.3)`, added with the cabin), `AIRSHIP sized(3.0, 2.5)`,
   `QUADCOPTER sized(1.0, 0.875)`, `MINI_HELICOPTER sized(1.5, 1.95)` with the aircraft tracking range;
 - `SimplePlanesItems`: `FIGHTER_ITEM`, `AIRLINER_ITEM`, `AIRSHIP_ITEM`, `MINI_HELICOPTER_ITEM` as
   `PlaneItem`s, `QUADCOPTER_ITEM` (`QuadcopterItem`), `CRANE_REMOTE`; all added to `getPlaneItems()` where
@@ -834,7 +849,8 @@ the offset with the airframe. On the fighter the vanilla eye (seat 0.0625 + 1.62
 `canopy_main` (1.375 to 1.6875) and the mixin eye (1.7575) is inside `canopy_mid`; the contract cuts out
 the covered part of `canopy_main`'s top face for exactly that case, so the view is clear either way.
 **Decision: the design does not rely on the mixin; the contracts' seats stand unchanged.** The airliner's
-window row tolerates 0.63 of seat rise (contract), the airship's eye is in an open window band. If the
+cabin eyes are inside its open window band and its crew eyes inside the lower windscreen's panes with the
+mixin and without it (AIRLINER-MODEL.md), the airship's eye is in an open window band. If the
 mixin is ever removed, nothing here changes. A future spec may replace it with a Fabric camera hook if one
 exists in the API version in use; none is required. The fighter agent's client check (when a client is
 available) is to look out with the mixin present, since that is what ships.

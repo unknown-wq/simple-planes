@@ -222,6 +222,7 @@
     "item.simpleplanes.crane_remote": "Crane Remote",
     "entity.simpleplanes.fighter": "Fighter Jet",
     "entity.simpleplanes.airliner": "Mini Airliner",
+    "entity.simpleplanes.airliner_part": "Mini Airliner",
     "entity.simpleplanes.airship": "Airship",
     "entity.simpleplanes.mini_helicopter": "Mini Helicopter",
     "entity.simpleplanes.quadcopter": "Quadcopter Crane",

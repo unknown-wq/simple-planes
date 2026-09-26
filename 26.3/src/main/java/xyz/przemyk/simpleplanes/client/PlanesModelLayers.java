@@ -5,6 +5,7 @@ import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.ModelLayerRegistry;
 import net.minecraft.client.model.geom.ModelLayerLocation;
+import net.minecraft.client.renderer.entity.NoopRenderer;
 import net.minecraft.resources.Identifier;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.client.render.AirlinerRenderer;
@@ -221,6 +222,8 @@ public final class PlanesModelLayers {
                 1.0F,
                 SimplePlanesMod.texture("airliner_metal.png"),
                 SimplePlanesMod.texture("airliner_metal.png")));
+
+        EntityRendererRegistry.register(SimplePlanesEntities.AIRLINER_PART.get(), NoopRenderer::new);
 
         EntityRendererRegistry.register(SimplePlanesEntities.AIRSHIP.get(), context -> new AirshipRenderer(context,
                 new AirshipModel(context.bakeLayer(AIRSHIP_LAYER)),

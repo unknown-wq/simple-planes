@@ -2,9 +2,11 @@ package xyz.przemyk.simpleplanes.client.render;
 
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.Entity;
 import xyz.przemyk.simpleplanes.client.render.models.AirlinerSkinModel;
 import xyz.przemyk.simpleplanes.entities.AirlinerEntity;
 
@@ -31,6 +33,11 @@ public class AirlinerRenderer extends PlaneRenderer<AirlinerEntity> {
         super.extractRenderState(entity, state, partialTicks);
         state.metalSkin = entity.hasMetalSkin();
         state.airlinerLogo = entity.getLogo();
+        // A rider does not see the back of his own seat in first person, only the cushion.
+        Minecraft minecraft = Minecraft.getInstance();
+        Entity camera = minecraft.getCameraEntity();
+        state.airlinerHiddenSeat = camera != null && camera.getVehicle() == entity && minecraft.options.getCameraType().isFirstPerson()
+            ? entity.seatOf(camera) : -1;
     }
 
     @Override

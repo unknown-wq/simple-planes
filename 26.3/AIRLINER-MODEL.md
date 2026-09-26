@@ -1,21 +1,22 @@
-# Mini airliner: render model contract
+# Mini airliner: model, cabin and seats
 
-This file is for whoever writes the airliner's entity, physics and registration. It covers the render model
-only, which exists and compiles:
+This file describes the mini airliner as built: the render model, the cabin with its 22 seats, how a player
+boards a seat by clicking, and the hitboxes that make the nose and tail clickable. The flight model is in
+`design/DESIGN.md` section 4 and is unchanged by the cabin work.
 
 | Layer | Class | Texture | Render type | Cubes |
 |---|---|---|---|---|
-| material, wooden version | `client/render/models/AirlinerModel` | `state.materialTexture` (the block texture, tiled 16x16, same as `PlaneModel`) | `entityCutoutCull` | 40 |
-| material, metal version | `client/render/models/AirlinerSkinModel` | `simpleplanes:textures/plane_upgrades/airliner_skin.png` (512x512, `AirlinerSkinModel.TEXTURE`) | `entityCutoutCull` | 40 |
-| metal | `client/render/models/AirlinerMetalModel` | `simpleplanes:textures/plane_upgrades/airliner_metal.png` (256x256) | `entityCutoutCull` | 51 (41 drawn: one logo of six is visible) |
+| material, wooden version | `client/render/models/AirlinerModel` | `state.materialTexture` (the block texture, tiled 16x16, same as `PlaneModel`) | `entityCutoutCull` | 72 |
+| material, metal version | `client/render/models/AirlinerSkinModel` | `simpleplanes:textures/plane_upgrades/airliner_skin.png` (1024x1024, `AirlinerSkinModel.TEXTURE`) | `entityCutoutCull` | 72 |
+| metal, seats included | `client/render/models/AirlinerMetalModel` | `simpleplanes:textures/plane_upgrades/airliner_metal.png` (256x256) | `entityCutoutCull` | 119 (109 drawn: one logo of six is visible) |
 | fans (propeller slot) | `client/render/models/AirlinerFanModel` | same `airliner_metal.png` | `entityCutout` (default, two-sided) | 10 |
 
-A material layer (either one), the metal layer and the fans make 91 drawn cubes. For comparison: starter
-plane 60, fighter 56, large plane 157, cargo plane 297. The two material layers are built by one shared
-class, `AirlinerAirframe` (package-private); see *Wood or metal*.
+A material layer, the metal layer and the fans make 191 drawn cubes; 66 of them are the seats. For
+comparison: large plane 157, cargo plane 297. The two material layers are built by one shared class,
+`AirlinerAirframe` (package-private); see *Wood or metal*. The seat layout is shared by the model and the
+entity through `entities/AirlinerSeats`.
 
-Nothing is registered: there is no layer location, renderer, entity type or item. `PlaneRenderState`,
-`PlaneRenderer`, `PlanesModelLayers` and `SimplePlanesEntities` are untouched.
+![Before and after, at one scale](docs/airliner/cabin-compare.png)
 
 ## Coordinates
 
@@ -24,213 +25,220 @@ Nothing is registered: there is no layer location, renderer, entity type or item
 Model space is in pixels, where 1 px = 1/16 block. It uses the usual `ModelPart` convention: +Y points
 down and the nose points to -Z. +X is the aircraft's left side.
 
-- `AirlinerModel` and `AirlinerSkinModel` (both built by `AirlinerAirframe`) hang everything off the part `Airliner`, `AirlinerMetalModel` off `Metal` and
-  `AirlinerFanModel` off `Fans`. All three are at `PartPose.offset(0, 24, 0)`, so their local frames match.
-  In that local frame:
-  - the ground contact (the bottom of every tyre) is at **y = 0**, which is absolute y = 24;
-  - the belly (keel) is at y = -13, the belly fairing under the wing at y = -11, the cabin floor at y = -16,
-    the fuselage top (crown) at y = -41 and the fin tip at y = -76;
-  - the nose tip is at z = -94 and the end of the APU cone at z = +82;
-  - the middle of the length is at **z = -6**;
-  - the wingtips are at x = ±83.7 (the wings have 5° dihedral), the winglet tips at y ≈ -32.
+- `AirlinerModel` and `AirlinerSkinModel` (both built by `AirlinerAirframe`) hang everything off the part
+  `Airliner`, `AirlinerMetalModel` off `Metal` and `AirlinerFanModel` off `Fans`. All three are at
+  `PartPose.offset(0, 24, 0)`, so their local frames match. In that local frame:
+  - the ground contact (the bottom of every tyre) is at **y = 0**;
+  - the keel is at y = -13, the belly fairing under the wing at y = -11, the cabin floor at y = -16, the
+    cabin ceiling at y = -46, the crown at y = -51 and the fin tip at y = -87;
+  - the window band (the windows' sill and lintel) runs from y = -32 to y = -37;
+  - the nose tip is at z = -103 and the end of the APU cone at z = +84.
 - The wings, stabilisers and winglets are children with a dihedral roll: `wing_left`/`winglet_left` pivot at
-  (12, -14, 0) with `zRot = -AirlinerAirframe.WING_DIHEDRAL` (0.0873), `wing_right`/`winglet_right` at
-  (-12, -14, 0) with `+WING_DIHEDRAL`; `stab_left`/`stab_right` pivot at (±6, -25, 0) with `∓STAB_DIHEDRAL`
+  (28, -14, 0) with `zRot = -AirlinerAirframe.WING_DIHEDRAL` (0.0873), `wing_right`/`winglet_right` at
+  (-28, -14, 0) with `+WING_DIHEDRAL`; `stab_left`/`stab_right` pivot at (±18, -28, 0) with `∓STAB_DIHEDRAL`
   (0.1222).
-- The fans pivot at local (±32, -10, -24), the nacelle axis, 2 px behind the front of the intake ring.
+- The fans pivot at local (±52, -11, -26), the nacelle axis, 2 px behind the front of the intake ring.
 
 ### Entity space
 
-Entity space is in blocks, with +Y up and the nose at +Z. `PlaneRenderer.submit` maps a model point to the
-entity as follows: `translate(0, .375, 0)`, then `scale(-1, -1, 1)`, then `rotY(180)`, then the plane's
-quaternion, then the per-type translate `(tx, ty, tz)`, then `translate(0, -1.1, 0)`. With an identity
-rotation, an absolute model pixel `p` ends up at:
-
-```
-entity = ( p.x/16 ,  1.475 - ty - p.y/16 ,  -tz - p.z/16 )
-```
-
-## What to put in `PlaneRenderer.submit`
-
-Suggested per-type translate:
-
-```java
-} else if (entityType == SimplePlanesEntities.AIRLINER.get()) {
-    poseStack.translate(0.0F, -0.025F, 0.375F);
-}
-```
-
-This value was used for every reference render. With it the mapping simplifies to (local model coordinates,
-i.e. relative to the y = 24 root):
+Entity space is in blocks, with +Y up and the nose at +Z. `PlaneRenderer.submit` uses the per-type
+translate `(0, -0.025, 0.375)` for the airliner, so a model point at local `(x, y, z)` (relative to the
+y = 24 root) ends up at
 
 ```
 entity = ( x/16 ,  -y/16 ,  -(6 + z)/16 )
 ```
 
-- The tyres touch **y = 0** exactly.
-- The airframe is centred on the entity origin along its length: it runs from z = -5.5 at the APU cone to
-  z = +5.5 at the nose tip.
-- The renderer rotates the plane about entity point **(0, 0.375, 0)**, because the quaternion comes before
-  the per-type translate. That is model local (0, -6, -6): 7 px under the belly, just behind the middle of
-  the wheelbase (nose gear at entity z = +4.25, main gear at z = -1.375).
+The renderer rotates the plane about entity point (0, 0.375, 0), because the quaternion comes before the
+per-type translate. `AirlinerSeats.x/y/z(seat)` use the same mapping.
 
-## Dimensions (entity space, suggested translate)
+## Dimensions
 
-| | blocks |
+| | before (5.4.0-beta.2) | now |
+|---|---|---|
+| fuselage width x height | 1.625 x 1.75 | **3.625 x 2.375** (58 x 38 px) |
+| length, APU cone to nose tip | 11.0 | **11.69** (nose tip z +6.06, APU end z -5.63) |
+| wingspan, winglets included | 10.47 | **13.19** |
+| height to the fin tip | 4.75 | **5.44** |
+| top of the fuselage (crown) | 2.56 | 3.19 |
+| belly above the ground | 0.81 (0.69 under the wing fairing) | unchanged |
+| cabin floor / ceiling | 1.0 / 2.375 | 1.0 / 2.875 |
+| engine fan centre | (±2.0, 0.625, 1.125) | (±3.25, 0.69, 1.25); nacelles 14 px (12 before) |
+| wheelbase / main-gear track | 5.625 / 2.0 | 5.625 / 3.25 |
+| stabiliser span | 4.75 | 7.1 |
+| seats | 6 in one column | **22**: 2 crew, 20 passengers two by two |
+
+The fuselage is 2 blocks wider, as asked, and 0.63 block taller so the cross-section stays rounded (flat sides
+between two stepped shoulders above and two below). The wings keep their shape and move out with the
+fuselage side, with a slightly longer root chord (49 px, was 44); the engines move out to stay clear of the
+wider fuselage and grow by 2 px; the stabilisers grow with the wider tail cone; the fin rises with the crown.
+The length grows by 0.69 block: the nose got two more steps to taper from the wider section, and the tail
+cone one. The keel end, which sets the tail-strike angle, is where it was (entity y 0.8125, z -3.25), so the
+14.5 deg tail-strike angle and the 12 deg ground pitch clamp still hold.
+
+Nothing in the flight changes: the physics numbers, the mass, the entity bounding box (`sized(3.0, 2.6)`) and
+the per-type translate are as before. Measured on the server with the same procedure on the old and the new
+jar, take-off, cruise and turn are identical to the digit (see `design/DESIGN.md` section 4.2).
+
+## Hitboxes and boarding by click
+
+The airliner's own bounding box is `sized(3.0, 2.6)`, the mod's convention for big airframes and what the
+physics collides with. It covers only the middle 3 blocks of an 11.7 block aircraft, so the nose, the
+cockpit and the tail could not be clicked, and vanilla's range checks (client and server) are made against
+the bounding box of the entity clicked.
+
+**The fix: four hitbox entities along the fuselage** (`entities/AirlinerPartEntity`, type
+`simpleplanes:airliner_part`, `sized(3.4, 3.3)`), at entity z +4.5, +1.5, -1.5 and -4.5
+(`AirlinerEntity.PART_STATIONS`), together covering the fuselage from the nose tip to the APU:
+
+- the airliner spawns them on its first server tick and removes them in `onRemoval`; they are never saved
+  (`noSave`), not summonable, fire-immune, and a part whose airliner is gone for 20 ticks removes itself;
+- both sides move them every tick to `AirlinerEntity.partPosition(station)`, the station rotated with the
+  airliner, so they follow it in flight without waiting for a server update (their own update interval is
+  10 ticks);
+- they are invisible (`NoopRenderer`), have no physics, do not collide (`canBeCollidedWith` false), are not
+  pushable and ignore explosions;
+- a click on a part calls the airliner's `interact` with the hit location moved into the airliner's frame;
+  a hit (an attack, an arrow) is passed to the airliner's `hurtServer`, except explosions, which the airliner
+  receives itself;
+- `canBePickedFromInside` is false and, on the client, a part is not pickable for the local player riding its
+  airliner, so riders aim at the world rather than at their own aircraft.
+
+**Choosing the seat.** `AirlinerEntity.interact` works out the clicked point in the airliner's frame and
+boards the player into:
+
+- the captain's seat (seat 0, the pilot) when the point is on the cockpit or the nose (entity z >= 3.25) and
+  the seat is free;
+- otherwise the free seat nearest to the point (distance in x and z), so a click on a window boards the seat
+  next to it and a click on the tail a seat in the last row. With the captain's seat taken, a cockpit click
+  boards the first officer's seat.
+
+The clicked point comes from the player's eye ray traced to the fuselage's box on the server; the hit
+location the client sends (where its pick ray entered the part's or the airliner's bounding box, up to a
+block off the skin when the airliner is not axis-aligned) is used when the ray misses or lands more than 2
+blocks from it. A player who boards is turned to face the nose (`forceSetRotation`), as vanilla does for
+boats.
+
+**Options weighed.**
+
+| option | why not |
 |---|---|
-| length, APU cone to nose tip | **11.0** |
-| wingspan, winglets included | 10.47 |
-| height to the fin tip | 4.75 |
-| belly above the ground | 0.81 (0.69 under the wing fairing) |
-| top of the fuselage (crown) | 2.56 |
-| fuselage width x height | 1.625 x 1.75 |
-| engine fan centre | (±2.0, 0.625, 1.125); nacelles span x ±1.56 to ±2.44, 0.19 above the ground |
-| wheelbase / main-gear track | 5.625 / 2.0 (twin tyres at x ±0.75 to ±1.25) |
+| a larger `getPickRadius()`, rejecting clicks outside the fuselage | the inflated box is a cube around the middle: to reach the cockpit it would be about 11 blocks on each side. It would catch every click and arrow in that volume, block targeting blocks and mobs near a parked airliner, and projectiles use the same radius. Vanilla's range checks still use the real bounding box, so a survival player (3 block reach) could not click the cockpit anyway. |
+| a larger or rotating bounding box | the box is axis-aligned and is what the plane collides with: 11 blocks long at a diagonal heading is an 8 x 8 invisible wall, and a change to the physics |
+| vanilla `Interaction` entities | only record the last click for polling, would have to ride the airliner (and so fill its passenger list) to follow it, and give no hit location in the airliner's frame |
+| a mixin on picking | not allowed |
 
-For comparison (same dump, propeller included): starter plane 6.2 long, 6.75 span, 2.4 tall; fighter 7.4
-long, 5.6 span, 2.45 tall; large plane 8.4 long, 7.6 span, 2.8 tall. The cargo plane is bigger than all of
-these, **17.8 long**, 19.0 span, 5.1 tall; the airliner is not longer than it (see Limitations).
+The hitbox entities cost four entities per airliner, one small spawn packet each and nothing per tick while
+parked. Their boxes are axis-aligned, so at a diagonal heading their corners reach up to about 0.7 block
+beyond the skin, where a click still boards and a block behind cannot be targeted. They do not change the
+flight, collisions or what an arrow hits in the middle.
 
-## Hitbox
+## Seats
 
-`sized(3.0F, 2.6F)`. Width 3.0 is the mod's convention for its big airframes (large plane and cargo plane
-both use 3.0 x 2.3). It covers the fuselage (1.625 wide) and both main gear legs over the middle 3 blocks of the
-length; the wings, engines, nose and tail stick out, as they do on the other planes. Height 2.6 reaches the
-crown (2.56); the fin, up to 4.75, is left out, as the starter plane's tail is.
+Twenty-two seats, laid out in `entities/AirlinerSeats` (feet points in entity blocks, model px in brackets):
 
-Suggested `shadowRadius` for the `PlaneRenderer` constructor: `1.0F` (same as large and cargo).
-
-## Seats (`positionRider`)
-
-Six seats in one column on the centre line, 18 px (1.125 blocks) apart, the same layout idea as
-`LargePlaneEntity` (one column, about a block apart). The feet point of each, i.e. what `transformPos(...)`
-should return before it goes into `moveFunction.accept`, is:
-
-| passenger index | role | feet point `(x, y, z)` | model local z | eye (entity y) |
+| seat | role | x | y | z |
 |---|---|---|---|---|
-| 0 | pilot | `(0, 0.375, 4.25)` | -74 | 1.995 |
-| 1 | passenger | `(0, 0.375, 2.34375)` | -43.5 | 1.995 |
-| 2 | passenger | `(0, 0.375, 1.21875)` | -25.5 | 1.995 |
-| 3 | passenger | `(0, 0.375, 0.09375)` | -7.5 | 1.995 |
-| 4 | passenger | `(0, 0.375, -1.03125)` | 10.5 | 1.995 |
-| 5 | passenger | `(0, 0.375, -2.15625)` | 28.5 | 1.995 |
+| 0 | captain, the pilot | +0.6875 (11) | 0.6875 | +3.75 (-66) |
+| 1 | first officer | -0.6875 (-11) | 0.6875 | +3.75 (-66) |
+| 2-5 | row 1, A B C D | +1.3125, +0.5625, -0.5625, -1.3125 (21, 9, -9, -21) | 0.5625 | +2.5 (-46) |
+| 6-9 | row 2 | as row 1 | 0.5625 | +1.375 (-28) |
+| 10-13 | row 3 | as row 1 | 0.5625 | +0.25 (-10) |
+| 14-17 | row 4 | as row 1 | 0.5625 | -0.875 (8) |
+| 18-21 | row 5 | as row 1 | 0.5625 | -2.0 (26) |
 
-```java
-Vector3f pos = transformPos(new Vector3f(0.0f, 0.375f, SEAT_Z[index]));
-```
+Rows are 18 px (1.125 blocks) apart, two seats either side of an 8 px aisle. A is the left window seat.
 
-The y value is the sum `getPassengersRidingOffset() + getEntityYOffset(passenger)`. If the entity extends
-`LargeAirframeEntity`, whose `getEntityYOffset` returns -0.4 for a player, return **0.775f** from
-`getPassengersRidingOffset()`; with a plain `PlaneEntity` (no extra offset) return **0.375f**.
+![Cutaway: the 22 seats with rider stand-ins](docs/airliner/cabin-cutaway.png)
 
-The numbers come from the seated player model at 15/16 scale (hips 11.25 px above the feet point, head top
-30 px, eye 25.92 px, shoulders ±7.5 px):
+- **Seat models.** Every seat is a cushion, a back and a headrest in the metal layer (blue cloth with a grey
+  shell and a white headrest cover in the cabin, black leather for the crew). The crew seats stand 2 px
+  higher so that their eye is in the lower windscreen's panes.
+- **Rider geometry** (seated player model at 15/16 scale): hips 11.25 px above the feet point, on the
+  cushion; head 22.5 to 30 px above it, under the 46 px ceiling. Vanilla's eye is at feet + 1.62 (cabin
+  2.18, crew 2.31); with the mod's `CameraMixin` the first-person camera is at feet + 1.695 (cabin 2.26,
+  crew 2.38). Both are inside the window band (2.0 to 2.31) in the cabin, and in the lower windscreen's pane
+  row (2.25 to 2.44) in the cockpit.
+- **Own seat.** `AirlinerRenderer` puts the seat of the first-person camera's entity into
+  `PlaneRenderState.airlinerHiddenSeat`, and `AirlinerMetalModel.setupAnim` hides that seat's back and
+  headrest (each seat's back is a part of its own), so a rider looking round does not face the inside of his
+  own headrest. The cushion stays. In third person everything is drawn.
 
-- Hips at local y -17.25; the legs lie flat on the cabin floor (local y -16) and reach 11 px forward. The
-  pilot's legs end inside the nose, under the instrument panel.
-- The head spans local y -28.5 to -36, under the fuselage top (-38 for the body, -41 at the crown), so no rider
-  is visible from outside. Arms (±7.5 px) are well inside the ±13 px walls.
-- Every passenger's head is centred on a cabin window: the windows are 3 px wide, every 6 px along the belt,
-  at local z in [-57 + 6k, -54 + 6k), and seats 1 to 5 sit on k = 2, 5, 8, 11, 14. The eye (local y -31.92)
-  is in the window row (local y -34 to -31) on both sides. The pilot's head is behind the cockpit side
-  windows.
-- Pilot's eye: inside the lower windscreen box `glass_lo` (entity y 1.875 to 2.066, z 4.0 to 4.69).
+**Assignment.** A seat belongs to a rider, not to a place in the passenger list:
 
-### Seeing out of a closed cabin: the render types
+- each seat is a synched int (`AirlinerEntity.SEATS`) holding the rider's entity id, or -1. The server
+  assigns it in `addPassenger` and clears it in `removePassenger`; `positionRider` places every rider by
+  `seatOf(rider)` on both sides, so server and client always agree, and nobody moves when someone else leaves;
+- a player takes the seat chosen by his click; without a click (`/ride`, a reconnect) the captain's seat if it
+  is free, else the front-most free cabin seat, else the first officer's. Anything that is not a player
+  takes the front-most free cabin seat and never a crew seat, so 20 villagers fill the cabin and the cockpit
+  stays free;
+- `getControllingPassenger()` is the player in the captain's seat, or nobody. A player in any other seat is a
+  passenger: his client is not authoritative and his keys do not fly the aircraft. The autopilot rule is
+  unchanged (nobody controls while the flight director flies);
+- the world save keeps the seats as a `Seats` list of `{UUID, Seat}`; a rider who comes back (a chunk
+  reload, a server restart, a player reconnecting with the airliner as his vehicle) gets his seat back. The
+  item made from an airliner drops the list, as it drops the throttle. An airliner saved by an older build
+  has no list, and its riders take the default seats.
 
-The fuselage is closed. Every eye is inside the main fuselage box `body` (and the pilot's also inside
-`glass_lo`), so the riders can only see out if the faces of those boxes are culled when seen from inside.
+**What changed from the six-seat version, and why the rider "sat in the centre".** In 5.4.0-beta.2 the
+seat was the passenger's index in the vanilla passenger list (+1 without a player aboard), and a player
+clicking anywhere always got seat 0, the pilot's, 4.25 blocks forward on the centre line. That mapping was
+consistent: measured on a real client, the pilot's feet were at the same point on the server (a marker
+summoned at the rider) and on the client (F3), (7.875, -18.625, 13.681) for an airliner at (10, -19, 10)
+heading 30. The screenshot that looked like a mid-cabin seat was the pilot's seat seen looking aft: the
+player keeps his own yaw when he boards, the walls are see-through from inside and the cockpit had no seats
+or windows to show where he was, so what he saw was the long floor, the wings and the engines. The dark band
+across the view was the old windscreen box's top face, 0.1 px below the `CameraMixin` eye and seen edge on.
+Riders now face the nose when they board, sit in visible seats, and the windscreen is a frame ahead of the
+crew.
 
-**In 26.2 the default render type does not cull.** `EntityModel(ModelPart)` uses `RenderTypes::entityCutout`,
-whose pipeline `RenderPipelines.ENTITY_CUTOUT` (`pipeline/entity_cutout`) is built with `withCull(false)`
-and lights back faces separately (`PER_FACE_LIGHTING`). The culling variant is
-`RenderPipelines.ENTITY_CUTOUT_CULL` (`pipeline/entity_cutout_cull`), reached through
-`RenderTypes.entityCutoutCull`. An earlier version of this file said the default culls; it does not, and
-with it every rider would see nothing but the inside of the walls and the cockpit mask.
+## Windows, windscreen and the view out
 
-So the layers that contain an eye are constructed with `super(root, RenderTypes::entityCutoutCull)`:
+The fuselage stays see-through from inside, and it now has real openings.
 
-- `AirlinerModel` and `AirlinerSkinModel` (the eyes are inside `body`);
-- `AirlinerMetalModel` (the pilot's eye is inside `glass_lo`).
-
-`AirlinerFanModel` keeps the default: no eye is inside it. No cube in any airliner layer has zero thickness,
-so nothing needs to stay two-sided. For the front faces that are visible from outside, culling changes
-nothing: the lighting of a front face is the same in both pipelines.
-
-With culling on, every face of the boxes around an eye is a back face, so the riders see the world through
-the walls. The faces that still point into the cabin are either wanted or transparent:
-
-- wanted: the ceiling (underside of the upper shoulder), the floor, the rear bulkhead (front face of the tail
-  cone) and the instrument panel plus the nose ahead of the pilot, whose tops sit 2.9 px and 1.9 px below the
-  pilot's eye so the view over the nose stays clear;
-- transparent (alpha 0 in `airliner_metal.png`): every face of the window belts, doors and logo plates except
-  the outer one, the rear faces of both windscreen boxes (the cockpit is open to the cabin) and the bottom of
-  `glass_hi`, which is the one windscreen face that points at the pilot if the seat ends up higher.
-
-The seat can rise to about y 0.63 (eye 2.25) before the top face of `glass_hi` blocks the pilot's view.
-Keep these three layers on `entityCutoutCull`; on `entityCutout` the walls close the view. `docs/airliner/airliner-culling.png` shows the pilot's and a passenger's view with the old default and with
-the fix.
+- **Culling.** The material layers and the metal layer are `entityCutoutCull`. The default `entityCutout`
+  does not cull, and every rider would see the inside of the walls. `AirlinerFanModel` keeps the default
+  (no eye is inside it).
+- **The body is split around the window band.** `body_lower` (y -32 to -20) and `body_upper` (y -43 to -37)
+  are full-width boxes with the faces a rider would see from inside left out (`CubeListBuilder.addBox(...,
+  Set<Direction>)`): the top of the lower one, the underside of the upper one, and the upper one's front,
+  where the windscreen is. `hull_low` and `hull_high` round the section off with the same omissions, so the
+  floor a rider sees is the lower shoulder's top (y -16) and the ceiling the upper shoulder's underside
+  (y -46). All other faces around a rider point outwards and are culled from inside.
+- **Window band.** Between y -37 and -32 each side is a row of pillars (`pillar_0` to `pillar_11`, 2 px thick)
+  with the openings between them: two cockpit windows and nine cabin windows, 4 px wide, one on each seat row
+  and one between rows (`AirlinerAirframe.WINDOWS`). From outside you see the seats and their riders through
+  the windows and, through the far wall, the world beyond; from inside the pillars frame the windows at eye
+  level. The metal layer's window belt is a white plate over the band with open windows (rounded corners
+  painted in), a light gasket and the blue cheat line under it; its inner faces are transparent.
+- **Windscreen.** The nose steps down and forward in seven boxes that have no back face, so the crew see through
+  the nose. Two tinted, opaque windscreen plates sit on the fronts of the first two steps; their face towards
+  the crew is the same black frame with the panes open, so the crew look out through a windscreen frame, over
+  the instrument panel (screens and annunciators on its crew side). The cockpit side windows are open.
 
 ## Animated parts: the fans
 
-`AirlinerFanModel` goes into the renderer's **propeller** slot; pass `airliner_metal.png` as
-`propellerTexture` too.
-
-Parts, children of `Fans`: `fan_left` and `fan_right`. Each holds a spinner cube (dark, with a white spiral
-mark so the spin is visible) and four crossed blade bars, `blades_0` to `blades_3`, at 45° steps, each
-twisted 0.5 rad about its own axis: eight blades per fan.
-
-`setupAnim` calls `super.setupAnim(state)` and then sets `fanLeft.zRot = fanRight.zRot =
-state.propellerRotation`, exactly as `PropellerModel` does for `IronPropeller`. Nothing else is needed:
-`PlaneRenderer.extractRenderState` already fills `propellerRotation`. The review renders
-`airliner-fans-a.png` and `airliner-fans-b.png` (delivered with this work, not committed) show rotation 0
-and 0.4 rad. The blades are symmetric under a 45° turn, so the spinner mark is what makes slow rotation
-readable.
-
-The fans sit 2 px inside open intake rings (four `lip` cubes); the cowl's front face behind them is painted
-as the dark fan case.
+`AirlinerFanModel` goes into the renderer's **propeller** slot with `airliner_metal.png`. Parts, children of
+`Fans`: `fan_left` and `fan_right`, each a spinner cube with a white spiral mark and four crossed blade bars
+(12 px, was 10), `blades_0` to `blades_3`, at 45° steps, each twisted 0.5 rad: eight blades per fan.
+`setupAnim` sets `fanLeft.zRot = fanRight.zRot = state.propellerRotation`. The fans sit 2 px inside open
+intake rings; the cowl's front face behind them is painted as the dark fan case.
 
 ## Wood or metal: the two material layers
 
-The airliner comes in two finishes with the same airframe:
+- **wooden**: `AirlinerModel`, textured with the plane's material block texture, tiled like every other plane
+  (`LayerDefinition.create(mesh, 16, 16)`); `WOOD_UV` only picks which part of the plank pattern shows;
+- **metal**: `AirlinerSkinModel`, textured with its own `airliner_skin.png`, a white-and-aluminium livery:
+  white upper fuselage and fin, a blue cheat line that continues the window belt's round the nose and the
+  tail, an aluminium belly, wings and stabilisers, a grey radome, panel joints every block, and flap, aileron,
+  hinge and leading-edge lines on the wings.
 
-- **wooden**: `AirlinerModel`, textured with the plane's material block texture, tiled like every other
-  plane (`LayerDefinition.create(mesh, 16, 16)`);
-- **metal**: `AirlinerSkinModel`, textured with its own `airliner_skin.png`, a white-and-aluminium airliner
-  livery: white upper fuselage and fin, a blue cheat line that continues the window belt's line round the
-  nose and the tail, an aluminium belly, wings and stabilisers, a grey radome, panel joints every block on
-  the fuselage, and flap and aileron lines, hinge lines and a leading-edge strip on the wings.
-
-**Structure.** A real skin cannot reuse the tiled layout: every face needs its own place in the texture. So
-the geometry lives once, in `AirlinerAirframe.create(UvLayout)`, and each material layer only supplies a
-table of `texOffs` per named cube:
-
-- `AirlinerModel` has `WOOD_UV`, small offsets into the tiled 16x16 block texture (the same values as
-  before, so the wooden airliner is unchanged cube for cube);
-- `AirlinerSkinModel` has `SKIN_UV`, the packed nets in the 512x512 skin, generated together with the
-  texture.
-
-The two layers therefore cannot drift apart: a box added or moved in `AirlinerAirframe` moves in both, and a
-cube missing from either table fails at bake time with "no texOffs for airliner cube ...". Mirrored
-right-hand wing and stabiliser steps reuse their left-hand twin's net. The metal layer and the fans are the
-same for both finishes, and so are the per-type translate, hitbox and seats.
-
-**Choosing in the renderer.** `PlaneRenderer` draws one body model with `state.materialTexture`. For the
-airliner, the entity work should:
-
-1. bake both layers, e.g. `AIRLINER_LAYER` (`AirlinerModel::createBodyLayer`) and `AIRLINER_SKIN_LAYER`
-   (`AirlinerSkinModel::createBodyLayer`);
-2. decide the finish per aircraft. The natural rule is by material: an airliner built from a metal block
-   (for example `iron_block`, or any block in a new tag such as `simpleplanes:airliner_metal_skin`) is
-   metal, anything else wooden. Put the result in the render state, e.g. a `boolean metalSkin` in
-   `PlaneRenderState`, filled in `extractRenderState`;
-3. draw `metalSkin ? skinModel : woodModel` with `metalSkin ? AirlinerSkinModel.TEXTURE : state.materialTexture`.
-   The least intrusive way is two protected hooks in `PlaneRenderer`, `bodyModel(state)` and
-   `bodyTexture(state)`, which default to today's `planeEntityModel` and `state.materialTexture`; an
-   `AirlinerRenderer` subclass overrides them. The rest of `submit()` stays shared.
-
-Registering the metal airliner as a second entity type is possible too, but it still needs step 3, because
-`PlaneRenderer` always passes `state.materialTexture` to the body model.
+The geometry lives once, in `AirlinerAirframe.create(UvLayout)`; each layer supplies a table of `texOffs` per
+named cube, and a cube missing from either table fails at bake time with "no texOffs for airliner cube ...".
+The right-hand pillars, wing and stabiliser steps reuse their left-hand twin's net. The metal layer and the
+fans are the same for both finishes. The finish is chosen per aircraft by material: a block in
+`simpleplanes:airliner_metal_skin` (iron, copper, waxed copper, gold, netherite) gives the metal skin.
 
 ## Airline logos
 
@@ -246,110 +254,73 @@ none depicts or imitates a real airline or manufacturer.
 | 4 | Coralline | white, three coral, orange and red bands parallel to the swept leading edge |
 | 5 | Marigold Hop | marigold yellow, a rust six-petal flower |
 
-**Model.** `AirlinerMetalModel` has six parts `Tail/logo_0` to `logo_5`. Each is a pair of flush plates, one
-per side of the fin, covering its upper five steps (local y -76 to -47, z 50 to 79); texels outside the fin's
-outline are transparent, so the plate follows the swept, stepped fin exactly. The right-hand plate is the
-left one mirrored, so the marks face the nose on both sides. The API:
-
-- `AirlinerMetalModel.LOGO_COUNT` = 6;
-- `public void setLogo(int index)`: shows logo `index` (taken modulo `LOGO_COUNT`, so any int is safe) and
-  hides the others;
-- `setupAnim(state)` currently calls `setLogo(DEFAULT_LOGO)` (0).
-
-Because the logos are in the metal layer, the wooden and the metal airliner both carry them.
-`docs/airliner/airliner-logos.png` shows all six, and `docs/airliner/airliner-metal-sheet.png` the metal
-version.
-
-**Wiring (not done).** The logo belongs to the aircraft, not to the renderer:
-
-1. the entity rolls it once, when the airliner is first created (placed from the item), with
-   `random.nextInt(6)`, and saves it in its NBT (e.g. an int `"Logo"`), so a reload keeps it;
-2. it is synced to clients with a `SynchedEntityData` accessor, so every player sees the same tail;
-3. `PlaneRenderer.extractRenderState` copies it into a new `PlaneRenderState` field, e.g. `int airlinerLogo`;
-4. `AirlinerMetalModel.setupAnim` calls `setLogo(state.airlinerLogo)` in place of `setLogo(DEFAULT_LOGO)`.
-
-Two things to keep in mind:
-
-- do not call `setLogo` from `PlaneRenderer.submit()`. `submitModel` only queues the model; the queue is
-  flushed later, and `ModelFeatureRenderer` calls `setupAnim(state)` right before drawing each queued
-  instance. One model instance is shared by all airliners, so the logo must come from the state;
-- the entity is common code and must not reference `AirlinerMetalModel`, which is client-only (it extends
-  `EntityModel`). Give the entity its own constant equal to `LOGO_COUNT`; `setLogo` wraps anything larger.
+`AirlinerMetalModel` has six parts `Tail/logo_0` to `logo_5`, each a pair of flush plates on the fin's upper
+five steps (local y -87 to -58, z 50 to 79), transparent outside the fin's outline. `setLogo(int)` shows one
+(modulo `LOGO_COUNT`); `setupAnim` calls it with `state.airlinerLogo`. The entity rolls the logo when it is
+created on the server, syncs it (`LOGO`), saves it as `Logo` and keeps it in the item.
 
 ## Textures
 
-- `AirlinerModel` tiles the plane's material block texture at 1 texel per pixel, with
-  `LayerDefinition.create(mesh, 16, 16)`, exactly as `PlaneModel` does. The fuselage, nose, tail cone, wings,
-  belly fairing, stabilisers and fin are material.
-- `airliner_skin.png` is new: 512x512 RGBA, procedurally generated original work. It holds the net of every
-  airframe cube for `AirlinerSkinModel`, painted by model position (the white/blue/aluminium bands follow
-  the fuselage height, the panel joints its length).
-- `airliner_metal.png` is 256x256 RGBA, a procedurally generated original texture made for this model. It
-  holds the UV net of every metal and fan cube:
-  - a black cockpit "mask" band with tinted windscreen and side panes;
-  - the passenger window belt: white band, dark windows, blue cheat line;
-  - door outlines (the inside of the outline is transparent, so the material shows through), with a window
-    and the cheat line;
-  - the six airline logos (transparent outside the fin's outline);
-  - blue nacelle cowls with a silver band, silver intake rings, dark fan case, exhaust and plug;
-  - blue winglets with a white leading edge;
-  - light-grey pylons, struts and APU cone, black tyres with hubs;
-  - the instrument panel with coloured lights on the face towards the pilot;
-  - the grey fan blades and the spinner.
-- Both generators live outside the repository; the `texOffs` in `AirlinerMetalModel`, `AirlinerFanModel`
-  and the `SKIN_UV` table in `AirlinerSkinModel` were written by them. Hand edits are fine, but a moved
-  `texOffs` needs the texture repainted to match.
-- Window belts, doors and logo plates are flush plates just outside the skin (`CubeDeformation` 0.05; 0.04
-  for the doors so they never overlap a belt end on the same plane).
-- `.mirror()` is used for every right-hand copy. It swaps the ±X images, so the right-hand plates show the
-  same outer image as the left ones, still with the nose end first; the windows line up on both sides.
-- The existing `plane_metal.png` family could not be reused: no alpha channel and no glass, livery or tyre
-  regions.
+- `airliner_skin.png`: 1024x1024 RGBA (it was 512x512; the wider fuselage's nets no longer fit), the net of
+  every airframe cube for `AirlinerSkinModel`, painted by model position.
+- `airliner_metal.png`: 256x256 RGBA, the nets of every metal and fan cube: the windscreen mask and tinted
+  panes, the instrument panel, the cockpit side-window plates, the window belt with open windows, the doors,
+  the seats (cloth, shell, headrest cover, crew leather), the six logos, nacelles, winglets, pylons, gear,
+  APU, blades and spinner.
+- Both are generated procedurally (original work) by scripts kept outside the repository; they also write
+  `SKIN_UV` in `AirlinerSkinModel` and the `UV` table between `@UV-BEGIN` and `@UV-END` in
+  `AirlinerMetalModel`, which `AirlinerFanModel` reads too. Hand edits are fine; a moved `texOffs` needs the
+  texture repainted to match.
 
 ## Parts
 
 `AirlinerModel` and `AirlinerSkinModel` > `Airliner` (built by `AirlinerAirframe`):
 
-- `Fuselage`: `body` (26 x 22 px, solid), upper and lower shoulders (24 wide), crown and keel (18 wide),
-  giving a rounded cross-section; the belly fairing under the wing root.
-- `Nose`: four steps down and forward from the windscreen to the nose tip.
-- `TailCone`: three steps; the top stays level while the belly sweeps up to the APU.
-- `wing_left`, `wing_right`: six chord steps each, 3 px thick inboard and 2 px outboard, about 27° of sweep.
-- `stab_left`, `stab_right`: four swept steps each.
-- `Fin`: dorsal fillet plus six swept steps.
+- `Fuselage`: `body_lower`, `body_upper`, `hull_low`, `hull_high`, upper and lower shoulders, the crown in two
+  steps, the keel and the belly fairing under the wing root.
+- `WindowBand`: `pillar_0` to `pillar_11` on each side.
+- `Nose`: `nose_1` to `nose_7`, the windscreen steps down to the radome.
+- `TailCone`: four steps; the top stays level while the belly sweeps up to the APU.
+- `wing_left`, `wing_right`: six chord steps each; `stab_left`, `stab_right`: four; `Fin`: a dorsal fillet and
+  six swept steps.
 
 `AirlinerMetalModel` > `Metal`:
 
-- `Cockpit`: `glass_lo` and `glass_hi` (two-tier windscreen), the instrument panel.
+- `Cockpit`: the two windscreen plates, the instrument panel, the cockpit side-window plates.
 - `Cabin`: both window belts, front and rear doors on both sides.
+- `Seats`: the 22 cushions, and `seat_0` to `seat_21`, each seat's back and headrest.
 - `engine_left`, `engine_right`: intake ring (4), cowl, exhaust, plug, pylon.
 - `winglet_left`, `winglet_right`: two cubes each, on the wing pivots.
-- `Tail`: the APU cone, and `logo_0` to `logo_5`, each a plate on both sides of the fin.
+- `Tail`: the APU cone and `logo_0` to `logo_5`.
 - `Gear`: nose strut and twin nose tyres; two main struts, each with two tyres.
 
-## Things the entity work will run into
+## Test commands
 
-- **Upgrade models.** `UpgradesModels.modelFor`/`textureFor`/`submitSeats` send any entity type that is not
-  the plane, the large plane or the cargo plane to the **helicopter** variants. An airliner with upgrades
-  would draw helicopter parts in helicopter positions; it needs its own branch there first.
-- **Passenger count.** `PlaneEntity.canAddPassenger` allows one rider, or three with the seats upgrade. Six
-  seats need an override.
-- **Rotation pivot and length.** The plane rotates about a point 7 px under the belly at mid-length. At 11
-  blocks, a pitch of 15° lifts or drops the nose and tail by about 1.4 blocks, so the tail can dip into
-  the ground on take-off rotation; the physics should either limit pitch on the ground or accept it.
-- **Not checked in game.** The model has only been rendered outside the game, by baking the real
-  `LayerDefinition`s and walking the `ModelPart`s under the same `PoseStack` transforms that `submit()`
-  uses, with `setupAnim` run on a real `PlaneRenderState` (fans, logo). The preview asks each model for its
-  real `RenderType` and culls only the layers whose type is `entity_cutout_cull`. The lighting in those
-  renders is an approximation.
+`/airliner`, permission level 2, works from the console; every line also goes to the log at INFO (logger
+`simpleplanes-airliner`). `<id>` is the entity id, as printed by `aircraft spawn` or `airliner status`.
+
+| syntax | effect | example |
+|---|---|---|
+| `airliner status` | one line per airliner in loaded chunks: `#id logo= item-logo= skin= riders= seats=[<seat>@<x>/<z>,...] pilot=<name\|none> parts=<n> pos= spd= pitch= og= thr= health=`. `seats` lists each rider's seat and where his feet are in the airliner's frame (blocks, +x left, +z towards the nose); `pilot` is the controlling passenger; `parts` the hitbox entities found around it (4) | `airliner status` |
+| `airliner board <id>` | mounts every villager within 8 b that is not riding, nearest first, through the normal `startRiding`; prints the seat each one got (`seat 2 (row 1A)`) or that it was refused | `airliner board 48` |
+| `airliner click <id> <x> <y> <z>` | added with the cabin. A dry run: prints the seat a player clicking the airliner-frame point (x, y, z) would board, e.g. `boards seat 0 (captain)` | `airliner click 48 0 2 5.8` |
+| `airliner click <id> <x> <y> <z> <player>` | added with the cabin. Runs the airliner's own `interact` for an online player with that point as the hit location, as a real click does (the eye ray is used only if it lands within 2 blocks of the point), and prints the result, the seat and whether the player now controls the airliner | `airliner click 48 1.8 2.2 0.3 Tester` |
+| `airliner logo <id> <0..5>` | sets the synched logo | `airliner logo 48 4` |
 
 ## Limitations
 
-- **Not longer than the cargo plane.** The airliner is 11.0 blocks long, the upper end of the requested
-  9–11 and clearly longer than the starter plane (6.2), fighter (7.4) and large plane (8.4). The cargo
-  plane is 17.8 long, so beating it would need a model about 1.7 times this size, which would no longer be
-  a "mini" airliner. The review render `airliner-scale-cargo.png` (not committed) shows the two together.
-- The engines are square in section (blocky style); the fans are opaque, so the intake reads as a disc of
-  blades in front of a dark case.
-- Riders see the outside through the fuselage walls rather than through the windows, like the fighter's
-  pilot through the canopy; the window belts are drawn only from outside.
+- Riders see out through the walls, not only through the windows; onlookers looking in through a window see
+  the far side of the cabin open to the outside behind the seats and pillars.
+- The windscreen panes are opaque from outside (tinted glass); the crew are seen through the cockpit side
+  windows.
+- The hitbox entities are axis-aligned, so at a diagonal heading their corners stick out up to about 0.7 block
+  past the skin.
+- Player shoulders are 15 px wide and the seats 12 px apart, so neighbours' arms overlap a little, as they do
+  on vanilla's multi-seat vehicles.
+- **Upgrade models.** `UpgradesModels` draws nothing for the airliner (no branch for it), as before.
+
+Screenshots from a real 26.3 client (Mesa llvmpipe under Xvfb) joined to a test server:
+
+![Crew seat: windscreen, instrument panel, the cabin behind](docs/airliner/cabin-client-pilot.png)
+![Cabin seat: rows ahead, the aisle, the window, the row behind](docs/airliner/cabin-client-passenger.png)
+![Outside: villagers seen through the windows](docs/airliner/cabin-client-outside.png)
