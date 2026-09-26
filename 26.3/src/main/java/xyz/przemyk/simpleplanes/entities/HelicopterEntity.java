@@ -463,7 +463,7 @@ public class HelicopterEntity extends LargeAirframeEntity {
         // lift-off — see PHYSICS-AUDIT.md B6 for the same trap on the fixed-wing side.
         if (onGround() || isOnWater()) {
             Vec3 m = getDeltaMovement();
-            double keep = 1.0 - GROUND_FRICTION;
+            double keep = 1.0 - groundFriction();
             setDeltaMovement(m.x * keep, m.y, m.z * keep);
         }
         return true;
@@ -488,18 +488,18 @@ public class HelicopterEntity extends LargeAirframeEntity {
     @Override
     protected void tickPitch(TempMotionVars tempMotionVars) {
         if (getHealth() <= 0) {
-            setXRot((float) approach(getXRot(), DEAD_PITCH, MAX_CYCLIC_RATE));
-            rotationRoll = (float) approach(rotationRoll, getId() % 2 == 0 ? DEAD_ROLL : -DEAD_ROLL, MAX_CYCLIC_RATE);
+            setXRot((float) approach(getXRot(), DEAD_PITCH, maxCyclicRate()));
+            rotationRoll = (float) approach(rotationRoll, getId() % 2 == 0 ? DEAD_ROLL : -DEAD_ROLL, maxCyclicRate());
             return;
         }
 
         boolean grounded = onGround();
-        double targetPitch = grounded ? 0 : -MAX_CYCLIC * getCyclicForward() / CYCLIC_FULL;
-        double targetRoll = grounded ? 0 : -MAX_CYCLIC * getCyclicRight() / CYCLIC_FULL;
-        float newPitch = (float) approach(getXRot(), targetPitch, MAX_CYCLIC_RATE);
+        double targetPitch = grounded ? 0 : -maxCyclic() * getCyclicForward() / CYCLIC_FULL;
+        double targetRoll = grounded ? 0 : -maxCyclic() * getCyclicRight() / CYCLIC_FULL;
+        float newPitch = (float) approach(getXRot(), targetPitch, maxCyclicRate());
         pitchDelta = newPitch - getXRot();
         setXRot(newPitch);
-        rotationRoll = (float) approach(rotationRoll, targetRoll, MAX_CYCLIC_RATE);
+        rotationRoll = (float) approach(rotationRoll, targetRoll, maxCyclicRate());
     }
 
     /** This tick's elevator-axis change, needed by {@link #tickYaw()} — see {@link #applyYaw}. */
@@ -539,15 +539,15 @@ public class HelicopterEntity extends LargeAirframeEntity {
 
         byte pedal = getPedal();
         if (pedal > 0) {
-            yawSpeed += YAW_RAMP;
+            yawSpeed += yawRamp();
         } else if (pedal < 0) {
-            yawSpeed -= YAW_RAMP;
+            yawSpeed -= yawRamp();
         } else if (yawSpeed > 0) {
-            yawSpeed = Math.max(0, yawSpeed - YAW_RAMP);
+            yawSpeed = Math.max(0, yawSpeed - yawRamp());
         } else if (yawSpeed < 0) {
-            yawSpeed = Math.min(0, yawSpeed + YAW_RAMP);
+            yawSpeed = Math.min(0, yawSpeed + yawRamp());
         }
-        yawSpeed = Mth.clamp(yawSpeed, -MAX_YAW_RATE, MAX_YAW_RATE);
+        yawSpeed = Mth.clamp(yawSpeed, -maxYawRate(), maxYawRate());
 
         float yaw = yawSpeed;
         if (!onGround()) {
@@ -558,7 +558,7 @@ public class HelicopterEntity extends LargeAirframeEntity {
             // 147 degrees of unasked-for heading change in 400 ticks.
             double f = Mth.clamp(forwardSpeed() / TURN_COORDINATION_SPEED, 0.0, 1.0);
             // rotationRoll > 0 is banked left, and a left bank must turn left, i.e. decrease yaw.
-            yaw -= (float) (TURN_FROM_BANK * Math.sin(Math.toRadians(rotationRoll)) * f);
+            yaw -= (float) (turnFromBank() * Math.sin(Math.toRadians(rotationRoll)) * f);
         }
         return yaw;
     }
@@ -634,9 +634,9 @@ public class HelicopterEntity extends LargeAirframeEntity {
 
         // --- drag ---
         double discDrag = getHealth() <= 0 ? DEAD_DISC_DRAG : 1.0;
-        vy -= (V_DRAG_QUAD * Math.abs(vy) + V_DRAG_LIN) * vy * discDrag;
+        vy -= (vDragQuad() * Math.abs(vy) + vDragLin()) * vy * discDrag;
 
-        double newVh = Math.max(0, vh - (H_DRAG_QUAD * vh * vh + H_DRAG_LIN * vh + H_DRAG_CONST));
+        double newVh = Math.max(0, vh - (hDragQuad() * vh * vh + hDragLin() * vh + hDragConst()));
         double scale = vh > 1.0E-9 ? newVh / vh : 0;
         double vx = m.x * scale;
         double vz = m.z * scale;
@@ -655,8 +655,9 @@ public class HelicopterEntity extends LargeAirframeEntity {
 
         // --- backstop ---
         double speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-        if (speed > MAX_SPEED) {
-            double k = MAX_SPEED / speed;
+        double maxSpeed = maxSpeedBackstop();
+        if (speed > maxSpeed) {
+            double k = maxSpeed / speed;
             vx *= k;
             vy *= k;
             vz *= k;
@@ -674,11 +675,11 @@ public class HelicopterEntity extends LargeAirframeEntity {
         if (!isPowered() || getHealth() <= 0) {
             return 0;
         }
-        double thrust = COLLECTIVE_PER_NOTCH * getCollectiveNotches();
+        double thrust = collectivePerNotch() * getCollectiveNotches() * ceilingThrustFactor(getY());
         if (vy > 0) {
             // Axial inflow: climbing takes the rotor's air away from it. This is what makes each
             // collective setting have an equilibrium climb rate instead of a constant acceleration.
-            thrust *= Mth.clamp(1.0 - vy / ROTOR_INFLOW_LIMIT, 0.0, 1.0);
+            thrust *= Mth.clamp(1.0 - vy / rotorInflowLimit(), 0.0, 1.0);
         }
         return thrust;
     }
@@ -686,6 +687,69 @@ public class HelicopterEntity extends LargeAirframeEntity {
     /** Roll is part of the attitude update in {@link #tickPitch}, one hook earlier. */
     @Override
     protected void tickRoll(TempMotionVars tempMotionVars) {}
+
+    // Tuning getters: the constants above are the defaults; a smaller rotorcraft overrides these.
+
+    protected double collectivePerNotch() {
+        return COLLECTIVE_PER_NOTCH;
+    }
+
+    protected double rotorInflowLimit() {
+        return ROTOR_INFLOW_LIMIT;
+    }
+
+    protected double maxCyclic() {
+        return MAX_CYCLIC;
+    }
+
+    protected double maxCyclicRate() {
+        return MAX_CYCLIC_RATE;
+    }
+
+    protected float maxYawRate() {
+        return MAX_YAW_RATE;
+    }
+
+    protected float yawRamp() {
+        return YAW_RAMP;
+    }
+
+    protected double turnFromBank() {
+        return TURN_FROM_BANK;
+    }
+
+    protected double hDragQuad() {
+        return H_DRAG_QUAD;
+    }
+
+    protected double hDragLin() {
+        return H_DRAG_LIN;
+    }
+
+    protected double hDragConst() {
+        return H_DRAG_CONST;
+    }
+
+    protected double vDragQuad() {
+        return V_DRAG_QUAD;
+    }
+
+    protected double vDragLin() {
+        return V_DRAG_LIN;
+    }
+
+    protected double maxSpeedBackstop() {
+        return MAX_SPEED;
+    }
+
+    protected double groundFriction() {
+        return GROUND_FRICTION;
+    }
+
+    /** Multiplier on rotor thrust at world height {@code y}; 1 is no ceiling. */
+    protected double ceilingThrustFactor(double y) {
+        return 1.0;
+    }
 
     /**
      * The fixed-wing "mass proxy" scales the rudder as {@code 2.5f * multiplier}, and 1.2 is chosen
