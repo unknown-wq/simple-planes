@@ -105,5 +105,9 @@
     "key.plane_yaw_right.desc": "右に旋回",
     "key.plane_yaw_left.desc": "左に旋回",
     "simpleplanes.add_upgrades": "アップグレードを追加",
-    "simpleplanes.add_cargo": "貨物を追加"
+    "simpleplanes.add_cargo": "貨物を追加",
+
+    "entity.simpleplanes.missile": "ミサイル",
+    "block.simpleplanes.launch_silo": "ミサイルサイロ",
+    "block.simpleplanes.launch_silo_casing": "ミサイルサイロの外壁"
 }

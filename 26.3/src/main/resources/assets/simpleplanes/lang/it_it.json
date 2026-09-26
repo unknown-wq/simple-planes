@@ -85,6 +85,9 @@
     "entity.simpleplanes.plane": "Aereo",
     "entity.simpleplanes.large_plane": "Aereo Grande",
     "entity.simpleplanes.helicopter": "Elicottero",
-    "entity.simpleplanes.parachute": "Paracadute"
+    "entity.simpleplanes.parachute": "Paracadute",
 
+    "entity.simpleplanes.missile": "Missile",
+    "block.simpleplanes.launch_silo": "Silo di lancio",
+    "block.simpleplanes.launch_silo_casing": "Rivestimento del silo di lancio"
 }

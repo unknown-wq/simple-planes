@@ -100,5 +100,9 @@
     "key.plane_inventory_open.desc": "Віткрити інвертар літаку",
     "key.move_heli_up.desc": "Підняти гелікоптер",
     "key.plane_yaw_right.desc": "Нахилити літак вліво",
-    "key.plane_yaw_left.desc": "Нахилити літак вправо"
+    "key.plane_yaw_left.desc": "Нахилити літак вправо",
+
+    "entity.simpleplanes.missile": "Ракета",
+    "block.simpleplanes.launch_silo": "Пускова шахта",
+    "block.simpleplanes.launch_silo_casing": "Корпус пускової шахти"
 }
