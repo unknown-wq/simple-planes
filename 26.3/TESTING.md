@@ -505,6 +505,92 @@ from it, so `daim` going through zero is the moment the aircraft is over the poi
 distances from the threshold, and watching the two diverge is how the aim rule is checked. They are
 equal only on a runway short enough that `touchdownAimOffset` returns 0, which no usable runway is.
 
+### Recipe: taxi routing — pits, parked traffic, blocked stands, restarts, runway end
+
+Server made with `tools/testserver/make-server.sh /home/user/sp-taxi-server 25730`, started with
+`MC_JVM_OPTS="-Xmx1536M -Dsimpleplanes.autopilot.trace=true" ./start.sh`. The trace line carries
+`taxi_left= xt= cmdspd=` and, while a guard holds the aircraft, `hold=<reason>`.
+
+World, built once and copied to `world-template` so every run starts identical:
+
+```sh
+./cmd.sh "gamerule minecraft:spawn_mobs false"
+./cmd.sh "forceload add -48 -240 95 47"                  # airfield-1 and its apron
+./cmd.sh "forceload add 176 -140 264 24"                 # airfield-3
+./cmd.sh "forceload add 390 -1190 434 -990"              # airfield-2 (destination)
+./cmd.sh "autopilot survey 0 -60 0 24 -60 -180"          # airfield-1: 180 long, 36 threshold at z=0
+./cmd.sh "autopilot survey 400 -60 -1000 424 -60 -1180"  # airfield-2
+./cmd.sh "autopilot survey 200 -60 0 224 -60 -100"       # airfield-3: 100 long
+for z in -8 -24 -40 -56; do ./cmd.sh "autopilot airfields park \"airfield-1\" 40 -60 $z"; done
+./cmd.sh 'autopilot airfields park "airfield-3" 230 -60 -94'   # 18 blocks from the 18 threshold
+```
+
+Scenarios (each on a fresh copy of the template, then `tick sprint N`):
+
+```sh
+# S0 near end: expect "depart 18 … taxi 18 blocks, entering 6 blocks in, 94 to run"
+./cmd.sh 'autopilot flight "airfield-3" "airfield-2"'; ./cmd.sh "autopilot status"
+# S0 one-way: expect "not 18: one-way 36", an intersection entry 50 blocks in
+./cmd.sh 'autopilot airfields oneway "airfield-3" 36'
+# S0 arrival conflict: land on 36 first, then depart: "not 18: arrivals landing 36", 18 again after it lands
+./cmd.sh 'autopilot inbound 212 -20 700 "airfield-3" 2.60'; ./cmd.sh "tick sprint 300"
+# S6 one-way is departures only: with oneway 36, an arrival from the north lands 18, from the south 36
+./cmd.sh 'autopilot inbound 212 -20 -700 "airfield-3" 2.60'   # expect "landed at airfield-3/18"
+# ...and with a departure rolling 36 at the same time, the arrival holds until it has climbed out
+./cmd.sh 'autopilot flight "airfield-3" "airfield-2"'; ./cmd.sh 'autopilot inbound 212 -20 -700 "airfield-3" 2.60'
+# S1 pits: one across the straight stand->threshold line, one beside the apron lane
+./cmd.sh "fill 25 -62 -7 29 -61 -1 minecraft:air"
+./cmd.sh "fill 47 -63 -52 53 -61 -30 minecraft:air"
+./cmd.sh "fill 30 -63 -20 34 -61 -14 minecraft:air"
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'                         # departure
+./cmd.sh 'autopilot inbound 12 -20 700 "airfield-1" 2.60 type airliner'       # wide-airliner arrival
+# S2 apron with mixed parked aircraft, then a departure and a wide-airliner arrival
+./cmd.sh 'summon simpleplanes:airliner 40 -60 -24 {Rotation:[90f,0f],Tags:["parked"]}'
+./cmd.sh 'summon simpleplanes:cargo_plane 40 -60 -40 {Rotation:[90f,0f],Tags:["parked"]}'
+./cmd.sh 'summon simpleplanes:regional_airliner 40 -60 -56 {Rotation:[90f,0f],Tags:["parked"]}'
+./cmd.sh 'summon simpleplanes:large_plane 30 -60 -5 {Rotation:[0f,0f],Tags:["parked"]}'
+# S3 crossing: departure spawned on (40,-24) waits for the runway while a plane arrival lands and
+# taxis back to (40,-8) across its path
+./cmd.sh 'summon simpleplanes:plane 40 -60 -8 {Tags:["tmp"]}'   # keeps the departure off stand 1
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2" delay 30'; ./cmd.sh 'kill @e[tag=tmp]'
+./cmd.sh 'autopilot inbound 12 -20 700 "airfield-1" 2.60'
+# S4 fully blocked: stand 1 walled on three sides, the open side closed by parked aircraft
+./cmd.sh 'fill 33 -60 -1 48 -58 -1 minecraft:stone'
+./cmd.sh 'fill 33 -60 -16 48 -58 -16 minecraft:stone'
+./cmd.sh 'fill 48 -60 -16 48 -58 -1 minecraft:stone'
+./cmd.sh 'summon simpleplanes:plane 31 -60 -3 {Rotation:[0f,0f],Tags:["parked"]}'
+./cmd.sh 'summon simpleplanes:cargo_plane 31 -60 -8 {Rotation:[0f,0f],Tags:["parked"]}'
+./cmd.sh 'summon simpleplanes:large_plane 31 -60 -13 {Rotation:[0f,0f],Tags:["parked"]}'
+./cmd.sh 'autopilot flight "airfield-1" "airfield-2"'   # expect: holding … no taxi route: blocked by #N
+./cmd.sh 'kill @e[type=simpleplanes:cargo_plane]'; ./cmd.sh 'kill @e[type=simpleplanes:large_plane]'
+# S5 restart: wait until the trace shows the aircraft in taxi / taxi_in part way, then
+./stop.sh; ./start.sh; ./cmd.sh "autopilot status"   # expect parked (re-planned) / taxi_in resumed
+```
+
+What to measure from the trace, per aircraft, against the known positions and yaws of the parked
+aircraft: ticks and path length in `taxi` and `taxi_in`; ticks from the first trace line to 5 blocks
+AGL; ticks with `pos` y more than 0.45 below the runway (a pit); ticks where the bounding boxes
+touch, where the fuselage rectangles overlap, and where span × 60 %-length rectangles overlap. The
+parked aircraft's positions can be confirmed after the run with
+`execute as @e[tag=parked] run data get entity @s Pos`. Results are in `design/TAXI.md`.
+
+Slopes: a taxi route can only change level in half steps (`TAXI_MAX_STEP` 0.55), so ramps are slabs.
+On airfield-3 (runway x 200..224):
+
+```sh
+./cmd.sh "fill 234 -60 -52 246 -60 -40 minecraft:stone"             # stand platform, one block up
+./cmd.sh 'autopilot airfields park "airfield-3" 240 -59 -46'          # refused: no level route
+./cmd.sh "fill 226 -60 -52 233 -60 -40 minecraft:smooth_stone_slab"  # slab ramp to the runway
+./cmd.sh 'autopilot airfields park "airfield-3" 240 -59 -46'          # accepted
+./cmd.sh 'autopilot airfields unpark "airfield-3" 230 -61 -94'        # so the flight uses the new stand
+./cmd.sh 'autopilot flight "airfield-3" "airfield-2"'                 # taxies down the slabs, departs
+```
+
+Two pitfalls. `tick sprint` finishes long before `console.log` is flushed on a loaded machine — wait
+for `Sprint completed`, and count occurrences when a run sprints twice. A departure to airfield-2
+reports `lost … in climb` near z=-321: it flew out of the force-loaded area, which is the rig, not
+the flight.
+
 ### Recipe: an approach over water
 
 The whole point of this one is that **nothing about the airfield changes when you flood its

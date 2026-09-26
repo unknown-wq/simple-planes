@@ -147,6 +147,10 @@ public final class AirfieldBrowser {
 
         output.component(AutopilotText.tr("detail.preferred", "  preferred landing direction %s",
             airfield.bestEnd(level).designator()));
+        if (airfield.oneWayEnd() != null) {
+            output.component(AutopilotText.tr("detail.one_way", "  one-way: every take-off uses %s (arrivals from either end)",
+                airfield.oneWayEnd().designator()).withStyle(ChatFormatting.YELLOW));
+        }
 
         // Where an arrival will actually put its wheels, and how much of the strip that leaves. The
         // aim point is derived from the length rather than fixed, so a player who has just built a
@@ -602,6 +606,47 @@ public final class AirfieldBrowser {
             "Removed the parking spot at %s (%s left).", closest.toShortString(), spots.size())
             .withStyle(ChatFormatting.GREEN));
         return true;
+    }
+
+    /**
+     * Restricts a runway to one direction ({@code direction} is a designator of it) or makes it
+     * two-way again ({@code off}). Only departures keep to it: an arrival lands from whichever end
+     * suits it, so long as the runway is free and no departure is using the other direction.
+     */
+    public static boolean oneWay(AutopilotOutput output, ServerLevel level, String name, String direction) {
+        AutopilotSavedData data = AutopilotSavedData.get(level);
+        Airfield airfield = data.get(name);
+        if (airfield == null) {
+            output.component(unknown(name).withStyle(ChatFormatting.RED));
+            return false;
+        }
+        if (direction.equalsIgnoreCase("off") || direction.equalsIgnoreCase("both")) {
+            data.put(airfield.withOneWay(""));
+            output.component(AutopilotText.tr("manage.two_way", "%s is two-way again (%s).",
+                name, airfield.designators()).withStyle(ChatFormatting.GREEN));
+            return true;
+        }
+        for (RunwayEnd end : airfield.ends()) {
+            if (sameDesignator(end.designator(), direction)) {
+                data.put(airfield.withOneWay(end.designator()));
+                output.component(AutopilotText.tr("manage.one_way",
+                    "%s is one-way %s: every take-off uses %s; arrivals may land from either end.", name,
+                    end.designator(), end.designator()).withStyle(ChatFormatting.GREEN));
+                return true;
+            }
+        }
+        output.component(AutopilotText.tr("manage.one_way_unknown",
+            "%s has no runway %s; its directions are %s, or off.", name, direction, airfield.designators())
+            .withStyle(ChatFormatting.RED));
+        return false;
+    }
+
+    private static boolean sameDesignator(String designator, String typed) {
+        try {
+            return Integer.parseInt(designator) == Integer.parseInt(typed.trim());
+        } catch (NumberFormatException e) {
+            return designator.equalsIgnoreCase(typed.trim());
+        }
     }
 
     public static MutableComponent unknown(String name) {
