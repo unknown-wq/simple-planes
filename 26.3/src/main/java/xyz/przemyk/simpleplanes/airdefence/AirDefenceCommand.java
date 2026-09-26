@@ -218,8 +218,9 @@ public final class AirDefenceCommand {
         player.setItemInHand(InteractionHand.MAIN_HAND, stack);
         java.util.Set<Integer> before = new java.util.HashSet<>();
         for (PlaneEntity p : AircraftRoster.loaded(level)) before.add(p.getId());
+        String held = stack.getItem().toString();
         InteractionResult result = player.gameMode.useItem(player, level, stack, InteractionHand.MAIN_HAND);
-        ok(c, "place " + stack.getItem() + ": " + (result.consumesAction() ? "accepted" : "refused"));
+        ok(c, "place " + held + ": " + (result.consumesAction() ? "accepted" : "refused"));
         int n = 0;
         for (PlaneEntity p : AircraftRoster.loaded(level)) {
             if (before.contains(p.getId())) continue;

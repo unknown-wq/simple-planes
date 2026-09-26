@@ -125,8 +125,8 @@ public final class Interceptor {
         String state = e instanceof PlaneEntity p
             ? (p.isRemoved() || !p.isAlive() ? "destroyed" : "hp=" + p.getHealth() + "/" + p.getMaxHealth())
             : "gone";
-        return String.format(java.util.Locale.ROOT, "target=#%d %s closest=%.2f tvel=%.2f retargets=%d",
-            targetEntityId, state, closest, velocity.length(), retargets);
+        return String.format(java.util.Locale.ROOT, "target=#%d %s closest=%s tvel=%.2f retargets=%d", targetEntityId, state,
+            Double.isInfinite(closest) ? "-" : String.format(java.util.Locale.ROOT, "%.2f", closest), velocity.length(), retargets);
     }
 
     /** Releases the engagement claim; call once when the flight ends. */
