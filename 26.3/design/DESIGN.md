@@ -18,6 +18,7 @@ for b/s. Accelerations are b/t².
 |---|---|---|---|
 | Fighter | `FighterEntity extends PlaneEntity` | fixed-wing | cruise 2.30 b/t (46 b/s) at throttle 5, 3.1x the starter plane; take-off 0.45 b/t after a 12-block run; realised turn 58 deg/s, pitch 7 deg/tick, roll 8 deg/tick |
 | Mini airliner | `AirlinerEntity extends PlaneEntity` | fixed-wing | 22 seats (2 crew, 20 passengers, boarded by where you click; AIRLINER-MODEL.md); cruise 1.25 b/t (25 b/s); take-off 0.60 b/t, rotation at 34 blocks, airborne at 51 blocks; realised turn 10 deg/s; ground pitch clamped at 12 deg (tail strike at 14.5 deg); metal skin by material tag, 6 logos rolled on placement |
+| Regional airliner | `RegionalAirlinerEntity extends AirlinerEntity` | fixed-wing | the mini airliner's narrow size (§4.4): 14 seats (2 crew, 12 passengers one either side of the aisle), 2.5 b wide; cruise 1.25 b/t; take-off 0.54 b/t, rotation at 23.5 blocks, airborne at 38 blocks; realised turn 12 deg/s; tail strike at 13.4 deg, same 12 deg clamp |
 | Airship | `AirshipEntity extends PlaneEntity` (all six flight hooks overridden, like the helicopter) | plane family, own physics | 7 seats; buoyancy + ballast trim, fly-by-wire altitude hold (captures with 0.08 b overshoot); cruise 0.81 b/t (16 b/s); 12 deg/s turn, radius 77 b; static climb/sink limit 0.2 b/t |
 | Quadcopter crane | `QuadcopterEntity extends Entity` (new family) | multirotor, server-flown | thrust-to-weight 3.0; position controller settles a 20-block move in 4.4 s empty, 5.8 s with a cow; rope 1..12 b, winch 0.15 b/t; load limit 1.55 drone masses (cow yes, horse no); carried mob is a passenger placed at the rope end, rope drawn with vanilla's leash renderer |
 | Mini helicopter | `MiniHelicopterEntity extends HelicopterEntity` | rotorcraft (existing model, smaller numbers) | one seat; hover at notch 2 (helicopter: 3), climb to +0.40 b/t at notch 5 (helicopter +0.24), level top speed 0.75 b/t (helicopter 1.11), pedal 90 deg/s, full cyclic in 8.6 ticks; thrust fades above y 100, absolute ceiling y 160; standard or medical livery by material tag |
@@ -251,7 +252,7 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
 
 ### 4.3 Seats, skin and logo
 
-- 22 seats (`entities/AirlinerSeats`): captain (seat 0, the pilot) and first officer side by side in the
+- 22 seats (`entities/AirlinerLayout.WIDE`): captain (seat 0, the pilot) and first officer side by side in the
   cockpit, feet at `(±0.6875, 0.6875, 3.75)`; 20 cabin seats in five rows two by two either side of the
   aisle, feet at `x = ±1.3125, ±0.5625`, `y = 0.5625`, `z = 2.5, 1.375, 0.25, -0.875, -2.0`. No seats upgrade
   is needed or accepted.
@@ -271,7 +272,8 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
 - Metal skin: `metalSkin = material block is in the new block tag simpleplanes:airliner_metal_skin`
   (`iron_block`, `copper_block`, `waxed_copper_block`, `gold_block`, `netherite_block`; the same blocks
   are added to `simpleplanes:plane_materials` so the workbench builds one). The renderer draws
-  `AirlinerSkinModel` with `AirlinerSkinModel.TEXTURE` instead of `AirlinerModel` with the block texture.
+  `AirlinerSkinModel` with the size's skin texture (`AirlinerShape.skinTexture()`) instead of `AirlinerModel`
+  with the block texture.
 - Logo: `int LOGO` synched, rolled with `random.nextInt(AirlinerEntity.LOGO_COUNT)` (6) the first time the
   entity is added to a level from an item without a `Logo` tag, saved as `Logo`, copied into
   `state.airlinerLogo` and applied with `AirlinerMetalModel.setLogo` in `setupAnim`. The item keeps the
@@ -279,6 +281,58 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
 
 Upgrades: engines, booster, armor, healing, folding, banner; seats and shooter refused; no upgrade
 model drawn.
+
+### 4.4 Regional airliner
+
+`RegionalAirlinerEntity extends AirlinerEntity` is the same aircraft in a narrow size: 1+1 seating with an
+aisle, 14 seats (`AirlinerLayout.REGIONAL`), 2.5 blocks wide, 11.94 long, 9.95 span (AIRLINER-MODEL.md,
+*Two sizes*). Seats, click-to-board, seat persistence, hitbox entities, finishes and logos are
+`AirlinerEntity`'s; the layout, the hitbox type (`regional_airliner_part`, `sized(2.6, 3.3)`) and the physics
+numbers below are its own. Beta.2 saves of `simpleplanes:airliner` still load as the mini airliner.
+
+**Derivation.** The regional is lighter: collision mass 1.3 against 1.6 (`PlaneCollisions.massOf`, tested
+before `AirlinerEntity`), so m = 1.3 / 1.6 = 0.8125. `PlaneEntity`'s forces are accelerations (per unit mass),
+so thrust per notch, drag, maximum speed and lift stay as in §4.1, and the regional cruises at the same
+1.25 b/t. What mass changes is scaled by m:
+
+| number | mini airliner | rule | regional |
+|---|---|---|---|
+| `takeOffSpeed` | 0.60 | lift ~ v^2 carries the weight: x sqrt(m) = 0.541 | **0.54** (stall 0.324) |
+| `getRotationSpeedMultiplier` | 0.35 | control moment over inertia: x 1/m = 0.431 | **0.43**: pitch ramps 0.215 deg/t^2 to 2.15 deg/t; yaw to 1.075 deg/t |
+| `maxRollRate` | 2.5 deg/t | x 1/m = 3.08 | **3.0** |
+| `getFuelCost` | 10 | x m = 8.1 | **8** |
+| `getCameraDistanceMultiplayer` | 1.6 | the smaller airframe | 1.4 |
+| collision mass | 1.6 | | 1.3 |
+
+Everything else is inherited: `PUSH_PER_NOTCH` 0.004, `MAX_SPEED` 2.0, drag, `maxLift` 2.0,
+`pitchToMotion` 0.16, `yawToMotion` 0.06, rolling resistance 0.007, ground factor 5, the 12 deg ground pitch
+clamp. The longer tail cone puts the keel end at z -3.5, so the tail-strike angle is asin(0.8125 / 3.5) =
+**13.4 deg**; the clamp keeps 1.4 deg of margin. Recipe: 2 propellers + 9 material (the mini airliner 4 + 12).
+
+**Numbers** (simulated, §11.1):
+
+| quantity | regional | mini airliner |
+|---|---|---|
+| stall / take-off | 0.324 / 0.54 b/t | 0.36 / 0.60 |
+| ground roll, full throttle | rotation at 71 t / 23.5 b, airborne at 96 t / **38 b** at 0.65 b/t | 89 t / 34 b, 116 t / 51 b at 0.70 |
+| taxi | T2 0.11, T3 0.40, T5 0.75 b/t | same |
+| level speed | T1 0.64, T2 0.91, T3 1.05, T4 1.16, **T5 1.26 b/t** | 0.64, 0.91, 1.05, 1.16, 1.25 |
+| climb at T5 | 0.165 b/t at 10 deg, 0.198 at 20 deg | 0.166, 0.196 |
+| glide ratio | 5.5 | 5.3 |
+| turn | nominal 1.07 deg/t; realised 0.60 deg/t (**12 deg/s**), radius 95 b at 1.0 b/t | 0.88; 0.49 (10 deg/s), 117 b |
+
+**Measured on the server** (26.3 test server, `flighttest.sh <type>`: `aircraft takeoff`; `hold`, throttle 5
+and 1500 ticks; `launch 1.25`, `hold`, throttle 5, 300 ticks, then `set yaw 1`), on the same jar:
+
+| test | regional airliner | mini airliner (re-run) |
+|---|---|---|
+| take-off, empty (regional 5 runs, mini 3) | rotation at 23.5 b (72 t) every run, airborne at 38.4 b (97 t) or 39.0 b (98 t) at 0.66 b/t | rotation at 33.8 b (90 t), airborne at 52.1 b (118 t) at 0.71 b/t every run, as before |
+| take-off, full (12 villagers boarded with `airliner board`) | rotation at 23.5 b (72 t), airborne at 39.0 b (98 t) at 0.66 b/t, within the empty spread; riders stay in their seats | 20 villagers: 51.4 b (117 t), measured with the cabin |
+| level speed, throttle 5, after 1500 t | 1.250 b/t, pitch -3.7 | 1.250 b/t, pitch -3.3, as before |
+| turn, heading at ticks 100 / 140 / 180 | 65.2 / 90.8 / 116.8 deg: **0.65 deg/t (13 deg/s)** | 53.0 / 73.7 / 94.7: 0.52 deg/t, as before |
+
+The regional needs 26 % less runway and turns 25 % faster; the mini airliner's numbers are unchanged to the
+digit by the second size.
 
 ---
 
@@ -645,17 +699,18 @@ Power: the quadcopter is electric and always powered (no fuel, no engine upgrade
 | new class | extends | why |
 |---|---|---|
 | `entities/FighterEntity` | `PlaneEntity` | fixed-wing; one seat; only numbers and two clamps differ |
-| `entities/AirlinerEntity` | `PlaneEntity` | fixed-wing, 22 assigned seats (`AirlinerSeats`, synched per seat) by its own `canAddPassenger`/`addPassenger`/`positionRider`, the captain is the controlling passenger, nose-to-tail hitboxes `AirlinerPartEntity`; not `LargeAirframeEntity` because of the livestock magnet, the large-upgrade bay and the -0.4 player offset |
+| `entities/AirlinerEntity` | `PlaneEntity` | fixed-wing, 22 assigned seats (`AirlinerLayout`, synched per seat) by its own `canAddPassenger`/`addPassenger`/`positionRider`, the captain is the controlling passenger, nose-to-tail hitboxes `AirlinerPartEntity`; not `LargeAirframeEntity` because of the livestock magnet, the large-upgrade bay and the -0.4 player offset |
+| `entities/RegionalAirlinerEntity` | `AirlinerEntity` | the narrow size (§4.4): its `AirlinerLayout`, hitbox type and mass-scaled numbers; everything else inherited |
 | `entities/AirshipEntity` | `PlaneEntity` | overrides all six flight hooks (helicopter pattern); inherits controls, rendering, riders, persistence, collisions |
 | `entities/QuadcopterEntity` | `Entity` | own physics, server-authoritative, load as passenger; no plane plumbing |
 | `entities/MiniHelicopterEntity` | `HelicopterEntity` | the helicopter's model with smaller numbers through new getters; one rider; a ceiling |
 | `client/render/MiniHeliRenderer` | `PlaneRenderer<MiniHelicopterEntity>` | body model/texture by livery |
 | `entities/crane/{MultirotorPhysics, CraneController, SlungLoad}` | plain | unit-testable with `javac` alone |
 | `client/render/AirshipRenderer` | `PlaneRenderer<AirshipEntity>` | fourth layer, culling box |
-| `client/render/AirlinerRenderer` | `PlaneRenderer<AirlinerEntity>` | body model/texture by skin |
+| `client/render/AirlinerRenderer` | `PlaneRenderer<AirlinerEntity>` | body model/texture by skin; one per size, built from an `AirlinerShape` |
 | `client/render/QuadcopterRenderer`, `QuadcopterRenderState` | `EntityRenderer`, `PlaneRenderState` | rope via leash state |
 | `items/CraneRemoteItem`, `items/QuadcopterItem` | `Item` | the crane's remote; the placeable item (a `PlaneItem` cannot place a non-`PlaneEntity`) |
-| `autopilot/AircraftType.FIGHTER, AIRLINER` | enum values | test tooling: `/autopilot route ... type fighter`; not in `FLYABLE`/`RANDOM` |
+| `autopilot/AircraftType.FIGHTER, AIRLINER, REGIONAL_AIRLINER` | enum values | test tooling: `/autopilot route ... type fighter`; not in `FLYABLE`/`RANDOM` |
 
 `PlaneEntity` gains the hooks in §8.3 and `HelicopterEntity` the getters in §5b.2, all with defaults that
 keep every existing aircraft bit-identical.
@@ -712,14 +767,15 @@ entity types (`FIGHTER`, `AIRLINER`, `AIRSHIP`, `MINI_HELICOPTER`; the quadcopte
 | hook | default | used by |
 |---|---|---|
 | `protected float pushPerNotch()` | `0.00625f` (replaces the literal in `tick()`) | fighter 0.012, airliner 0.004, airship 0.004 |
-| `protected float maxRollRate()` | `5.0f` (literal in `tickRoll`) | fighter 8, airliner 2.5 |
+| `protected float maxRollRate()` | `5.0f` (literal in `tickRoll`) | fighter 8, airliner 2.5, regional airliner 3.0 |
 | `protected float groundPitchLimit()` | `90f` (no clamp; applied at the end of `tickPitch` while `getOnGround()`) | fighter 10, airliner 12 |
 | `protected double groundRollingResistance()` | `0` (added to `drag` in `tickOnGround` when `onGround()`) | fighter 0.030, airliner 0.007 |
 | `protected double groundLinearDragFactor(float friction)` | `20 * (3 - friction)` (replaces the literal) | fighter 24, airliner 5 |
 | `TempMotionVars.yawToMotion` | `0.1` (replaces the literal `0.1f` in `tickRotateMotion`) | fighter 0.2, airliner 0.06 |
 | `protected boolean acceptsUpgrade(UpgradeType)` | `true`, consulted by `canAddUpgrade` | all three planes |
 
-`PlaneCollisions.massOf` gets `FighterEntity 1.1`, `AirlinerEntity 1.6`, `AirshipEntity 2.0`,
+`PlaneCollisions.massOf` gets `FighterEntity 1.1`, `AirlinerEntity 1.6` (`RegionalAirlinerEntity 1.3`, tested
+before it), `AirshipEntity 2.0`,
 `MiniHelicopterEntity 0.8` (tested before `HelicopterEntity`).
 
 `HelicopterEntity` gets the twelve protected getters of §5b.2, each returning its constant; every
@@ -731,25 +787,29 @@ constants remain public for the callers outside the class.
 ### 8.4 Registration (all in the foundation)
 
 - `SimplePlanesEntities`: `FIGHTER sized(3.0, 2.0)`, `AIRLINER sized(3.0, 2.6)` (plus the `AIRLINER_PART` hitboxes,
-  `sized(3.4, 3.3)`, added with the cabin), `AIRSHIP sized(3.0, 2.5)`,
+  `sized(3.4, 3.3)`, added with the cabin), `REGIONAL_AIRLINER sized(2.2, 2.6)` with `REGIONAL_AIRLINER_PART`
+`sized(2.6, 3.3)` (added with the second size), `AIRSHIP sized(3.0, 2.5)`,
   `QUADCOPTER sized(1.0, 0.875)`, `MINI_HELICOPTER sized(1.5, 1.95)` with the aircraft tracking range;
-- `SimplePlanesItems`: `FIGHTER_ITEM`, `AIRLINER_ITEM`, `AIRSHIP_ITEM`, `MINI_HELICOPTER_ITEM` as
+- `SimplePlanesItems`: `FIGHTER_ITEM`, `AIRLINER_ITEM`, `REGIONAL_AIRLINER_ITEM` (added with the second size),
+  `AIRSHIP_ITEM`, `MINI_HELICOPTER_ITEM` as
   `PlaneItem`s, `QUADCOPTER_ITEM` (`QuadcopterItem`), `CRANE_REMOTE`; all added to `getPlaneItems()` where
   they are planes, and to the creative tab; item model JSONs (`items/*.json`, `models/item/*.json`)
   reusing `plane.png`/`helicopter.png` with tints until real icons exist (open question Q5);
-- `PlanesModelLayers`: `FIGHTER_LAYER/METAL/PROPELLER`, `AIRLINER_LAYER/SKIN/METAL/PROPELLER`,
+- `PlanesModelLayers`: `FIGHTER_LAYER/METAL/PROPELLER`, `AIRLINER_LAYER/SKIN/METAL/PROPELLER` and
+  `REGIONAL_AIRLINER_LAYER/SKIN/METAL/PROPELLER`,
   `AIRSHIP_LAYER/METAL/PROPELLER/ENVELOPE`, `MINI_HELI_LAYER/MEDICAL/METAL/PROPELLER`,
   `QUADCOPTER_LAYER/METAL/PROPELLER`, and the renderer registrations (`PlaneRenderer` for the fighter;
   `AirlinerRenderer`, `AirshipRenderer`, `MiniHeliRenderer`, `QuadcopterRenderer` as thin subclasses the
   foundation creates with the hooks wired and the aircraft agents extend);
 - block tag `mini_heli_medical` beside `airliner_metal_skin`;
 - `lang/en_us.json`: item and entity names, the remote's tooltip, the key for the airliner's logo tooltip;
-- datapack: workbench recipes (`fighter` 2 propellers + 6 material, `airliner` 4 + 12, `airship` 2 + 14,
+- datapack: workbench recipes (`fighter` 2 propellers + 6 material, `airliner` 4 + 12, `regional_airliner`
+  2 + 9, `airship` 2 + 14,
   `quadcopter` 1 + 3), tags `airliner_metal_skin`, `plane_materials` additions, `crane_liftable`,
   `crane_never` (empty);
 - `SimplePlanesMod`: `CraneCommand.register()` and `AircraftCommand.register()` (the shared test command,
   §8.7); the aircraft agents fill in their subcommands in their own classes;
-- `AircraftType.FIGHTER`, `AIRLINER`;
+- `AircraftType.FIGHTER`, `AIRLINER` (and `REGIONAL_AIRLINER`, added with the second size);
 - `simpleplanes.accesswidener` re-added with the Loom and `fabric.mod.json` wiring, initially **empty** (§9).
 
 ### 8.5 Stub entities
@@ -783,7 +843,7 @@ the synched `Q`. Each boots, summons, ticks and renders (on a client) before the
 
 | subcommand | effect |
 |---|---|
-| `spawn <type> <x y z> [heading]` | summons `fighter`/`airliner`/`airship`/`quadcopter`/`plane`/`large`/`cargo`/`helicopter` at the position facing `heading`, with a furnace engine and 64 coal (planes) so `isPowered()` is true with nobody aboard; sets `Q`, `Q_Client`, `Q_Prev` from the heading as `GunshipCommand.spawn` does; tags it `aircraft-test`; prints `Aircraft #<id> spawned` |
+| `spawn <type> <x y z> [heading]` | summons `fighter`/`airliner`/`regional_airliner`/`airship`/`quadcopter`/`plane`/`large`/`cargo`/`helicopter` at the position facing `heading`, with a furnace engine and 64 coal (planes) so `isPowered()` is true with nobody aboard; sets `Q`, `Q_Client`, `Q_Prev` from the heading as `GunshipCommand.spawn` does; tags it `aircraft-test`; prints `Aircraft #<id> spawned` |
 | `set <id> throttle <0-10>`, `set <id> pitch <-1..1>`, `set <id> yaw <-1..1>`, `set <id> roll <-1..1>` | writes the synched controls (`roll` writes a synched `TEST_STRAFE` byte the physics reads as `moveStrafing` when no player is aboard) |
 | `set <id> cyclic <fwd> <right>`, `set <id> boost on|off` | helicopters (`HelicopterEntity` and subclasses): `setCyclicForward/Right` in percent, `setCollectiveBoost` |
 | `launch <id> <speed> [pitch]` | sets `deltaMovement` along the heading |
@@ -890,7 +950,16 @@ acceptance tests in the specs are written from these numbers with tolerances.
   run: rotation t=89 x=34; airborne t=116 x=51 v=0.70
   climb T5: 10 deg 0.166, 20 deg 0.19; glide ratio 5.0
   turn: nominal 0.875, realised 0.49 deg/t (10 deg/s), radius 70/117/175/234 b
+=== regional airliner (as the airliner, with takeOff 0.54, rotMult 0.43, maxRollRate 3.0; §4.4)
+  stall 0.324; take-off 0.54
+  ground T2 0.107 T3 0.401 T5 0.750 | level T1 0.641 T2 0.910 T3 1.047 T4 1.158 T5 1.259, trim +6..-3.6
+  run: rotation t=71 x=23.5; airborne t=96 x=38.3 v=0.651
+  climb T5: 10 deg 0.165, 20 deg 0.198, best 0.198 at 25 deg; glide ratio 5.5
+  turn: nominal 1.07, realised 0.60 deg/t (12 deg/s), radius 57/95/143/190 b
 ```
+
+The regional's run reuses the same port (the airliner's configuration re-run in it gives rotation at t=89
+x=33.8, airborne t=116 x=51.3, T5 1.252, the numbers above).
 
 Sweeps that set the numbers: airliner rolling resistance 0.006..0.008 moved the run between 45 and 63
 blocks; `groundLinearFactor` 4..6 was second order; with the stock factor 48 the airliner's ground speed
