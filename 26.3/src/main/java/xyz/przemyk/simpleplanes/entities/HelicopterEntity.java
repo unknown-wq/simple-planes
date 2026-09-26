@@ -710,6 +710,11 @@ public class HelicopterEntity extends LargeAirframeEntity {
         return MAX_YAW_RATE;
     }
 
+    /** This airframe's pedal ramp, degrees/tick^2, for the autopilot's braking model. */
+    public float pedalRamp() {
+        return yawRamp();
+    }
+
     protected float yawRamp() {
         return YAW_RAMP;
     }

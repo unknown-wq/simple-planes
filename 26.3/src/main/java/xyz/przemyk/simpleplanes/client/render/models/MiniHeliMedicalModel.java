@@ -2,6 +2,10 @@ package xyz.przemyk.simpleplanes.client.render.models;
 
 import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.model.geom.ModelPart;
+import net.minecraft.client.model.geom.PartPose;
+import net.minecraft.client.model.geom.builders.CubeDeformation;
+import net.minecraft.client.model.geom.builders.CubeListBuilder;
+import net.minecraft.client.model.geom.builders.MeshDefinition;
 import net.minecraft.client.model.geom.builders.LayerDefinition;
 import net.minecraft.resources.Identifier;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
@@ -46,7 +50,14 @@ public class MiniHeliMedicalModel extends EntityModel<PlaneRenderState> {
     }
 
     public static LayerDefinition createBodyLayer() {
-        return LayerDefinition.create(MiniHeliAirframe.create(MiniHeliAirframe.table(SKIN_UV)), 128, 64);
+        MeshDefinition mesh = MiniHeliAirframe.create(MiniHeliAirframe.table(SKIN_UV));
+        // Litter over the right skid for the second rider (MiniHelicopterEntity.SEAT_LITTER, entity x -0.80,
+        // z 0.45): a 6 x 16 px board one pixel above the skid, on two risers. UV in the texture's lower band.
+        mesh.getRoot().getChild("MiniHeli").addOrReplaceChild("Litter", CubeListBuilder.create()
+                .texOffs(0, 44).addBox(-15.0F, -3.0F, -11.0F, 6.0F, 1.0F, 16.0F, CubeDeformation.NONE)
+                .texOffs(48, 44).addBox(-10.0F, -2.0F, -9.0F, 1.0F, 1.0F, 2.0F, CubeDeformation.NONE)
+                .texOffs(48, 44).addBox(-10.0F, -2.0F, 2.0F, 1.0F, 1.0F, 2.0F, CubeDeformation.NONE), PartPose.ZERO);
+        return LayerDefinition.create(mesh, 128, 64);
     }
 
     @Override

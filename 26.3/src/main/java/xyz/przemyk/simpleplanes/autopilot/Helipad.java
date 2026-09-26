@@ -629,6 +629,12 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
      * {@link HelicopterAutopilot} climbs for anything this missed.
      */
     public static int cruiseAltitude(Level level, Helipad from, Helipad to) {
+        double highest = highestGround(level, from, to);
+        return (int) Math.min(highest + RotorcraftConfig.CRUISE_CLEARANCE, level.getMaxY() - 10);
+    }
+
+    /** Highest loaded surface on the straight leg between two pads, both pads included. */
+    public static double highestGround(Level level, Helipad from, Helipad to) {
         Vec3 a = from.touchdown();
         Vec3 b = to.touchdown();
         double highest = Math.max(a.y, b.y);
@@ -643,6 +649,6 @@ public record Helipad(String name, BlockPos centre, int radius, int clearSectors
                 highest = Math.max(highest, surface);
             }
         }
-        return (int) Math.min(highest + RotorcraftConfig.CRUISE_CLEARANCE, level.getMaxY() - 10);
+        return highest;
     }
 }

@@ -1,6 +1,15 @@
 package xyz.przemyk.simpleplanes.entities;
 
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
+import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
@@ -18,7 +27,10 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 import xyz.przemyk.simpleplanes.upgrades.UpgradeType;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * One-seat mini helicopter: the helicopter's flight model with a lighter, twitchier, slower tune and a
@@ -126,23 +138,185 @@ public class MiniHelicopterEntity extends HelicopterEntity {
         return getMaterial().builtInRegistryHolder().is(MEDICAL_TAG);
     }
 
-    // Players only: this also keeps LargeAirframeEntity's livestock pickup out, which mounts via startRiding.
+    // Players board an empty machine only. A non-player rides only when loaded through loadRider
+    // (dispatch API / autopilot); this also keeps LargeAirframeEntity's livestock pickup out.
     @Override
     protected boolean canAddPassenger(Entity passenger) {
-        return getPassengers().isEmpty() && passenger instanceof Player;
+        if (passenger instanceof Player) {
+            // Not onto a dispatch flight in progress: the autopilot owns it until it lands.
+            boolean dispatchFlying = dispatchManaged && getAutopilot() != null && getAutopilot().isActive();
+            return getPassengers().isEmpty() && !dispatchFlying;
+        }
+        return riders.containsKey(passenger.getUUID()) && getPassengers().size() < riderCapacity();
     }
 
-    // A forced mount (/ride, Passengers NBT) skips canAddPassenger; such a rider is put off on the next tick.
+    // A forced mount (/ride, Passengers NBT) skips canAddPassenger; such a rider is put off on the next tick
+    // unless it was loaded through loadRider.
     @Override
     public void tick() {
         if (!level().isClientSide()) {
             for (Entity passenger : List.copyOf(getPassengers())) {
-                if (!(passenger instanceof Player)) {
+                if (!(passenger instanceof Player) && !riders.containsKey(passenger.getUUID())) {
                     passenger.stopRiding();
                 }
             }
+            // A rider that got off by any other route loses its permit.
+            if (!riders.isEmpty() && riders.size() != getPassengers().size()) {
+                riders.keySet().removeIf(uuid -> getPassengers().stream().noneMatch(p -> p.getUUID().equals(uuid)));
+            }
         }
         super.tick();
+    }
+
+    // ------------------------------------------------------------------ dispatch riders
+
+    /** Front seat: the pilot's, or a crew member's on a dispatch flight. */
+    public static final int SEAT_FRONT = 0;
+    /** External litter on the right skid, medical livery only. */
+    public static final int SEAT_LITTER = 1;
+    /** Any free seat, front first. */
+    public static final int SEAT_ANY = -1;
+
+    private static final String RIDERS_KEY = "dispatch_riders";
+    private static final String MANAGED_KEY = "dispatch_managed";
+
+    /** Non-player riders loaded through {@link #loadRider}, by UUID, with their seat. Server side. */
+    private final Map<UUID, Integer> riders = new LinkedHashMap<>();
+    /** Set while the dispatch API owns this aircraft; air defence never engages it then. */
+    private boolean dispatchManaged;
+
+    /** Two riders in the medical livery (seat and litter), one otherwise. */
+    public int riderCapacity() {
+        return hasMedicalLivery() ? 2 : 1;
+    }
+
+    public boolean isDispatchManaged() {
+        return dispatchManaged;
+    }
+
+    public void setDispatchManaged(boolean managed) {
+        dispatchManaged = managed;
+    }
+
+    /**
+     * Puts a non-player on board. The rider never steers: {@link #getControllingPassenger} only
+     * answers a player.
+     *
+     * @param seat {@link #SEAT_FRONT}, {@link #SEAT_LITTER} or {@link #SEAT_ANY}
+     * @return false when the rider is a player, the seat is taken or does not exist, or it is full
+     */
+    public boolean loadRider(Entity rider, int seat) {
+        if (level().isClientSide() || rider instanceof Player || rider instanceof PlaneEntity || rider == this
+            || !rider.isAlive() || rider.level() != level() || rider.getVehicle() == this) {
+            return false;
+        }
+        if (getPassengers().size() >= riderCapacity()) {
+            return false;
+        }
+        int chosen = seat;
+        if (seat == SEAT_ANY) {
+            chosen = seatFree(SEAT_FRONT) ? SEAT_FRONT : SEAT_LITTER;
+        }
+        if (chosen < 0 || chosen >= riderCapacity() || !seatFree(chosen)) {
+            return false;
+        }
+        riders.put(rider.getUUID(), chosen);
+        // Forced: our own checks above replace canAddPassenger, and a rider that got off a moment
+        // ago still has vanilla's 60-tick boarding cooldown.
+        if (!rider.startRiding(this, true, true)) {
+            riders.remove(rider.getUUID());
+            return false;
+        }
+        return true;
+    }
+
+    /** Takes a rider loaded through {@link #loadRider} off; it is put down beside the aircraft. */
+    public boolean unloadRider(Entity rider) {
+        if (!riders.containsKey(rider.getUUID())) {
+            return false;
+        }
+        riders.remove(rider.getUUID());
+        if (rider.getVehicle() == this) {
+            rider.stopRiding();
+        }
+        return true;
+    }
+
+    /** UUIDs of the riders loaded through {@link #loadRider}, in loading order. */
+    public List<UUID> riderIds() {
+        return List.copyOf(riders.keySet());
+    }
+
+    /** The seat a passenger occupies. */
+    public int seatOf(Entity passenger) {
+        if (passenger instanceof Player) {
+            return SEAT_FRONT;
+        }
+        Integer seat = riders.get(passenger.getUUID());
+        return seat == null ? getPassengers().indexOf(passenger) : seat;
+    }
+
+    private boolean seatFree(int seat) {
+        for (Entity passenger : getPassengers()) {
+            if (seatOf(passenger) == seat) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Only a player steers. A crew member or patient aboard a dispatch flight is cargo.
+    @Override
+    public @Nullable LivingEntity getControllingPassenger() {
+        LivingEntity controller = super.getControllingPassenger();
+        return controller instanceof Player ? controller : null;
+    }
+
+    // A dispatch (medical) flight is never a target for air defence.
+    @Override
+    public boolean isHostile() {
+        return !dispatchManaged && super.isHostile();
+    }
+
+    @Override
+    protected void addAdditionalSaveData(ValueOutput output) {
+        super.addAdditionalSaveData(output);
+        if (dispatchManaged) {
+            output.putBoolean(MANAGED_KEY, true);
+        }
+        if (!riders.isEmpty()) {
+            ValueOutput.TypedOutputList<Rider> list = output.list(RIDERS_KEY, Rider.CODEC);
+            riders.forEach((uuid, seat) -> list.add(new Rider(uuid, seat)));
+        }
+    }
+
+    @Override
+    protected void readAdditionalSaveData(ValueInput input) {
+        super.readAdditionalSaveData(input);
+        dispatchManaged = input.getBooleanOr(MANAGED_KEY, false);
+        riders.clear();
+        input.listOrEmpty(RIDERS_KEY, Rider.CODEC).forEach(rider -> riders.put(rider.uuid(), rider.seat()));
+    }
+
+    // The dispatch keys belong to the world save, not to the item a player picks up.
+    @Override
+    public ItemStack getItemStack() {
+        ItemStack itemStack = super.getItemStack();
+        CompoundTag compound = itemStack.get(SimplePlanesComponents.ENTITY_TAG.get());
+        if (compound != null && (compound.contains(RIDERS_KEY) || compound.contains(MANAGED_KEY))) {
+            CompoundTag clean = compound.copy();
+            clean.remove(RIDERS_KEY);
+            clean.remove(MANAGED_KEY);
+            itemStack.set(SimplePlanesComponents.ENTITY_TAG.get(), clean);
+        }
+        return itemStack;
+    }
+
+    private record Rider(UUID uuid, int seat) {
+        static final Codec<Rider> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+            UUIDUtil.STRING_CODEC.fieldOf("uuid").forGetter(Rider::uuid),
+            Codec.INT.optionalFieldOf("seat", SEAT_FRONT).forGetter(Rider::seat)
+        ).apply(instance, Rider::new));
     }
 
     @Override
@@ -168,13 +342,26 @@ public class MiniHelicopterEntity extends HelicopterEntity {
     @Override
     public void positionRider(Entity passenger, MoveFunction moveFunction) {
         positionRiderGeneric(passenger);
-        if (getPassengers().indexOf(passenger) == 0) {
-            float seatY = getPassengersRidingOffset() + getEntityYOffset(passenger);
-            // Rotate about the render pivot (0, 0.375, 0) so the pilot stays put in the cabin.
-            Vector3f pos = transformPos(new Vector3f(0, seatY - 0.375f, 0.625f)).add(0, 0.375f, 0);
-            moveFunction.accept(passenger, getX() + pos.x(), getY() + pos.y(), getZ() + pos.z());
+        int seat = seatOf(passenger);
+        float seatY = getPassengersRidingOffset() + getEntityYOffset(passenger);
+        Vector3f local;
+        if (seat == SEAT_FRONT) {
+            local = new Vector3f(0, seatY - 0.375f, 0.625f);
+        } else if (seat == SEAT_LITTER) {
+            // On the litter over the right skid (model x -12 px), level with the cabin floor.
+            local = new Vector3f(LITTER_X, seatY + LITTER_RISE - 0.375f, LITTER_Z);
+        } else {
+            return;
         }
+        // Rotate about the render pivot (0, 0.375, 0) so the rider stays put on the airframe.
+        Vector3f pos = transformPos(local).add(0, 0.375f, 0);
+        moveFunction.accept(passenger, getX() + pos.x(), getY() + pos.y(), getZ() + pos.z());
     }
+
+    /** Litter seat, entity space: right of the cabin, a little aft of the pilot. */
+    public static final float LITTER_X = -0.80f;
+    public static final float LITTER_Z = 0.45f;
+    public static final float LITTER_RISE = 0.05f;
 
     @Override
     public float getPassengersRidingOffset() {

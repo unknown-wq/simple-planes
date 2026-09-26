@@ -77,7 +77,9 @@ public enum AircraftType implements StringRepresentable {
     RANDOM("random"),
     /** Test tooling: flyable by name, never drawn by {@link #RANDOM}. */
     FIGHTER("fighter"),
-    AIRLINER("airliner");
+    AIRLINER("airliner"),
+    /** The one-seat rotorcraft (two riders in the medical livery). Helicopter commands and dispatch only. */
+    MINI_HELICOPTER("mini_helicopter");
 
     /**
      * The three fixed-wing airframes, in the order {@link #RANDOM} draws from.
@@ -136,6 +138,7 @@ public enum AircraftType implements StringRepresentable {
             case HELICOPTER -> SimplePlanesEntities.HELICOPTER;
             case FIGHTER -> SimplePlanesEntities.FIGHTER;
             case AIRLINER -> SimplePlanesEntities.AIRLINER;
+            case MINI_HELICOPTER -> SimplePlanesEntities.MINI_HELICOPTER;
             // RANDOM only reaches here if resolve() was skipped; the starter plane is the safe answer.
             default -> SimplePlanesEntities.PLANE;
         };
@@ -182,7 +185,7 @@ public enum AircraftType implements StringRepresentable {
 
     /** True for the one airframe the fixed-wing commands refuse and the helicopter commands require. */
     public boolean isRotorcraft() {
-        return this == HELICOPTER;
+        return this == HELICOPTER || this == MINI_HELICOPTER;
     }
 
     /**
@@ -206,6 +209,9 @@ public enum AircraftType implements StringRepresentable {
         // comparison was right before it and is right after it.
         if (type == HELICOPTER.entityType().get()) {
             return HELICOPTER;
+        }
+        if (type == MINI_HELICOPTER.entityType().get()) {
+            return MINI_HELICOPTER;
         }
         for (AircraftType candidate : FLYABLE) {
             if (type == candidate.entityType().get()) {

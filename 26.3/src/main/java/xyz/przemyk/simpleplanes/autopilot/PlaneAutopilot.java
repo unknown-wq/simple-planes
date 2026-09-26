@@ -416,6 +416,11 @@ public class PlaneAutopilot {
      * all rather than the rotorcraft controller owning its own pair: the entity knows about one
      * autopilot object, and that is this one.
      */
+    /** The rotorcraft controller of a HELI flight, or null. For {@link DispatchService}. */
+    @Nullable HelicopterAutopilot rotorcraft() {
+        return active ? rotorcraft : null;
+    }
+
     void setRotorControls(float strafing, float forward) {
         this.moveStrafing = strafing;
         this.moveForward = forward;

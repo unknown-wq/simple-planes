@@ -10,6 +10,8 @@ import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.UUID;
 import xyz.przemyk.simpleplanes.entities.HelicopterEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
@@ -81,6 +83,17 @@ public final class HelicopterAutopilot {
     private double cruiseSpeed = RotorcraftConfig.CRUISE_SPEED;
     private int cruiseAltitude;
     private int departureDelayTicks;
+
+    /** Envelope of the airframe being flown; see {@link RotorcraftProfile}. */
+    private RotorcraftProfile profile = RotorcraftProfile.HELICOPTER;
+    /** Dispatch order this leg belongs to, or null for an ordinary sortie. */
+    private @Nullable UUID orderId;
+    /** Destination is only a search target: hold near it until a landing zone replaces it. */
+    private boolean provisional;
+    /** Destination is an unregistered landing zone: no stand booking on arrival. */
+    private boolean adHocDestination;
+    /** Altitude the vertical departure climbs to; above local obstacles for an ad-hoc departure. */
+    private double takeoffAltitude = Double.NaN;
 
     private int ticks;
     private int modeTicks;
@@ -174,12 +187,18 @@ public final class HelicopterAutopilot {
      */
     void start(PlaneEntity plane, FlightPlan plan, boolean resume) {
         Level level = plane.level();
+        profile = RotorcraftProfile.of(plane);
+        orderId = plan.orderId();
+        provisional = plan.provisional();
+        adHocDestination = plan.adHocTo() != null;
         if (level instanceof ServerLevel serverLevel) {
             AutopilotSavedData data = AutopilotSavedData.get(serverLevel);
-            departure = plan.departureAirfield() == null ? null : data.helipad(plan.departureAirfield());
-            destination = plan.airfieldName() == null ? null : data.helipad(plan.airfieldName());
+            departure = plan.adHocFrom() != null ? plan.adHocFrom()
+                : plan.departureAirfield() == null ? null : data.helipad(plan.departureAirfield());
+            destination = plan.adHocTo() != null ? plan.adHocTo()
+                : plan.airfieldName() == null ? null : data.helipad(plan.airfieldName());
         }
-        cruiseSpeed = RotorcraftConfig.clampCruiseSpeed(plan.cruiseSpeed());
+        cruiseSpeed = profile.clampCruiseSpeed(plan.cruiseSpeed());
         cruiseAltitude = plan.cruiseAltitude();
         departureDelayTicks = plan.departureDelayTicks();
         if (destination == null) {
@@ -187,12 +206,89 @@ public final class HelicopterAutopilot {
             // destination is the failure that used to look like a launch.
             report(plane, "has no destination pad registered; nothing to fly to");
             host.stop(plane);
+            notifyLeg(plane, DispatchService.LegEvent.NO_DESTINATION, "no destination pad");
             return;
         }
-        setMode(plane, departure != null && !resume ? AutopilotMode.PARKED : AutopilotMode.CRUISE);
+        takeoffAltitude = departure == null ? Double.NaN
+            : plan.adHocFrom() != null ? adHocTakeoffAltitude(level, departure)
+            : departure.elevation() + profile.departureHeight();
+        AutopilotMode first;
+        if (!resume) {
+            first = departure != null ? AutopilotMode.PARKED : AutopilotMode.CRUISE;
+        } else if (plane.getOnGround() && destination.covers(plane.position(), 1.0)
+            && Math.abs(plane.getY() - destination.elevation()) <= AutopilotConfig.LANDING_ELEVATION_TOLERANCE) {
+            first = AutopilotMode.ROLLOUT;
+        } else if (plane.getOnGround() && departure != null) {
+            // Restored on the ground at the departure: climb out vertically again rather than
+            // translating off a pad that may be surrounded by trees.
+            first = AutopilotMode.TAKEOFF;
+        } else {
+            first = AutopilotMode.CRUISE;
+        }
+        setMode(plane, first);
         if (departure == null || resume) {
             liftOffTick = 0;
         }
+    }
+
+    /**
+     * Vertical departure height from an unregistered landing zone: the profile's height, or higher
+     * when anything within {@link #TAKEOFF_SCAN_RADIUS} stands above that, so the first translation is
+     * over everything nearby. Capped at the airframe's ceiling.
+     */
+    private double adHocTakeoffAltitude(Level level, Helipad pad) {
+        double wanted = pad.elevation() + profile.departureHeight();
+        Vec3 centre = pad.touchdown();
+        int highest = Integer.MIN_VALUE;
+        for (int dx = -TAKEOFF_SCAN_RADIUS; dx <= TAKEOFF_SCAN_RADIUS; dx += 2) {
+            for (int dz = -TAKEOFF_SCAN_RADIUS; dz <= TAKEOFF_SCAN_RADIUS; dz += 2) {
+                int surface = TerrainScanner.surfaceHeight(level, centre.x + dx, centre.z + dz);
+                if (surface != TerrainScanner.UNKNOWN_HEIGHT) {
+                    highest = Math.max(highest, surface);
+                }
+            }
+        }
+        if (highest != Integer.MIN_VALUE) {
+            wanted = Math.max(wanted, highest + TAKEOFF_OBSTACLE_MARGIN);
+        }
+        return Math.min(wanted, profile.hardCeiling());
+    }
+
+    private static final int TAKEOFF_SCAN_RADIUS = 24;
+    private static final double TAKEOFF_OBSTACLE_MARGIN = 8.0;
+
+    /**
+     * Re-aims the running leg: a landing zone found while outbound, or home after an abort.
+     *
+     * @param padName registered pad name, or null when {@code pad} is an unregistered landing zone
+     */
+    void retarget(PlaneEntity plane, @Nullable String padName, Helipad pad, boolean searchOnly) {
+        FlightPlan plan = host.getPlan();
+        if (plan != null) {
+            plan.retarget(padName, padName == null ? pad : null, searchOnly);
+        }
+        destination = pad;
+        provisional = searchOnly;
+        adHocDestination = padName == null;
+        transitTicks = 0;
+        padWaitReported = false;
+        overheadTick = -1;
+        if (plane.level() instanceof ServerLevel serverLevel && departure != null) {
+            int altitude = profile.cruiseAltitude(serverLevel, departure, pad);
+            if (altitude != Integer.MAX_VALUE) {
+                cruiseAltitude = altitude;
+                if (plan != null) {
+                    plan.setCruiseAltitude(altitude);
+                }
+            }
+        }
+        if (mode == AutopilotMode.HOLD || mode == AutopilotMode.DESCENT || mode == AutopilotMode.FINAL) {
+            setMode(plane, AutopilotMode.CRUISE);
+        }
+    }
+
+    boolean provisional() {
+        return provisional;
     }
 
     AutopilotMode mode() {
@@ -277,6 +373,7 @@ public final class HelicopterAutopilot {
         report(plane, "lifting off from " + name(departure) + ".", false);
         liftOffTick = ticks;
         setMode(plane, AutopilotMode.TAKEOFF);
+        notifyLeg(plane, DispatchService.LegEvent.LIFTED_OFF, null);
     }
 
     /**
@@ -291,7 +388,8 @@ public final class HelicopterAutopilot {
             setMode(plane, AutopilotMode.CRUISE);
             return;
         }
-        double target = departure.elevation() + RotorcraftConfig.DEPARTURE_HEIGHT;
+        double target = Double.isNaN(takeoffAltitude)
+            ? departure.elevation() + profile.departureHeight() : takeoffAltitude;
         double heading = destination == null ? plane.getYRot()
             : AutopilotMath.headingTo(plane.position(), destination.touchdown());
         fly(plane, heading, target, 0.0, RotorcraftConfig.CLIMB_RATE, true);
@@ -302,7 +400,7 @@ public final class HelicopterAutopilot {
         if (modeTicks > RotorcraftConfig.DEPARTURE_TIMEOUT) {
             fail(plane, String.format("could not get off %s - %.0f blocks up after %d ticks,"
                 + " against the %.0f it needs", name(departure), plane.getY() - departure.elevation(),
-                modeTicks, RotorcraftConfig.DEPARTURE_HEIGHT));
+                modeTicks, target - departure.elevation()));
         }
     }
 
@@ -314,6 +412,10 @@ public final class HelicopterAutopilot {
         double distance = AutopilotMath.horizontalDistance(position, hover);
 
         double altitude = Math.max(cruiseAltitude, terrainFloor());
+        if (aboveCeiling(plane)) {
+            return;
+        }
+        altitude = capped(altitude);
         // Cruise speed right up to the run-in, and there is no deceleration schedule here on
         // purpose. There used to be one, ramped from cruise down to the approach speed across
         // DECELERATION_DISTANCE — which is also the distance at which this phase ends, three lines
@@ -325,7 +427,7 @@ public final class HelicopterAutopilot {
         checkSpeedShortfall(plane, cruiseSpeed);
 
         if (distance <= RotorcraftConfig.DECELERATION_DISTANCE) {
-            if (!padAvailable(plane)) {
+            if (provisional || !padAvailable(plane)) {
                 setMode(plane, AutopilotMode.HOLD);
                 return;
             }
@@ -352,8 +454,8 @@ public final class HelicopterAutopilot {
         Vec3 position = plane.position();
         Vec3 hover = destination.approachPoint(position, RotorcraftConfig.HOVER_CAPTURE_RADIUS, 0);
         double distance = AutopilotMath.horizontalDistance(position, hover);
-        double target = Math.max(destination.elevation() + RotorcraftConfig.DEPARTURE_HEIGHT,
-            terrainFloor());
+        double target = capped(Math.max(destination.elevation() + profile.departureHeight(),
+            terrainFloor()));
         station(plane, hover, target, RotorcraftConfig.APPROACH_SPEED,
             RotorcraftConfig.DESCENT_RATE);
 
@@ -448,7 +550,7 @@ public final class HelicopterAutopilot {
         // starting angle, so two machines are 10 blocks apart vertically and a quarter of the orbit
         // apart horizontally before either has moved.
         int slot = Math.floorMod(plane.getId(), RotorcraftConfig.HOLD_STACK_SLOTS);
-        double altitude = pad.y + RotorcraftConfig.DEPARTURE_HEIGHT + RotorcraftConfig.HOLD_HEIGHT
+        double altitude = pad.y + profile.departureHeight() + RotorcraftConfig.HOLD_HEIGHT
             + slot * RotorcraftConfig.HOLD_LEVEL_SPACING;
         // Chase a point walking round the pad, on the station-keeping law rather than the bearing
         // one. With the bearing law the machine cannot keep up with a moving target and simply drifts
@@ -459,22 +561,26 @@ public final class HelicopterAutopilot {
         double angle = (modeTicks * RotorcraftConfig.HOLD_TURN_RATE
             + slot * (360.0 / RotorcraftConfig.HOLD_STACK_SLOTS)) % 360.0;
         Vec3 point = AutopilotMath.pointAlong(pad, angle, RotorcraftConfig.HOLD_RADIUS);
-        station(plane, point, Math.max(altitude, terrainFloor()), RotorcraftConfig.APPROACH_SPEED,
+        station(plane, point, capped(Math.max(altitude, terrainFloor())), RotorcraftConfig.APPROACH_SPEED,
             RotorcraftConfig.CLIMB_RATE);
 
         if (!padWaitReported) {
             padWaitReported = true;
-            report(plane, "holding over " + name(destination) + ": the pad is occupied.", false);
+            report(plane, provisional
+                ? "holding near " + name(destination) + ": still looking for a landing zone."
+                : "holding over " + name(destination) + ": the pad is occupied.", false);
         }
-        if (modeTicks % RotorcraftConfig.PAD_POLL_INTERVAL == 0 && padAvailable(plane)) {
+        if (modeTicks % RotorcraftConfig.PAD_POLL_INTERVAL == 0 && !provisional && padAvailable(plane)) {
             overheadTick = ticks;
             runInHeading = destination.arrivalHeading(plane.position());
             setMode(plane, AutopilotMode.DESCENT);
             return;
         }
         if (modeTicks > RotorcraftConfig.HOLD_TIMEOUT) {
-            fail(plane, name(destination) + " never became free - held over it for "
-                + modeTicks + " ticks");
+            fail(plane, provisional
+                ? "found no landing zone near " + name(destination) + " - held for " + modeTicks + " ticks"
+                : name(destination) + " never became free - held over it for " + modeTicks + " ticks",
+                provisional ? DispatchService.LegEvent.NO_LANDING_ZONE : DispatchService.LegEvent.PAD_BUSY);
         }
     }
 
@@ -558,16 +664,17 @@ public final class HelicopterAutopilot {
         // it, which is the whole reason StandOccupancy exists. So the pad is remembered whenever the
         // machine is actually standing on it, over exactly the footprint Helipad#free searches, and
         // the outcome line below is decided on its own terms.
-        if (destination.covers(position, 1.0) && plane.level() instanceof ServerLevel serverLevel) {
+        if (!adHocDestination && destination.covers(position, 1.0)
+            && plane.level() instanceof ServerLevel serverLevel) {
             StandOccupancy.take(serverLevel, destination.name(), destination.centre(), plane);
         }
         if (problem == null) {
-            AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId() + " landed at "
+            AutopilotFeedback.report(host.owner(), noun() + " #" + plane.getId() + " landed at "
                 + destination.name() + ", " + where + String.format(" (%.2f blocks from the pad centre "
                 + "%.1f, %.1f, %.1f, tolerance %.1f; ", miss, pad.x, pad.y, pad.z, tolerance)
                 + timings + ").");
         } else {
-            AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId()
+            AutopilotFeedback.report(host.owner(), noun() + " #" + plane.getId()
                 + " did not land on " + destination.name() + ": came to rest " + problem
                 + ", at " + where
                 + String.format(" (pad centre %.1f, %.1f, %.1f, tolerance %.1f). ",
@@ -575,6 +682,8 @@ public final class HelicopterAutopilot {
                 + timings + ".");
         }
         host.stop(plane);
+        notifyLeg(plane, problem == null ? DispatchService.LegEvent.LANDED : DispatchService.LegEvent.LANDED_OFF,
+            problem);
     }
 
     /**
@@ -617,12 +726,56 @@ public final class HelicopterAutopilot {
 
     /** A flight that failed in the air, with the reason and the position. */
     private void fail(PlaneEntity plane, String reason) {
+        fail(plane, reason, DispatchService.LegEvent.FAILED);
+    }
+
+    private void fail(PlaneEntity plane, String reason, DispatchService.LegEvent event) {
         reported = true;
         Vec3 position = plane.position();
-        AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId() + " "
+        AutopilotFeedback.report(host.owner(), noun() + " #" + plane.getId() + " "
             + reason + ", at " + String.format("%.1f, %.1f, %.1f", position.x, position.y, position.z)
             + " in " + mode.getName() + ".");
         host.stop(plane);
+        notifyLeg(plane, event, reason);
+    }
+
+    /**
+     * True, having failed the leg, when the terrain ahead needs more height than the airframe's
+     * ceiling allows. Only the mini helicopter has one.
+     */
+    private boolean aboveCeiling(PlaneEntity plane) {
+        double safe = scanner.safeAltitude();
+        if (safe == TerrainScanner.UNKNOWN_HEIGHT) {
+            return false;
+        }
+        double needed = safe - AutopilotConfig.TERRAIN_CLEARANCE + profile.minClearance();
+        if (needed <= profile.hardCeiling()) {
+            return false;
+        }
+        fail(plane, String.format("cannot climb over the terrain ahead - it needs y %.0f and the"
+            + " ceiling is y %.0f", needed, profile.hardCeiling()), DispatchService.LegEvent.CEILING);
+        return true;
+    }
+
+    /** An altitude demand under the airframe's cap, but never below the minimum terrain clearance. */
+    private double capped(double altitude) {
+        if (Double.isInfinite(profile.altitudeCap())) {
+            return altitude;
+        }
+        double safe = scanner.safeAltitude();
+        double floor = safe == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
+            : safe - AutopilotConfig.TERRAIN_CLEARANCE + profile.minClearance();
+        return Math.min(Math.max(Math.min(altitude, profile.altitudeCap()), floor), profile.hardCeiling());
+    }
+
+    private void notifyLeg(PlaneEntity plane, DispatchService.LegEvent event, @Nullable String detail) {
+        if (orderId != null) {
+            DispatchService.legEvent(plane, orderId, event, detail);
+        }
+    }
+
+    private String noun() {
+        return profile.label();
     }
 
     /**
@@ -642,7 +795,7 @@ public final class HelicopterAutopilot {
         Vec3 position = plane.position();
         double remaining = destination == null ? -1
             : AutopilotMath.horizontalDistance(position, destination.touchdown());
-        AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId() + " lost at "
+        AutopilotFeedback.report(host.owner(), noun() + " #" + plane.getId() + " lost at "
             + String.format("%.1f, %.1f, %.1f", position.x, position.y, position.z)
             + " in " + mode.getName()
             + (remaining < 0 ? "" : String.format(", %.0f blocks short of %s",
@@ -868,8 +1021,8 @@ public final class HelicopterAutopilot {
         double rate = yawInitialised ? Mth.wrapDegrees(plane.getYRot() - previousYaw) : 0.0;
         previousYaw = plane.getYRot();
         yawInitialised = true;
-        byte command = AutopilotMath.bangBang(headingError, rate, HelicopterEntity.YAW_RAMP,
-            RotorcraftConfig.HEADING_DEADBAND);
+        float ramp = plane instanceof HelicopterEntity helicopter ? helicopter.pedalRamp() : HelicopterEntity.YAW_RAMP;
+        byte command = AutopilotMath.bangBang(headingError, rate, ramp, RotorcraftConfig.HEADING_DEADBAND);
         if (plane instanceof HelicopterEntity helicopter) {
             helicopter.setPedal(command);
         } else {
@@ -1000,7 +1153,7 @@ public final class HelicopterAutopilot {
     private double terrainFloor() {
         double safe = scanner.safeAltitude();
         return safe == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
-            : safe - AutopilotConfig.TERRAIN_CLEARANCE + RotorcraftConfig.CRUISE_CLEARANCE;
+            : safe - AutopilotConfig.TERRAIN_CLEARANCE + profile.cruiseClearance();
     }
 
     // ------------------------------------------------------------------ readouts
@@ -1024,7 +1177,7 @@ public final class HelicopterAutopilot {
     }
 
     private void report(PlaneEntity plane, String message, boolean terminal) {
-        AutopilotFeedback.report(host.owner(), "Helicopter #" + plane.getId() + " " + message);
+        AutopilotFeedback.report(host.owner(), noun() + " #" + plane.getId() + " " + message);
         if (terminal) {
             reported = true;
         }
@@ -1034,7 +1187,7 @@ public final class HelicopterAutopilot {
         Vec3 position = plane.position();
         Vec3 velocity = plane.getDeltaMovement();
         StringBuilder builder = new StringBuilder();
-        builder.append('#').append(plane.getId()).append(" helicopter ").append(mode.getName())
+        builder.append('#').append(plane.getId()).append(profile == RotorcraftProfile.MINI ? " mini_helicopter " : " helicopter ").append(mode.getName())
             .append(String.format(" pos=%.0f,%.0f,%.0f", position.x, position.y, position.z))
             .append(String.format(" hdg=%03d", AutopilotMath.compassDisplay(plane.getYRot())))
             .append(String.format(" spd=%.2f vs=%+.2f", velocity.horizontalDistance(), velocity.y))
@@ -1064,7 +1217,7 @@ public final class HelicopterAutopilot {
     }
 
     String describe(PlaneEntity plane) {
-        return "Helicopter #" + plane.getId() + " mode=" + mode.getName()
+        return noun() + " #" + plane.getId() + " mode=" + mode.getName()
             + ", " + planComponent().getString();
     }
 
