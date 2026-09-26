@@ -9,6 +9,7 @@ import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.TagKey;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
@@ -20,6 +21,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
@@ -27,6 +29,8 @@ import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.autopilot.AutopilotMode;
+import xyz.przemyk.simpleplanes.autopilot.PlaneAutopilot;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
@@ -54,6 +58,11 @@ public class AirlinerEntity extends PlaneEntity {
     public static final EntityDataAccessor<Integer> LOGO = SynchedEntityData.defineId(AirlinerEntity.class, EntityDataSerializers.INT);
     @SuppressWarnings("unchecked")
     private static final EntityDataAccessor<Integer>[] SEATS = new EntityDataAccessor[AirlinerLayout.MAX_SEATS];
+    /**
+     * Landing gear commanded down; the server decides ({@link #tickGear()}), the client animates towards it
+     * ({@link #gearDown(float)}). Visual only. DESIGN.md section 4.7.
+     */
+    public static final EntityDataAccessor<Boolean> GEAR_DOWN = SynchedEntityData.defineId(AirlinerEntity.class, EntityDataSerializers.BOOLEAN);
     public static final TagKey<Block> METAL_SKIN_TAG = TagKey.create(Registries.BLOCK,
         Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner_metal_skin"));
 
@@ -64,6 +73,21 @@ public class AirlinerEntity extends PlaneEntity {
     }
 
     private static final String THROTTLE_KEY = "throttle";
+    private static final String GEAR_KEY = "GearDown";
+    /** Gear: retracts once this high (blocks above the ground) and climbing, or above {@link #GEAR_EXTEND_AGL}. */
+    public static final double GEAR_RETRACT_AGL = 4.0;
+    /** Gear: extends below this height when descending, or level and slower than {@link #GEAR_SLOW_SPEED}. */
+    public static final double GEAR_EXTEND_AGL = 25.0;
+    /** Gear: extends below this height when level or descending. */
+    public static final double GEAR_LOW_AGL = 8.0;
+    /** Vertical speed, b/t, that counts as climbing or descending for the gear. */
+    public static final double GEAR_CLIMB = 0.02;
+    /** Ground speed, b/t, below which a level airliner under {@link #GEAR_EXTEND_AGL} counts as slow. */
+    public static final double GEAR_SLOW_SPEED = 0.85;
+    /** Ticks for the gear to travel from up to down or back. */
+    public static final int GEAR_TRAVEL_TICKS = 30;
+    /** Ticks after a gear change before the automatic rule may reverse it in the air (no flicker at a level-off). */
+    public static final int GEAR_HOLD_TICKS = 60;
     private static final String SEATS_KEY = "Seats";
     /** A client's hit location further than this from the eye ray's hit on the hull is used as it is. */
     private static final float RAY_TRUST = 2.0F;
@@ -71,12 +95,26 @@ public class AirlinerEntity extends PlaneEntity {
     public static final float MAX_SPEED_DATA = 2.0f;
     /** Keel end touches at 14.5 deg nose-up. */
     public static final float GROUND_PITCH_LIMIT = 12.0f;
+    /**
+     * Drag multiplier with the throttle closed on the ground (5 elsewhere): about 0.2 g from touchdown, a 30.5 b
+     * roll-out from 0.55 b/t and 4 b from taxi speed 0.20, instead of 3.4 b and 0.4 b. DESIGN.md section 4.6.
+     */
+    public static final double GROUND_BRAKES = 0.6;
+    /** Above this ground speed, b/t, nose-down braking is scaled like {@link #GROUND_BRAKES}; see {@link #tickOnGround}. */
+    public static final double WHEEL_BRAKE_TAXI_SPEED = 0.2;
 
     private final AirlinerLayout layout;
     private final AirlinerPartEntity[] parts;
     /** Seats read from the save, by rider, until the rider is back aboard. */
     private final Map<UUID, Integer> savedSeats = new HashMap<>();
     private @Nullable UUID boardingPlayer;
+    /** Client: gear position, 1 down, 0 up, this tick and the last. */
+    private float gear = 1.0F, gearO = 1.0F;
+    private boolean gearSynced;
+    /** Server, test aid ({@code /airliner gear}): gear held down or up, null for the automatic rule. Not saved. */
+    private @Nullable Boolean gearOverride;
+    /** Server: ticks before the automatic rule may move the gear again. */
+    private int gearHold;
     private int boardingSeat = -1;
 
     public AirlinerEntity(EntityType<? extends AirlinerEntity> entityType, Level level) {
@@ -137,6 +175,26 @@ public class AirlinerEntity extends PlaneEntity {
     }
 
     @Override
+    protected double brakeMultiplier(boolean onGround) {
+        return onGround ? GROUND_BRAKES : super.brakeMultiplier(false);
+    }
+
+    /**
+     * Nose-down on the ground is a reverse push ({@code -groundPush}); rolling faster than
+     * {@link #WHEEL_BRAKE_TAXI_SPEED} it is scaled like the idle brakes ({@code brakeMultiplier(true) / 5}), so the
+     * autopilot's derotation after touchdown does not stop the roll-out in a few blocks. Taxi and reversing keep
+     * the full push.
+     */
+    @Override
+    protected boolean tickOnGround(TempMotionVars vars) {
+        boolean speedingUp = super.tickOnGround(vars);
+        if (vars.push < 0 && getPitchUp() < 0 && getDeltaMovement().horizontalDistance() > WHEEL_BRAKE_TAXI_SPEED) {
+            vars.push *= (float) (brakeMultiplier(true) / 5.0);
+        }
+        return speedingUp;
+    }
+
+    @Override
     protected int getLandingAngle() {
         return 20;
     }
@@ -145,6 +203,7 @@ public class AirlinerEntity extends PlaneEntity {
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         super.defineSynchedData(builder);
         builder.define(LOGO, -1);
+        builder.define(GEAR_DOWN, true);
         for (EntityDataAccessor<Integer> seat : SEATS) {
             builder.define(seat, -1);
         }
@@ -180,7 +239,85 @@ public class AirlinerEntity extends PlaneEntity {
         super.tick();
         if (!level().isClientSide() && !isRemoved()) {
             tickParts();
+            tickGear();
+        } else if (level().isClientSide()) {
+            float target = entityData.get(GEAR_DOWN) ? 1.0F : 0.0F;
+            gearO = gear;
+            if (!gearSynced || tickCount < 5) {
+                // spawned or loaded (the server settles the gear on its first tick): no travel
+                gear = gearO = target;
+                gearSynced = true;
+            } else {
+                gear = Mth.approach(gear, target, 1.0F / GEAR_TRAVEL_TICKS);
+            }
         }
+    }
+
+    /**
+     * Server: gear down on the ground and in the autopilot's arrival; up once clearly airborne. Visual only, physics
+     * and hitboxes do not change.
+     */
+    private void tickGear() {
+        boolean down = entityData.get(GEAR_DOWN);
+        if (gearHold > 0) {
+            gearHold--;
+        }
+        if (gearOverride != null) {
+            down = gearOverride;
+        } else if (getOnGround() || isOnWater()) {
+            down = true;
+        } else if (gearHold == 0) {
+            double agl = getY() - level().getHeight(Heightmap.Types.MOTION_BLOCKING, Mth.floor(getX()), Mth.floor(getZ()));
+            double vy = getY() - yo;
+            // from the position, not the delta movement: a player-flown airliner moves by packets on the server
+            double speed = position().subtract(xo, yo, zo).length();
+            boolean arriving = isArriving();
+            if (down) {
+                if (!arriving && (agl > GEAR_EXTEND_AGL || (agl > GEAR_RETRACT_AGL && vy > GEAR_CLIMB))) {
+                    down = false;
+                }
+            } else if (arriving || (agl < GEAR_EXTEND_AGL && vy < -GEAR_CLIMB)
+                    || (agl < GEAR_EXTEND_AGL && vy <= 0.0 && (agl < GEAR_LOW_AGL || speed < GEAR_SLOW_SPEED))) {
+                down = true;
+            }
+        }
+        if (down != entityData.get(GEAR_DOWN)) {
+            entityData.set(GEAR_DOWN, down);
+            gearHold = GEAR_HOLD_TICKS;
+        }
+    }
+
+    /** The autopilot is on final (from 150 b before the threshold), in the flare, the roll-out or taxiing in. */
+    private boolean isArriving() {
+        PlaneAutopilot autopilot = getAutopilot();
+        if (autopilot == null || !isAutopilotEngaged()) {
+            return false;
+        }
+        AutopilotMode mode = autopilot.getMode();
+        return mode == AutopilotMode.FINAL || mode == AutopilotMode.FLARE
+            || mode == AutopilotMode.ROLLOUT || mode == AutopilotMode.TAXI_IN;
+    }
+
+    /** Test aid: holds the gear down ({@code true}) or up ({@code false}), or back to the automatic rule ({@code null}). */
+    public void setGearOverride(@Nullable Boolean override) {
+        this.gearOverride = override;
+    }
+
+    public @Nullable Boolean getGearOverride() {
+        return gearOverride;
+    }
+
+    public boolean isGearDown() {
+        return entityData.get(GEAR_DOWN);
+    }
+
+    /** Client: gear position for rendering, 1 down, 0 up. */
+    public float gearDown(float partialTicks) {
+        if (!gearSynced) {
+            // not ticked on this client yet: show the synced state, not the field's initial value
+            return entityData.get(GEAR_DOWN) ? 1.0F : 0.0F;
+        }
+        return Mth.lerp(partialTicks, gearO, gear);
     }
 
     private void tickParts() {
@@ -222,6 +359,7 @@ public class AirlinerEntity extends PlaneEntity {
         super.readAdditionalSaveData(input);
         setLogo(input.getIntOr("Logo", getLogo()));
         setThrottle(Math.max(0, input.getIntOr(THROTTLE_KEY, getThrottle())));
+        entityData.set(GEAR_DOWN, input.getBooleanOr(GEAR_KEY, true));
         savedSeats.clear();
         for (ValueInput seat : input.childrenListOrEmpty(SEATS_KEY)) {
             int index = seat.getIntOr("Seat", -1);
@@ -238,6 +376,7 @@ public class AirlinerEntity extends PlaneEntity {
         super.addAdditionalSaveData(output);
         output.putInt("Logo", getLogo());
         output.putInt(THROTTLE_KEY, getThrottle());
+        output.putBoolean(GEAR_KEY, isGearDown());
         ValueOutput.ValueOutputList seats = output.childrenList(SEATS_KEY);
         for (Entity passenger : getPassengers()) {
             int seat = seatOf(passenger);
@@ -249,15 +388,16 @@ public class AirlinerEntity extends PlaneEntity {
         }
     }
 
-    /** The world save keeps the throttle (an airliner in flight comes back flying) and the seats; the item does not. */
+    /** The world save keeps the throttle (an airliner in flight comes back flying), the gear and the seats; the item does not. */
     @Override
     public ItemStack getItemStack() {
         ItemStack itemStack = super.getItemStack();
         CompoundTag compound = itemStack.get(SimplePlanesComponents.ENTITY_TAG.get());
-        if (compound != null && (compound.contains(THROTTLE_KEY) || compound.contains(SEATS_KEY))) {
+        if (compound != null && (compound.contains(THROTTLE_KEY) || compound.contains(SEATS_KEY) || compound.contains(GEAR_KEY))) {
             CompoundTag parked = compound.copy();
             parked.remove(THROTTLE_KEY);
             parked.remove(SEATS_KEY);
+            parked.remove(GEAR_KEY);
             itemStack.set(SimplePlanesComponents.ENTITY_TAG.get(), parked);
         }
         return itemStack;
@@ -408,7 +548,7 @@ public class AirlinerEntity extends PlaneEntity {
         positionRiderGeneric(passenger);
         int seat = seatOf(passenger);
         if (seat >= 0) {
-            Vector3f pos = new Vector3f(layout.x(seat), AirlinerLayout.y(seat), layout.z(seat));
+            Vector3f pos = new Vector3f(layout.x(seat), layout.y(seat), layout.z(seat));
             // Server: Q_Client is stale without a pilot aboard.
             pos = level().isClientSide() ? transformPos(pos) : transformPosPhysics(pos);
             moveFunction.accept(passenger, getX() + pos.x(), getY() + pos.y(), getZ() + pos.z());
@@ -417,7 +557,7 @@ public class AirlinerEntity extends PlaneEntity {
 
     @Override
     public float getPassengersRidingOffset() {
-        return AirlinerLayout.CABIN_Y;
+        return layout.cabinY();
     }
 
     // ---- boarding by click ----
@@ -480,7 +620,7 @@ public class AirlinerEntity extends PlaneEntity {
     /** Distance along the ray to the hull box, or -1. */
     private float rayToHull(Vector3f o, Vector3f d) {
         float[] min = {-layout.hullHalfWidth(), AirlinerLayout.HULL_Y0, -layout.hullTail()};
-        float[] max = {layout.hullHalfWidth(), AirlinerLayout.HULL_Y1, AirlinerLayout.HULL_NOSE};
+        float[] max = {layout.hullHalfWidth(), layout.hullTop(), AirlinerLayout.HULL_NOSE};
         float[] origin = {o.x(), o.y(), o.z()};
         float[] dir = {d.x(), d.y(), d.z()};
         float near = 0, far = Float.MAX_VALUE;

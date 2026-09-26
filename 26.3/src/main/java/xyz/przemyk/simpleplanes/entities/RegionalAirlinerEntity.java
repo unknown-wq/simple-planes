@@ -10,7 +10,8 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
  * 14-seat regional airliner: the mini airliner's narrow size, one seat either side of the aisle. Seats,
  * boarding, hitboxes, skin and logos are {@link AirlinerEntity}'s. It is lighter (collision mass 1.3 against
  * 1.6), and the numbers that depend on mass are scaled by that ratio, m = 0.8125: take-off speed by sqrt(m),
- * the control rates and fuel use by 1/m and m. Numbers: design/DESIGN.md section 4.4.
+ * the control rates and fuel use by 1/m and m, the ground brakes by 1/m (the same brakes on a lighter aircraft).
+ * Numbers: design/DESIGN.md sections 4.4 and 4.6.
  */
 public class RegionalAirlinerEntity extends AirlinerEntity {
 
@@ -23,6 +24,11 @@ public class RegionalAirlinerEntity extends AirlinerEntity {
         TempMotionVars vars = super.getMotionVars();
         vars.takeOffSpeed = 0.54;
         return vars;
+    }
+
+    @Override
+    protected double brakeMultiplier(boolean onGround) {
+        return onGround ? GROUND_BRAKES / 0.8125 : super.brakeMultiplier(false);
     }
 
     @Override

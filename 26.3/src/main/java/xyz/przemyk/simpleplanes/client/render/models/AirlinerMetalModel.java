@@ -15,11 +15,12 @@ import xyz.przemyk.simpleplanes.entities.AirlinerLayout;
  * the size's {@code *_metal.png} (256x256). Shared by the wooden ({@link AirlinerModel}) and the metal-skinned
  * ({@link AirlinerSkinModel}) airliner.
  *
- * <p>The windscreen panes are tinted and opaque; their inner faces are transparent. Belts, doors, side windows
- * and logos are flush plates just outside the skin ({@code CubeDeformation} 0.05); every window in them is
- * transparent and so is every face that points into the cabin, so the seats show through the windows. Rendered
- * with {@link RenderTypes#entityCutoutCull} so that riders keep their view out. The fan discs are in
- * {@link AirlinerFanModel}.
+ * <p>The windscreen plates are the frame only: the panes are open and glazed by {@link AirlinerGlassModel}.
+ * Belts, doors, side windows and logos are flush plates just outside the skin ({@code CubeDeformation} 0.05);
+ * every window in them is open and so is every face that points into the cabin, so the seats show through the
+ * glass. Everything that belongs to the cabin sits {@link AirlinerShape#lift} px higher than the base
+ * cross-section; engines, winglets and gear do not move. Rendered with {@link RenderTypes#entityCutoutCull}.
+ * The fan discs are in {@link AirlinerFanModel}.
  *
  * <p>The fin carries one of {@link #LOGO_COUNT} fictional airline logos, chosen per aircraft with
  * {@link #setLogo(int)}; see AIRLINER-MODEL.md for how the entity rolls, saves and passes it.
@@ -27,11 +28,15 @@ import xyz.przemyk.simpleplanes.entities.AirlinerLayout;
 public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
     /** Number of airline logos: 0 Terntide, 1 Glimmerwing, 2 Pinewind, 3 Puffcloud Express, 4 Coralline, 5 Marigold Hop. */
     public static final int LOGO_COUNT = 6;
+    /** Gear leg pivots (top of the strut), px; the retracted legs also rise into the body by the given px. */
+    private static final float NOSE_GEAR_PIVOT_Y = -13.0F, NOSE_GEAR_PIVOT_Z = -74.0F, MAIN_GEAR_PIVOT_Y = -15.0F;
+    private static final float NOSE_GEAR_RISE = 4.0F, MAIN_GEAR_RISE = 3.0F;
     /** Logo shown before {@link #setupAnim} has run. */
     public static final int DEFAULT_LOGO = 0;
 
     private final ModelPart[] logos = new ModelPart[LOGO_COUNT];
     private final ModelPart[] seatBacks;
+    private final ModelPart noseGear, mainGearLeft, mainGearRight;
 
     public AirlinerMetalModel(ModelPart root, AirlinerShape shape) {
         super(root, RenderTypes::entityCutoutCull);
@@ -44,6 +49,10 @@ public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
         for (int i = 0; i < LOGO_COUNT; i++) {
             this.logos[i] = tail.getChild("logo_" + i);
         }
+        ModelPart gear = root.getChild("Metal").getChild("Gear");
+        this.noseGear = gear.getChild("nose_gear");
+        this.mainGearLeft = gear.getChild("main_gear_left");
+        this.mainGearRight = gear.getChild("main_gear_right");
         setLogo(DEFAULT_LOGO);
     }
 
@@ -66,20 +75,21 @@ public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
 
         PartDefinition Metal = partdefinition.addOrReplaceChild("Metal", CubeListBuilder.create(), PartPose.offset(0.0F, 24.0F, 0.0F));
         int hw = shape.halfWidth;
+        int l = shape.lift;
 
         // Two-tier raked windscreen on the nose steps; the instrument panel under the glare shield.
         CubeListBuilder cockpit = CubeListBuilder.create();
-        c.box(cockpit, "ws_upper", -shape.windscreenUpper, -44, -83, 2 * shape.windscreenUpper, 4, 1, 0.0F);
-        c.box(cockpit, "ws_lower", -shape.windscreenLower, -40, -87, 2 * shape.windscreenLower, 5, 1, 0.0F);
-        c.box(cockpit, "dash", -shape.dash, -33, -78, 2 * shape.dash, 5, 3, 0.0F);
-        c.pair(cockpit, "cockpit_side", hw, -39, -78, 1, 9, 16, 0.05F);
+        c.box(cockpit, "ws_upper", -shape.windscreenUpper, -44 - l, -83, 2 * shape.windscreenUpper, 4, 1, 0.0F);
+        c.box(cockpit, "ws_lower", -shape.windscreenLower, -40 - l, -87, 2 * shape.windscreenLower, 5, 1, 0.0F);
+        c.box(cockpit, "dash", -shape.dash, -33 - l, -78, 2 * shape.dash, 5, 3, 0.0F);
+        c.pair(cockpit, "cockpit_side", hw, -39 - l, -78, 1, 9, 16, 0.05F);
         Metal.addOrReplaceChild("Cockpit", cockpit, PartPose.ZERO);
 
         // Window belts over the window band, front and rear doors.
         CubeListBuilder cabin = CubeListBuilder.create();
-        c.pair(cabin, "belt", hw, -39, shape.beltFront, 1, 9, shape.beltLength, 0.05F);
-        c.pair(cabin, "door", hw, -37, shape.frontDoor, 1, 21, 7, 0.04F);
-        c.pair(cabin, "door", hw, -37, shape.rearDoor, 1, 21, 7, 0.04F);
+        c.pair(cabin, "belt", hw, -39 - l, shape.beltFront, 1, 9, shape.beltLength, 0.05F);
+        c.pair(cabin, "door", hw, -37 - l, shape.frontDoor, 1, 21, 7, 0.04F);
+        c.pair(cabin, "door", hw, -37 - l, shape.rearDoor, 1, 21, 7, 0.04F);
         Metal.addOrReplaceChild("Cabin", cabin, PartPose.ZERO);
 
         // Seats: cushion, back and headrest; the crew seats stand 2 px higher, eye level with the lower windscreen.
@@ -90,9 +100,9 @@ public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
             int x = seats.modelX(seat);
             int z = seats.modelZ(seat);
             if (AirlinerLayout.isCockpit(seat)) {
-                c.box(cushions, "crew_base", x - 5, -22, z - 6, 10, 6, 8, 0.0F);
+                c.box(cushions, "crew_base", x - 5, -22 - l, z - 6, 10, 6, 8, 0.0F);
             } else {
-                c.box(cushions, "seat_base", x - 5, -20, z - 6, 10, 4, 8, 0.0F);
+                c.box(cushions, "seat_base", x - 5, -20 - l, z - 6, 10, 4, 8, 0.0F);
             }
         }
         PartDefinition Seats = Metal.addOrReplaceChild("Seats", cushions, PartPose.ZERO);
@@ -101,11 +111,11 @@ public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
             int z = seats.modelZ(seat);
             CubeListBuilder back = CubeListBuilder.create();
             if (AirlinerLayout.isCockpit(seat)) {
-                c.box(back, "crew_back", x - 5, -35, z + 2, 10, 13, 3, 0.0F);
-                c.box(back, "crew_head", x - 4, -40, z + 4, 8, 5, 2, 0.0F);
+                c.box(back, "crew_back", x - 5, -35 - l, z + 2, 10, 13, 3, 0.0F);
+                c.box(back, "crew_head", x - 4, -40 - l, z + 4, 8, 5, 2, 0.0F);
             } else {
-                c.box(back, "seat_back", x - 5, -31, z + 2, 10, 11, 3, 0.0F);
-                c.box(back, "seat_head", x - 4, -36, z + 4, 8, 5, 2, 0.0F);
+                c.box(back, "seat_back", x - 5, -31 - l, z + 2, 10, 11, 3, 0.0F);
+                c.box(back, "seat_head", x - 4, -36 - l, z + 4, 8, 5, 2, 0.0F);
             }
             Seats.addOrReplaceChild("seat_" + seat, back, PartPose.ZERO);
         }
@@ -132,29 +142,37 @@ public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
         // fin's outline are transparent. Only the logo chosen with setLogo is visible.
         int t = shape.tailShift();
         CubeListBuilder apu = CubeListBuilder.create();
-        c.box(apu, "apu", -3, -42, 80 + t, 6, 6, 4, 0.0F);
+        // the APU follows the tail cone's last step, which rises by 3/4 of the lift at its belly
+        c.box(apu, "apu", -3, -42 - 7 * l / 8, 80 + t, 6, 6, 4, 0.0F);
         PartDefinition Tail = Metal.addOrReplaceChild("Tail", apu, PartPose.ZERO);
         for (int i = 0; i < LOGO_COUNT; i++) {
             CubeListBuilder logo = CubeListBuilder.create();
-            c.box(logo, "logo_" + i, 0, -87, 50 + t, 1, 29, 29, 0.05F);
-            c.mbox(logo, "logo_" + i, -1, -87, 50 + t, 1, 29, 29, 0.05F);
+            c.box(logo, "logo_" + i, 0, -87 - l, 50 + t, 1, 29, 29, 0.05F);
+            c.mbox(logo, "logo_" + i, -1, -87 - l, 50 + t, 1, 29, 29, 0.05F);
             Tail.addOrReplaceChild("logo_" + i, logo, PartPose.ZERO);
         }
 
-        // Tricycle gear: a nose leg with twin tyres, two main legs with a tyre either side.
+        // Tricycle gear: a nose leg with twin tyres, two main legs with a tyre either side. Each leg is a part pivoted at
+        // the top of its strut; setupAnim folds the nose leg forward into the nose and the main legs inwards into the
+        // wing-to-body fairing.
         int gx = shape.mainGearX;
         int gz = shape.mainGearZ;
-        CubeListBuilder gear = CubeListBuilder.create();
-        c.box(gear, "nose_strut", -1, -13, -75, 2, 9, 2, 0.0F);
-        c.box(gear, "nose_tyre", -3, -4, -76, 2, 4, 4, 0.0F);
-        c.mbox(gear, "nose_tyre", 1, -4, -76, 2, 4, 4, 0.0F);
-        c.box(gear, "main_strut", gx, -15, gz, 2, 10, 2, 0.0F);
-        c.box(gear, "main_tyre", gx - 3, -6, gz - 2, 3, 6, 6, 0.0F);
-        c.box(gear, "main_tyre", gx + 2, -6, gz - 2, 3, 6, 6, 0.0F);
-        c.mbox(gear, "main_strut", -gx - 2, -15, gz, 2, 10, 2, 0.0F);
-        c.mbox(gear, "main_tyre", -gx, -6, gz - 2, 3, 6, 6, 0.0F);
-        c.mbox(gear, "main_tyre", -gx - 5, -6, gz - 2, 3, 6, 6, 0.0F);
-        Metal.addOrReplaceChild("Gear", gear, PartPose.ZERO);
+        PartDefinition Gear = Metal.addOrReplaceChild("Gear", CubeListBuilder.create(), PartPose.ZERO);
+        CubeListBuilder noseLeg = CubeListBuilder.create();
+        c.box(noseLeg, "nose_strut", -1, 0, -1, 2, 9, 2, 0.0F);
+        c.box(noseLeg, "nose_tyre", -3, 9, -2, 2, 4, 4, 0.0F);
+        c.mbox(noseLeg, "nose_tyre", 1, 9, -2, 2, 4, 4, 0.0F);
+        Gear.addOrReplaceChild("nose_gear", noseLeg, PartPose.offset(0, NOSE_GEAR_PIVOT_Y, NOSE_GEAR_PIVOT_Z));
+        CubeListBuilder mainLeft = CubeListBuilder.create();
+        c.box(mainLeft, "main_strut", -1, 0, -1, 2, 10, 2, 0.0F);
+        c.box(mainLeft, "main_tyre", -4, 9, -3, 3, 6, 6, 0.0F);
+        c.box(mainLeft, "main_tyre", 1, 9, -3, 3, 6, 6, 0.0F);
+        Gear.addOrReplaceChild("main_gear_left", mainLeft, PartPose.offset(gx + 1, MAIN_GEAR_PIVOT_Y, gz + 1));
+        CubeListBuilder mainRight = CubeListBuilder.create();
+        c.mbox(mainRight, "main_strut", -1, 0, -1, 2, 10, 2, 0.0F);
+        c.mbox(mainRight, "main_tyre", 1, 9, -3, 3, 6, 6, 0.0F);
+        c.mbox(mainRight, "main_tyre", -4, 9, -3, 3, 6, 6, 0.0F);
+        Gear.addOrReplaceChild("main_gear_right", mainRight, PartPose.offset(-gx - 1, MAIN_GEAR_PIVOT_Y, gz + 1));
 
         return meshdefinition;
     }
@@ -213,5 +231,15 @@ public class AirlinerMetalModel extends EntityModel<PlaneRenderState> {
         for (int i = 0; i < seatBacks.length; i++) {
             seatBacks[i].visible = i != state.airlinerHiddenSeat;
         }
+        // 0 down, 1 retracted; eased so the legs start and stop gently
+        float up = 1.0F - state.airlinerGear;
+        float t = up * up * (3.0F - 2.0F * up);
+        float fold = t * (float) Math.PI / 2.0F;
+        noseGear.xRot = -fold;
+        noseGear.y = NOSE_GEAR_PIVOT_Y - NOSE_GEAR_RISE * t;
+        mainGearLeft.zRot = fold;
+        mainGearLeft.y = MAIN_GEAR_PIVOT_Y - MAIN_GEAR_RISE * t;
+        mainGearRight.zRot = -fold;
+        mainGearRight.y = MAIN_GEAR_PIVOT_Y - MAIN_GEAR_RISE * t;
     }
 }

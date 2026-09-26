@@ -18,10 +18,14 @@ import java.util.Set;
  * {@code Airliner} at y = 24 (see AIRLINER-MODEL.md). A mirrored right-hand cube uses the same name, and so
  * the same net, as its left-hand twin.
  *
- * <p>The cabin walls are open at window height: the body is two boxes, below and above the window band, and
- * the band is pillars between the windows. The faces a rider would see from inside (the top of the lower box,
- * the underside of the upper box) are left out, so riders still see out through the walls, while the pillars
- * frame the windows at eye level and onlookers see the seats through them.
+ * <p>The cabin sits {@link AirlinerShape#lift} px above the base cross-section: the keel, wing roots, fairing,
+ * engines and gear stay where they are, the lower lobe below the cabin floor grows, and the cabin, window band,
+ * crown, cockpit, fin, stabilisers and the top of the tail cone move up.
+ *
+ * <p>The outer boxes are culled from inside, so the cabin is lined with one-face plates that face inwards
+ * ({@code liner_*}): floor, ceiling, the walls below and above the window band, and the cockpit bulkhead around
+ * the windscreen. The window band is pillars between open windows; the glass is {@link AirlinerGlassModel}.
+ * The tail cone's front face closes the cabin at the rear.
  */
 final class AirlinerAirframe {
 
@@ -29,12 +33,15 @@ final class AirlinerAirframe {
     static final float WING_DIHEDRAL = 0.0873F;
     /** Horizontal stabiliser dihedral, radians (7 degrees). */
     static final float STAB_DIHEDRAL = 0.1222F;
-    /** Height of the wing and stabiliser pivots. */
+    /** Height of the wing pivots; the stabiliser pivot before the lift ({@link #stabY}). */
     static final float WING_Y = -14.0F;
     static final float STAB_Y = -28.0F;
-    /** Window band: local y of the lintel and of the sill. */
+    /** Window band before the lift: local y of the lintel and of the sill. */
     static final int BAND_TOP = -37;
     static final int BAND_BOTTOM = -32;
+    /** Cabin floor and ceiling before the lift. */
+    static final int FLOOR = -16;
+    static final int CEILING = -46;
 
     // Model-space directions: DOWN is the face at min y (the top), UP the one at max y, NORTH faces the nose.
     private static final Set<Direction> LOWER_BODY =
@@ -45,6 +52,16 @@ final class AirlinerAirframe {
     private static final Set<Direction> ABOVE_CABIN = EnumSet.of(Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST);
     private static final Set<Direction> NOSE = EnumSet.of(Direction.UP, Direction.DOWN, Direction.NORTH, Direction.EAST, Direction.WEST);
     private static final Set<Direction> PILLAR = EnumSet.of(Direction.EAST, Direction.WEST, Direction.NORTH, Direction.SOUTH);
+    // the ceiling liner replaces its underside
+    private static final Set<Direction> SHOULDER_TOP = EnumSet.of(Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST);
+    // the two windscreen steps: their risers are the windscreen openings
+    private static final Set<Direction> WINDSCREEN_STEP = EnumSet.of(Direction.UP, Direction.DOWN, Direction.EAST, Direction.WEST);
+    // liner plates: only the face towards the cabin
+    private static final Set<Direction> FACE_UP = EnumSet.of(Direction.DOWN);
+    private static final Set<Direction> FACE_DOWN = EnumSet.of(Direction.UP);
+    private static final Set<Direction> FACE_LEFT_WALL = EnumSet.of(Direction.WEST);
+    private static final Set<Direction> FACE_RIGHT_WALL = EnumSet.of(Direction.EAST);
+    private static final Set<Direction> FACE_AFT = EnumSet.of(Direction.SOUTH);
 
     /** Where each named cube's UV net starts in a layer's texture; the cube's box is passed for layouts that record it. */
     interface UvLayout {
@@ -64,27 +81,42 @@ final class AirlinerAirframe {
 
     private AirlinerAirframe() {}
 
+    /** Local y of the lintel and of the sill of this shape's window band. */
+    static int bandTop(AirlinerShape shape) {
+        return BAND_TOP - shape.lift;
+    }
+
+    static int bandBottom(AirlinerShape shape) {
+        return BAND_BOTTOM - shape.lift;
+    }
+
+    /** Stabiliser pivot: raised with the tail cone, 1/8 more than the lift so the tailplane sits mid-cone. */
+    static float stabY(AirlinerShape shape) {
+        return STAB_Y - shape.lift - shape.lift / 8.0F;
+    }
+
     static MeshDefinition create(AirlinerShape shape, UvLayout uv) {
         MeshDefinition meshdefinition = new MeshDefinition();
         PartDefinition partdefinition = meshdefinition.getRoot();
 
         PartDefinition Airliner = partdefinition.addOrReplaceChild("Airliner", CubeListBuilder.create(), PartPose.offset(0.0F, 24.0F, 0.0F));
 
-        // Cross-section 2 * halfWidth x 38 px: flat sides from the window band down to the floor and up to the
-        // ceiling, rounded by narrower steps above and below. Inner top faces below the cabin and inner bottom faces
-        // above it are left out; only the floor (the lower shoulder) and the ceiling (the upper shoulder) show.
+        // Cross-section 2 * halfWidth x (38 + lift) px: flat sides from the window band down to the belly and up to
+        // the ceiling, rounded by narrower steps above and below. The faces towards the cabin are left out; the liner
+        // below draws them.
         int hw = shape.halfWidth;
+        int l = shape.lift;
         int front = AirlinerShape.BODY_FRONT;
         int length = shape.bodyRear - front;
         int crownEnd = shape.bodyRear + 16;
         CubeListBuilder fuselage = CubeListBuilder.create();
-        faces(fuselage, uv, "body_lower", -hw, -32, front, 2 * hw, 12, length, LOWER_BODY);
-        faces(fuselage, uv, "body_upper", -hw, -43, front, 2 * hw, 6, length, UPPER_BODY);
+        faces(fuselage, uv, "body_lower", -hw, BAND_BOTTOM - l, front, 2 * hw, 12 + l, length, LOWER_BODY);
+        faces(fuselage, uv, "body_upper", -hw, -43 - l, front, 2 * hw, 6, length, UPPER_BODY);
         faces(fuselage, uv, "hull_low", -hw + 1, -20, front, 2 * hw - 2, 4, length, BELOW_CABIN);
-        faces(fuselage, uv, "hull_high", -hw + 1, -46, front, 2 * hw - 2, 3, length, ABOVE_CABIN);
-        box(fuselage, uv, "fuselage_shoulder_top", -shape.shoulder, -48, -76, 2 * shape.shoulder, 2, crownEnd + 76);
-        box(fuselage, uv, "fuselage_crown_low", -shape.crownLow, -50, -72, 2 * shape.crownLow, 2, crownEnd + 72);
-        box(fuselage, uv, "fuselage_crown", -shape.crown, -51, -68, 2 * shape.crown, 1, crownEnd + 68);
+        faces(fuselage, uv, "hull_high", -hw + 1, -46 - l, front, 2 * hw - 2, 3, length, ABOVE_CABIN);
+        faces(fuselage, uv, "fuselage_shoulder_top", -shape.shoulder, -48 - l, -76, 2 * shape.shoulder, 2, crownEnd + 76, SHOULDER_TOP);
+        box(fuselage, uv, "fuselage_crown_low", -shape.crownLow, -50 - l, -72, 2 * shape.crownLow, 2, crownEnd + 72);
+        box(fuselage, uv, "fuselage_crown", -shape.crown, -51 - l, -68, 2 * shape.crown, 1, crownEnd + 68);
         box(fuselage, uv, "fuselage_shoulder_bottom", -shape.shoulder, -16, front, 2 * shape.shoulder, 2, length);
         box(fuselage, uv, "fuselage_keel", -shape.keel, -14, front, 2 * shape.keel, 1, length);
         int[] fairing = shape.fairing;
@@ -95,34 +127,64 @@ final class AirlinerAirframe {
         CubeListBuilder band = CubeListBuilder.create();
         int[][] windows = shape.windows;
         int z = front;
+        int bandTop = bandTop(shape);
         int height = BAND_BOTTOM - BAND_TOP;
         for (int i = 0; i <= windows.length; i++) {
             int end = i < windows.length ? windows[i][0] : shape.bodyRear;
             String name = "pillar_" + i;
-            faces(band, uv, name, hw - 2, BAND_TOP, z, 2, height, end - z, PILLAR);
-            faces(band, uv, name, -hw, BAND_TOP, z, 2, height, end - z, PILLAR);
+            faces(band, uv, name, hw - 2, bandTop, z, 2, height, end - z, PILLAR);
+            faces(band, uv, name, -hw, bandTop, z, 2, height, end - z, PILLAR);
             if (i < windows.length) {
                 z = windows[i][1];
             }
         }
         Airliner.addOrReplaceChild("WindowBand", band, PartPose.ZERO);
 
-        // Nose: a raked windscreen and radome in steps down and forward; open at the back towards the cockpit.
+        // Cabin liner, 1 px plates on the inner side of the walls, each drawing only its inward face. The walls stop
+        // at the band, so the windows stay open; the cockpit bulkhead leaves the windscreen open.
+        CubeListBuilder liner = CubeListBuilder.create();
+        int in = hw - 2;
+        int floor = FLOOR - l;
+        int ceiling = CEILING - l;
+        int sill = bandBottom(shape);
+        faces(liner, uv, "liner_floor", -in, floor, front, 2 * in, 1, length, FACE_UP);
+        faces(liner, uv, "liner_ceiling", -in, ceiling - 1, front, 2 * in, 1, length, FACE_DOWN);
+        faces(liner, uv, "liner_wall_low", in, sill, front, 1, floor - sill, length, FACE_LEFT_WALL);
+        faces(liner, uv, "liner_wall_low", -in - 1, sill, front, 1, floor - sill, length, FACE_RIGHT_WALL);
+        faces(liner, uv, "liner_wall_high", in, ceiling, front, 1, bandTop - ceiling, length, FACE_LEFT_WALL);
+        faces(liner, uv, "liner_wall_high", -in - 1, ceiling, front, 1, bandTop - ceiling, length, FACE_RIGHT_WALL);
+        // cockpit bulkhead at the body front: under the instrument panel, over the windscreen, and beside it
+        int ws = Math.max(shape.windscreenUpper, shape.windscreenLower);
+        int wsTop = -44 - l;
+        int dashBottom = -28 - l;
+        faces(liner, uv, "liner_front_low", -in, dashBottom, front - 1, 2 * in, floor - dashBottom, 1, FACE_AFT);
+        faces(liner, uv, "liner_front_top", -in, ceiling, front - 1, 2 * in, wsTop - ceiling, 1, FACE_AFT);
+        if (in > ws) {
+            faces(liner, uv, "liner_front_side", ws, wsTop, front - 1, in - ws, dashBottom - wsTop, 1, FACE_AFT);
+            faces(liner, uv, "liner_front_side", -in, wsTop, front - 1, in - ws, dashBottom - wsTop, 1, FACE_AFT);
+        }
+        Airliner.addOrReplaceChild("Liner", liner, PartPose.ZERO);
+
+        // Nose: a raked windscreen and radome in steps down and forward; open at the back towards the cockpit, and
+        // the risers of the first two steps are the windscreen openings.
         CubeListBuilder nose = CubeListBuilder.create();
         for (int i = 0; i < shape.nose.length; i++) {
             int[] n = shape.nose[i];
-            faces(nose, uv, "nose_" + (i + 1), n[0], n[1], n[2], n[3], n[4], n[5], NOSE);
+            faces(nose, uv, "nose_" + (i + 1), n[0], n[1], n[2], n[3], n[4], n[5], i < 2 ? WINDSCREEN_STEP : NOSE);
         }
         Airliner.addOrReplaceChild("Nose", nose, PartPose.ZERO);
 
-        // Tail cone: the top line stays level while the belly sweeps up towards the APU.
+        // Tail cone: the top line stays level with the crown while the belly sweeps up towards the APU; the belly of
+        // the first step stays low, so the tail-strike angle is the keel end's, as before the lift.
         CubeListBuilder tail = CubeListBuilder.create();
         int rear = shape.bodyRear;
         int[] cone = shape.tailCone;
-        box(tail, uv, "tail_1", -cone[0], -46, rear, 2 * cone[0], 29, 10);
-        box(tail, uv, "tail_2", -cone[1], -47, rear + 10, 2 * cone[1], 26, 10);
-        box(tail, uv, "tail_3", -cone[2], -47, rear + 20, 2 * cone[2], 21, 8);
-        box(tail, uv, "tail_4", -cone[3], -46, rear + 28, 2 * cone[3], 15, 6);
+        int[] top = {-46 - l, -47 - l, -47 - l, -46 - l};
+        int[] bottom = {-17, -21 - l / 4, -26 - l / 2, -31 - 3 * l / 4};
+        int[] step = {0, 10, 20, 28, 34};
+        for (int i = 0; i < 4; i++) {
+            box(tail, uv, "tail_" + (i + 1), -cone[i], top[i], rear + step[i], 2 * cone[i], bottom[i] - top[i], step[i + 1] - step[i]);
+        }
         Airliner.addOrReplaceChild("TailCone", tail, PartPose.ZERO);
 
         // Low swept wings in chord steps, pivoted at the fuselage side and tilted up by the dihedral.
@@ -133,20 +195,20 @@ final class AirlinerAirframe {
 
         // Swept horizontal stabilisers, four steps each, with a little dihedral.
         Airliner.addOrReplaceChild("stab_left", side(uv, "stab_", shape.stab, false),
-                PartPose.offsetAndRotation(shape.stabRoot, STAB_Y, 0.0F, 0.0F, 0.0F, -STAB_DIHEDRAL));
+                PartPose.offsetAndRotation(shape.stabRoot, stabY(shape), 0.0F, 0.0F, 0.0F, -STAB_DIHEDRAL));
         Airliner.addOrReplaceChild("stab_right", side(uv, "stab_", shape.stab, true),
-                PartPose.offsetAndRotation(-shape.stabRoot, STAB_Y, 0.0F, 0.0F, 0.0F, STAB_DIHEDRAL));
+                PartPose.offsetAndRotation(-shape.stabRoot, stabY(shape), 0.0F, 0.0F, 0.0F, STAB_DIHEDRAL));
 
         // Tall single fin, the same on both sizes: a dorsal fillet running forward along the crown and six swept steps.
         CubeListBuilder fin = CubeListBuilder.create();
         int t = shape.tailShift();
-        box(fin, uv, "fin_fillet", -1, -55, 30 + t, 2, 4, 14);
-        box(fin, uv, "fin_1", -2, -58, 44 + t, 4, 13, 32);
-        box(fin, uv, "fin_2", -1, -64, 50 + t, 2, 6, 27);
-        box(fin, uv, "fin_3", -1, -70, 55 + t, 2, 6, 23);
-        box(fin, uv, "fin_4", -1, -76, 60 + t, 2, 6, 18);
-        box(fin, uv, "fin_5", -1, -82, 65 + t, 2, 6, 14);
-        box(fin, uv, "fin_6", -1, -87, 69 + t, 2, 5, 10);
+        box(fin, uv, "fin_fillet", -1, -55 - l, 30 + t, 2, 4, 14);
+        box(fin, uv, "fin_1", -2, -58 - l, 44 + t, 4, 13, 32);
+        box(fin, uv, "fin_2", -1, -64 - l, 50 + t, 2, 6, 27);
+        box(fin, uv, "fin_3", -1, -70 - l, 55 + t, 2, 6, 23);
+        box(fin, uv, "fin_4", -1, -76 - l, 60 + t, 2, 6, 18);
+        box(fin, uv, "fin_5", -1, -82 - l, 65 + t, 2, 6, 14);
+        box(fin, uv, "fin_6", -1, -87 - l, 69 + t, 2, 5, 10);
         Airliner.addOrReplaceChild("Fin", fin, PartPose.ZERO);
 
         return meshdefinition;

@@ -9,10 +9,15 @@ import java.util.Map;
 /**
  * The numbers that make one airliner size, px in model space (AIRLINER-MODEL.md): the wide mini airliner and the
  * narrow regional airliner are built by the same code in {@link AirlinerAirframe}, {@link AirlinerMetalModel}
- * and {@link AirlinerFanModel} from one of these. Both have the same cross-section heights, cockpit, fin and
- * seats; the width, the cabin length, the wings, the engines and the gear differ.
+ * and {@link AirlinerFanModel} from one of these. Both have the same cabin cross-section, cockpit, fin and seats,
+ * raised by the layout's {@link AirlinerLayout#lift()} over a lower lobe; the width, the lift, the cabin length,
+ * the wings, the engines and the gear differ.
  */
 public final class AirlinerShape {
+
+    /** Sixteenths of the lift taken by the top and by the bottom of each nose step, back to front. */
+    private static final int[] NOSE_TOP_LIFT = {16, 16, 16, 13, 11, 9, 7};
+    private static final int[] NOSE_BOTTOM_LIFT = {0, 0, 0, 1, 2, 3, 5};
 
     /** Mini airliner: 58 px wide, 22 seats. */
     public static final AirlinerShape WIDE = wide();
@@ -32,6 +37,8 @@ public final class AirlinerShape {
     /** Width and height of the skin texture. */
     final int[] skinSize;
 
+    /** Px the cabin and everything above it sit higher than the base cross-section ({@link AirlinerLayout#lift()}). */
+    final int lift;
     /** Half width of the fuselage body; the end of the body. */
     int halfWidth, bodyRear;
     /** Half widths of the rounding steps: the shoulders above and below the walls, the crown's two steps, the keel. */
@@ -40,7 +47,7 @@ public final class AirlinerShape {
     int[] fairing;
     /** Window openings along z, [start, end): two cockpit windows, then one per seat row and one between rows. */
     int[][] windows;
-    /** The nose steps, back to front, {x, y, z, w, h, d}. */
+    /** The nose steps, back to front, {x, y, z, w, h, d}, lifted ({@link #liftNose}). */
     int[][] nose;
     /** Half widths of the four tail-cone steps. */
     int[] tailCone;
@@ -63,6 +70,7 @@ public final class AirlinerShape {
 
     private AirlinerShape(AirlinerLayout seats, String name, Map<String, int[]> metalUv, Map<String, int[]> skinUv, int[] skinSize) {
         this.seats = seats;
+        this.lift = seats.lift();
         this.metalTexture = SimplePlanesMod.texture(name + "_metal.png");
         this.skinTexture = SimplePlanesMod.texture(name + "_skin.png");
         this.metalUv = metalUv;
@@ -83,6 +91,22 @@ public final class AirlinerShape {
         return skinTexture;
     }
 
+    /**
+     * Stretches the base nose steps to the lifted body: the windscreen steps rise with the cabin, the radome rises
+     * less and its underside a little, so the nose tapers from the taller body to a low tip.
+     */
+    private void liftNose(int[][] base) {
+        nose = new int[base.length][];
+        for (int i = 0; i < base.length; i++) {
+            int[] n = base[i].clone();
+            int top = n[1] - Math.round(lift * NOSE_TOP_LIFT[i] / 16.0F);
+            int bottom = n[1] + n[4] - Math.round(lift * NOSE_BOTTOM_LIFT[i] / 16.0F);
+            n[1] = top;
+            n[4] = bottom - top;
+            nose[i] = n;
+        }
+    }
+
     /** How far the tail cone, fin, stabilisers and logos sit behind the wide airliner's. */
     int tailShift() {
         return bodyRear - WIDE_BODY_REAR;
@@ -100,9 +124,9 @@ public final class AirlinerShape {
         s.windows = new int[][]{
                 {-76, -71}, {-69, -64},
                 {-48, -44}, {-39, -35}, {-30, -26}, {-21, -17}, {-12, -8}, {-3, 1}, {6, 10}, {15, 19}, {24, 28}};
-        s.nose = new int[][]{
+        s.liftNose(new int[][]{
                 {-29, -44, -82, 58, 30, 4}, {-28, -40, -86, 56, 26, 4}, {-26, -35, -90, 52, 20, 4}, {-23, -33, -94, 46, 17, 4},
-                {-19, -30, -98, 38, 13, 4}, {-14, -27, -101, 28, 8, 3}, {-8, -25, -103, 16, 4, 2}};
+                {-19, -30, -98, 38, 13, 4}, {-14, -27, -101, 28, 8, 3}, {-8, -25, -103, 16, 4, 2}});
         s.tailCone = new int[]{27, 22, 15, 9};
         s.wingRoot = 28.0F;
         s.wing = new float[][]{
@@ -112,7 +136,7 @@ public final class AirlinerShape {
         s.stab = new float[][]{{0, -2, 56, 12, 2, 20}, {12, -2, 62, 10, 2, 15}, {22, -2, 67, 10, 2, 11}, {32, -2, 72, 7, 2, 7}};
         s.engineX = 52;
         s.engineY = -11;
-        s.engineRadius = 7;
+        s.engineRadius = 8;
         s.engineFront = -28;
         s.cowlLength = 17;
         s.pylonLength = 20;
@@ -144,9 +168,9 @@ public final class AirlinerShape {
         s.windows = new int[][]{
                 {-76, -71}, {-69, -64},
                 {-52, -48}, {-44, -40}, {-35, -31}, {-27, -23}, {-18, -14}, {-10, -6}, {-1, 3}, {7, 11}, {16, 20}, {24, 28}, {33, 37}};
-        s.nose = new int[][]{
+        s.liftNose(new int[][]{
                 {-20, -44, -82, 40, 30, 4}, {-19, -40, -86, 38, 26, 4}, {-18, -35, -90, 36, 20, 4}, {-16, -33, -94, 32, 17, 4},
-                {-13, -30, -98, 26, 13, 4}, {-10, -27, -101, 20, 8, 3}, {-6, -25, -103, 12, 4, 2}};
+                {-13, -30, -98, 26, 13, 4}, {-10, -27, -101, 20, 8, 3}, {-6, -25, -103, 12, 4, 2}});
         s.tailCone = new int[]{18, 15, 11, 7};
         s.wingRoot = 19.0F;
         s.wing = new float[][]{
@@ -156,7 +180,7 @@ public final class AirlinerShape {
         s.stab = new float[][]{{0, -2, 60, 10, 2, 17}, {10, -2, 65, 9, 2, 13}, {19, -2, 69, 8, 2, 9}, {27, -2, 73, 6, 2, 6}};
         s.engineX = 38;
         s.engineY = -12;
-        s.engineRadius = 6;
+        s.engineRadius = 7;
         s.engineFront = -24;
         s.cowlLength = 14;
         s.pylonLength = 17;

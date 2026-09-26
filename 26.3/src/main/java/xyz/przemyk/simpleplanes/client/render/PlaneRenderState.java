@@ -55,6 +55,8 @@ public class PlaneRenderState extends EntityRenderState {
 
     /** Airliner seat whose back and headrest are hidden: the one the first-person camera sits in, or -1. */
     public int airlinerHiddenSeat = -1;
+    /** Airliner landing gear position, 1 down, 0 retracted. */
+    public float airlinerGear = 1.0F;
 
     public boolean medicalLivery;
 

@@ -555,7 +555,8 @@ public final class AircraftCommand {
             // Only ticks the entity actually ran: one outside the entity-ticking area does not move.
             if (entity != null && !entity.isRemoved() && entity.tickCount != control.lastTracedTickCount) {
                 control.lastTracedTickCount = entity.tickCount;
-                LOGGER.info(String.format(Locale.ROOT, "trace #%d t=%d %s", entity.getId(), control.traceTick++, telemetry(entity)));
+                LOGGER.info(String.format(Locale.ROOT, "trace #%d t=%d %s%s", entity.getId(), control.traceTick++, telemetry(entity),
+                    entity instanceof AirlinerEntity airliner ? " gear=" + (airliner.isGearDown() ? "down" : "up") : ""));
             }
         }
     }
@@ -632,7 +633,8 @@ public final class AircraftCommand {
 
     private static String extras(Entity entity) {
         if (entity instanceof AirlinerEntity airliner) {
-            return " skin=" + (airliner.hasMetalSkin() ? "metal" : "wood") + " logo=" + airliner.getLogo();
+            return " skin=" + (airliner.hasMetalSkin() ? "metal" : "wood") + " logo=" + airliner.getLogo()
+                + " gear=" + (airliner.isGearDown() ? "down" : "up");
         }
         if (entity instanceof MiniHelicopterEntity heli) {
             return " livery=" + (heli.hasMedicalLivery() ? "medical" : "standard");

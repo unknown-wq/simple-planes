@@ -35,7 +35,7 @@ import java.util.Locale;
 
 /**
  * {@code /airliner} test aids for both sizes (mini and regional airliner), permission 2: {@code status},
- * {@code board <id>}, {@code logo <id> <0..5>}, {@code click <id> <x> <y> <z> [player]}. Every line also goes to
+ * {@code board <id>}, {@code logo <id> <0..5>}, {@code gear <id> auto|down|up}, {@code click <id> <x> <y> <z> [player]}. Every line also goes to
  * the log at INFO. See AIRLINER-MODEL.md.
  */
 public final class AirlinerCommand {
@@ -58,6 +58,11 @@ public final class AirlinerCommand {
                             .executes(c -> click(c, false))
                             .then(Commands.argument("player", EntityArgument.player())
                                 .executes(c -> click(c, true))))))
+                .then(Commands.literal("gear")
+                    .then(Commands.argument("id", IntegerArgumentType.integer())
+                        .then(Commands.literal("auto").executes(c -> gear(c, null)))
+                        .then(Commands.literal("down").executes(c -> gear(c, true)))
+                        .then(Commands.literal("up").executes(c -> gear(c, false)))))
                 .then(Commands.literal("logo")
                     .then(Commands.argument("id", IntegerArgumentType.integer())
                         .then(Commands.argument("logo", IntegerArgumentType.integer(0, AirlinerEntity.LOGO_COUNT - 1))
@@ -121,6 +126,17 @@ public final class AirlinerCommand {
         return 1;
     }
 
+    /** Holds the gear down or up regardless of height and speed (screenshots), or back to auto. Not saved. */
+    private static int gear(CommandContext<CommandSourceStack> context, @Nullable Boolean override) {
+        AirlinerEntity airliner = airliner(context);
+        if (airliner == null) {
+            return 0;
+        }
+        airliner.setGearOverride(override);
+        report(context.getSource(), "Airliner #" + airliner.getId() + " gear " + (override == null ? "auto" : override ? "held down" : "held up"));
+        return 1;
+    }
+
     /**
      * A click at airliner-frame point (x, y, z), blocks, +z towards the nose, +x the left wing. Without a player
      * it only reports the seat a player clicking there would get; with one it runs the airliner's own
@@ -163,11 +179,12 @@ public final class AirlinerCommand {
         long parts = airliner.level().getEntitiesOfClass(AirlinerPartEntity.class, airliner.getBoundingBox().inflate(9),
             p -> p.parent() == airliner).size();
         return String.format(Locale.ROOT,
-            "#%d %s logo=%d item-logo=%s skin=%s riders=%d/%d seats=[%s] pilot=%s parts=%d pos=%.2f,%.2f,%.2f spd=%.3f pitch=%.1f og=%b thr=%d health=%d",
+            "#%d %s logo=%d item-logo=%s skin=%s riders=%d/%d seats=[%s] pilot=%s parts=%d pos=%.2f,%.2f,%.2f spd=%.3f pitch=%.1f og=%b thr=%d health=%d gear=%s",
             airliner.getId(), EntityType.getKey(airliner.getType()).getPath(), airliner.getLogo(), itemLogo(airliner), airliner.hasMetalSkin() ? "metal" : "wood",
             airliner.getPassengers().size(), airliner.layout().count(), seats,
             airliner.getControllingPassenger() == null ? "none" : airliner.getControllingPassenger().getScoreboardName(), parts, airliner.getX(), airliner.getY(), airliner.getZ(), v.length(),
-            airliner.getXRot(), airliner.getOnGround(), airliner.getThrottle(), airliner.getHealth());
+            airliner.getXRot(), airliner.getOnGround(), airliner.getThrottle(), airliner.getHealth(),
+            (airliner.isGearDown() ? "down" : "up") + (airliner.getGearOverride() == null ? "" : "(held)"));
     }
 
     private static String itemLogo(AirlinerEntity airliner) {

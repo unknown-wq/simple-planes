@@ -897,6 +897,14 @@ public class PlaneEntity extends Entity {
         return 0.0;
     }
 
+    /**
+     * Multiplier on the whole drag with the throttle closed: airbrakes in the air, wheel brakes while the wheels are
+     * on the ground. 5 for both unless an aircraft brakes on the ground differently.
+     */
+    protected double brakeMultiplier(boolean onGround) {
+        return 5.0;
+    }
+
     /** Multiplier on the linear drag while rolling, from the block's friction. */
     protected double groundLinearDragFactor(float friction) {
         return 20 * (3 - friction);
@@ -1019,7 +1027,7 @@ public class PlaneEntity extends Entity {
         }
         motion = getDeltaMovement();
         double speed = motion.length();
-        double brakesMul = getThrottle() == 0 ? 5.0 : 1.0;
+        double brakesMul = getThrottle() == 0 ? brakeMultiplier(onGround()) : 1.0;
         speed -= (speed * speed * tempMotionVars.dragQuad + speed * tempMotionVars.dragMul + tempMotionVars.drag) * brakesMul;
         speed = Math.max(speed, 0);
         if (speed > tempMotionVars.maxSpeed) {
