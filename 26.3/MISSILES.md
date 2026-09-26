@@ -1237,28 +1237,32 @@ The same four flights on other bearings, with an earlier build, gave identical t
 
 ## 8. Launching from the map
 
-A world map can show the silos and launch from them. Simple Planes does not draw a map of its own. It answers
-map mods over four play payloads and offers a small client API, `xyz.przemyk.simpleplanes.api.map.AviationMap`.
+A world map can show the silos, launch from them, and load or unload them. Simple Planes does not draw a map of
+its own. It answers map mods over five play payloads and offers a small client API,
+`xyz.przemyk.simpleplanes.api.map.AviationMap`.
 The first user is the world map in the minecolonies-fabric repository (`worldmap/26.3`, aviation tab). The same
 snapshot also carries airfields, helipads, shuttles and flights (see `AUTOPILOT.md` §9a).
 
 The code is in `aviation/` (server side) and `api/map/` (client API and records). The silo, missile and
-launch code is not touched: the map path ends in `LaunchSiloBlockEntity#launch`, the same call
-`/missile launch` makes.
+launch code is not touched. The map's paths end in the same calls as the commands:
 
-### 8a. Who may launch, and from where
+- a launch ends in `LaunchSiloBlockEntity#launch`, as `/missile launch` does;
+- a load or unload ends in `LaunchSiloBlockEntity#load` / `#unload`, as `/missile silo load|unload` do.
 
-**Operators only.** A launch request needs permission level 2 (`Commands.LEVEL_GAMEMASTERS`), which is the same as
-`/missile launch`. The server checks this on every request. Players without the permission still get the full
-snapshot, so they can see airfields, routes and silos. The snapshot's `launchPermitted` flag tells the map to
-disable its Launch button. The flag is a hint for the UI only. The client's own permission level is never trusted.
+### 8a. Who may launch, load and unload, and from where
+
+**Operators only.** Launch, load and unload requests all need permission level 2
+(`Commands.LEVEL_GAMEMASTERS`), which is the same as `/missile launch` and `/missile silo load`. The server checks
+this on every request. Players without the permission still get the full snapshot, so they can see airfields,
+routes and silos. The snapshot's `launchPermitted` flag tells the map to disable its Launch, Load and Unload
+buttons. The flag is a hint for the UI only. The client's own permission level is never trusted.
 
 The server handles a request (`AviationService.handleLaunch`) in this order and stops at the first failure:
 
 | # | Check | Refusal text (after "Launch refused: ") |
 |---|---|---|
 | 1 | Operator permission | `operator permission is required to launch (the same as /missile launch)` |
-| 2 | Rate limit: one request per player per 1000 ms, wall clock. A refused request counts too. | `too many launch requests; wait a second` |
+| 2 | Rate limit: one silo request (launch, load or unload share it) per player per 1000 ms, wall clock. A refused request counts too. | `too many silo requests; wait a second` |
 | 3 | Target inside the world border | `the target is outside the world border` |
 | 4 | Silo position in world bounds and within `NEAR_RADIUS + 8` of the player (coarse check) | `too far away (N blocks; you must be within 24)` |
 | 5 | Silo chunk loaded (`level.isLoaded`) | `the silo's chunk is not loaded` |
@@ -1273,6 +1277,23 @@ back to the map as a `LaunchResult`. It is also logged as
 green (`Launch: tier N missile from … to … (N blocks)`) and is logged as `[aviation] <player> launched silo …`.
 
 Check 3 is the one addition beyond what `/missile launch` checks.
+
+**Load and unload** (`AviationService.handleService`, payload `aviation_silo`) run the same checks 1, 2 and 4 to 7.
+There is no target, so there is no border check. Then:
+
+1. **Load only:** the structure must be intact (`SiloStructure.isIntact`). The refusal is
+   `the silo structure is damaged`. The command does not check this. A load into a silo that is already loaded
+   says `already loaded` first.
+2. **Both:** `LaunchSiloBlockEntity#load` or `#unload`. This loads a missile of the silo's own tier, with no item
+   needed. An unloaded missile is gone, as with the command.
+
+Refusals read `Load refused: silo at … cannot be loaded: <reason>` (for example `already loaded`,
+`busy (opening)`, `the silo structure is damaged`), and `Unload refused: … not loaded`.
+
+Both work on strike and air-defence silos alike; mode is not checked. A loaded air-defence silo then fires on its
+own, as always (§1c). The map path does not depend on missile items (branch `claude/missile-item-26.3`).
+Successes read `Loaded a tier N missile into the silo at …` / `Unloaded the tier N missile from the silo at …`
+(green action bar) and are logged as `[aviation] <player> loaded silo … (strike|air defence) from the map`.
 
 **Why the player must be near (24 blocks).** Twenty-four blocks means standing at the silo with it in view. It
 is also always inside the minimum simulation distance (2 chunks = 32 blocks). So the silo's chunk is
@@ -1296,16 +1317,23 @@ After this, the missile's own terminal guidance takes over, and it dives on what
 
 ### 8c. Payloads
 
-Protocol `1`. All four are registered in `PayloadTypeRegistry` by the common initializer, so a dedicated server
-has them. Both sides check `canSend` before sending. A vanilla client, or a client without Simple Planes, is
-never sent anything.
+Protocol `2`. Version 1 had no load or unload, no action on the reply, and no service or air-defence fields.
+All five payloads are registered in `PayloadTypeRegistry` by the common initializer, so a dedicated server has
+them. Both sides check `canSend` before sending. A vanilla client, or a client without Simple Planes, is never
+sent anything.
+
+The server also remembers the protocol each player's last snapshot request carried. It sends snapshots and
+replies only to a client that asked with the server's own version. A client of another version gets no
+clientbound bytes it would fail to decode, and the server logs this once:
+`[aviation] <player> asked with map protocol N, this server speaks 2; not answering`.
 
 | Id | Direction | Content |
 |---|---|---|
 | `simpleplanes:aviation_request` | C → S | `protocol` (var int). Asks for a snapshot. At most one per player every 500 ms, wall clock; extra requests are dropped silently. |
 | `simpleplanes:aviation_snapshot` | S → C | `AviationSnapshot`: dimension, game time, near radius, `launchPermitted`, snapshot radius, airfields, helipads, routes (shuttles), flights, silos |
 | `simpleplanes:aviation_launch` | C → S | silo `BlockPos`, target `x` (var int), `y` (int, may be `SURFACE`), `z` (var int) |
-| `simpleplanes:aviation_launch_result` | S → C | `LaunchResult`: silo, accepted, message (`Component`), target x/y/z. It is followed by a fresh snapshot, so the map shows the hatch opening without waiting for its next poll. |
+| `simpleplanes:aviation_silo` | C → S | silo `BlockPos`, action (var int: `SiloAction` ordinal, `LOAD` = 1 or `UNLOAD` = 2; `LAUNCH` is refused) |
+| `simpleplanes:aviation_launch_result` | S → C | `LaunchResult`: silo, accepted, message (`Component`), target x/y/z, action (`SiloAction` ordinal). It answers every silo request and is followed by a fresh snapshot, so the map shows the hatch opening or the new load without waiting for its next poll. |
 
 **Snapshot limits.** The lists cover a 12000-block horizontal radius around the player: the tier 4 range plus a
 margin. Each list is sorted by distance and capped at 128 airfields, 128 helipads, 128 routes, 64 flights and
@@ -1317,20 +1345,41 @@ margin. Each list is sorted by distance and capped at 128 airfields, 128 helipad
 - whether its chunk is loaded;
 - the mouth x/z, and the tier's minimum and maximum range;
 - the player's distance to it;
-- `usable`, and a `status` text giving the first reason it cannot launch.
+- `usable`, and a `status` text giving the first reason it cannot launch;
+- `serviceable`, and a `serviceStatus` text giving the reason it cannot be loaded or unloaded (too far, chunk not
+  loaded), or `ready`;
+- `detectionRadius` and `engagementRange`, the tier's air-defence values, taken from `InterceptorSpec`:
+
+  | Tier | `detectionRadius` (`range × 0.25`) | `engagementRange` (`InterceptorSpec.range`) |
+  |---|---|---|
+  | 1 | 100 | 400 |
+  | 2 | 150 | 600 |
+  | 3 | 225 | 900 |
+  | 4 | 350 | 1400 |
+
+  Detection is a 3D radius around the silo mouth; a map draws it as a horizontal circle. The engagement range is
+  the interceptor's motor path, so it is an upper bound on how far from the silo an intercept can happen, not a
+  sharp edge. Both are sent for every silo, in either mode, so a map never hard-codes them.
 
 `usable` answers "would the server accept a launch from here right now", leaving out permission and the target.
-It gives the same answer as checks 4 to 8.
+It gives the same answer as checks 4 to 8. `serviceable` answers the same for a load or unload, leaving out
+permission and the silo's own state (loaded, busy, damaged). It is true for air-defence silos too.
 
 ### 8d. Client API
 
-`AviationMap` has `API_VERSION = 1`. All methods are called on the client thread.
+`AviationMap` has `API_VERSION = 2`. Version 2 added load and unload, `SiloAction`, the action on `LaunchResult`,
+and the service and air-defence fields on `AviationSnapshot.Silo`. All methods are called on the client thread.
+
+A map built against version 2 should read `API_VERSION` reflectively, because a `static final int` is inlined at
+compile time, and refuse to start against an older Simple Planes. The world map does this.
 
 | Method | |
 |---|---|
 | `isAvailable()` | The server speaks the protocol (`ClientPlayNetworking.canSend`). |
+| `canService()` | The server also takes load and unload requests. |
 | `requestSnapshot()` / `requestLaunch(silo, x, y, z)` | Send a request. Both return false when nothing could be sent. |
-| `latest()` / `lastResult()` | The last snapshot and launch answer on this connection, or null. Both are cleared on disconnect. |
+| `requestLoad(silo)` / `requestUnload(silo)` | Send a load or unload request (§8a). Both return false when nothing could be sent. |
+| `latest()` / `lastResult()` | The last snapshot, and the last answer to any silo request, on this connection, or null. Both are cleared on disconnect. `LaunchResult.action()` says which request was answered. |
 | `addListener` / `removeListener` | `Listener.onSnapshot`, `Listener.onLaunchResult` |
 | `SURFACE` | "Let the server find the surface" (§8b). |
 
@@ -1351,7 +1400,8 @@ The index uses Fabric events only. There are no hooks in the silo classes.
   gone, for example after `/setblock` or an explosion.
 - `CHUNK_LOAD`: indexed silos in that chunk are re-checked. This heals entries whose region was deleted or
   regenerated.
-- A launch request for a silo that is gone re-checks that entry too. Server stop runs a final sweep.
+- A launch, load or unload request for a silo that is gone re-checks that entry too. A successful load or unload
+  updates the entry at once. Server stop runs a final sweep.
 
 Events are queued and handled in the level tick, never mid-chunk-promotion. A dropped entry is logged as
 `[aviation] silo index: <pos> is gone, entry dropped (<why>)`.
@@ -1366,6 +1416,7 @@ Events are queued and handled in the level tick, never mid-chunk-promotion. A dr
 | `/aviation index sweep` | Runs a sweep now and reports how many entries were dropped. |
 | `/aviation snapshot [<at> [op\|nonop]]` | Prints what a snapshot would hold, for the executor or for a test player at `<at>`. |
 | `/aviation test launch <at> <silo> <tx> <tz> [op\|nonop [y]]` | Runs the real launch handler for a test player standing at `<at>`, and prints the answer. |
+| `/aviation test load\|unload <at> <silo> [op\|nonop]` | The same for the load and unload handler. |
 | `/aviation test resetlimits` | Clears the rate limits. |
 
 The test player is a `FakePlayer`. It is an operator or not as asked, and it captures the action-bar message.
@@ -1374,8 +1425,13 @@ The map's network reply is skipped for it.
 ### 8g. Tests
 
 Run on the dedicated test server with this jar, through `/aviation test launch`, then on a real client under Xvfb
-with the world map. Silos used: loaded T1, T3 and T4 silos by the spawn, an empty T1 at (30, −20, 0), a T1 in
-air-defence mode at (30, −20, 20), and a T1 at (2000, −20, 0) in a chunk that is not loaded.
+with the world map. Silos used, all by the spawn unless noted:
+
+- T1 at (0, −20, 0) and T4 at (10, −20, 20), loaded;
+- T2 at (30, −20, 0) and T3 at (10, −20, 0), empty;
+- T3 at (30, −20, 20), in air-defence mode;
+- T2 at (−20, −20, 10), strike mode for the launch tests and switched to air defence for the map screenshots;
+- T1 at (2000, −20, 0), in a chunk that is not loaded.
 
 | Case | Result |
 |---|---|
@@ -1387,7 +1443,7 @@ air-defence mode at (30, −20, 20), and a T1 at (2000, −20, 0) in a chunk tha
 | T1, target 10 blocks away | refused: target is … blocks away, inside the tier 1 minimum range of 24 |
 | Silo in an unloaded chunk | refused: the silo's chunk is not loaded |
 | T3 at −600, −300 (target chunk not loaded, `SURFACE`) | accepted, y = −19 from the generator. It arrived in 15.0 s, 727 blocks flown, miss 0.00. |
-| A second request straight after | refused: too many launch requests |
+| A second request straight after | refused: too many launch requests (the wording before load and unload shared the limit) |
 | The same silo after 1.1 s | refused: busy (launching) |
 | T1 at 300, 0 and T4 at 3000, 21 (client y = −19) | both arrived, miss 0.00. T4 took 41.5 s. |
 | Launch from the map UI on a real client (T4, 249, 150) | accepted, arrived, miss 0.00 |
@@ -1396,6 +1452,27 @@ air-defence mode at (30, −20, 20), and a T1 at (2000, −20, 0) in a chunk tha
 | Silo replaced with `/setblock … air` or `strict` | entry dropped by the next sweep |
 | Region file of a silo deleted, chunk loaded again | entry dropped (`chunk loaded without it`) |
 | Client without Simple Planes, dedicated server without the map | both run. Nothing is sent to a client that cannot receive it. |
+
+Load and unload (protocol 2), through `/aviation test load|unload`, then from the map on a real client:
+
+| Case | Result |
+|---|---|
+| Operator loads an empty strike T3 (10, −20, 0) | accepted: `Loaded a tier 3 missile into the silo at 10, -20, 0` |
+| Operator unloads it again | accepted |
+| Operator unloads, then loads, the air-defence T3 (30, −20, 20) | both accepted |
+| Non-operator loads the strike T3 / loads or unloads the air-defence T3 | refused: operator permission is required to load or unload |
+| Operator 200 blocks away | refused: too far away (200 blocks; you must be within 24) |
+| Silo at (2000, −20, 0), chunk not loaded | refused: the silo's chunk is not loaded |
+| Load into the loaded T4 | refused: `silo at 10, -20, 20 cannot be loaded: already loaded` |
+| Unload from an empty silo | refused: `… cannot be unloaded: not loaded` |
+| Unload, then load, 150 ms apart | the second is refused: too many silo requests; wait a second. The same applies to a launch straight after. |
+| Unload during a launch sequence (hatch opening) | refused: `busy (opening)` |
+| Map UI: select the empty T2 (30, −20, 0), press Load | accepted; the silo turned green and its status read "ready" |
+| Map UI: select the air-defence T3, press Unload, then Load | both accepted |
+| Map UI as a non-operator | Load and Unload disabled, with the operator-permission tooltip |
+
+The damaged-structure refusal was not reached in a test. Removing any casing block dismantles the whole silo
+(`SiloStructure.onPartRemoved`), so a damaged silo that is still a silo is hard to produce.
 
 ## Not done, planned next
 

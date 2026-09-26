@@ -3135,7 +3135,7 @@ chunk for the whole turnaround, so the normal departure walks no field at all.
 ## 9a. The airspace snapshot for maps
 
 Airfields, helipads, shuttles and autopilot flights are exposed to client-side map mods. The same payload also
-carries missile silos. It is read-only. Launching from a map is covered in `MISSILES.md` §8, which also has the
+carries missile silos. It is read-only. Launching, loading and unloading silos from a map are covered in `MISSILES.md` §8, which also has the
 payload table and the client API (`xyz.przemyk.simpleplanes.api.map.AviationMap`).
 
 A client asks with `simpleplanes:aviation_request`, at most once every 500 ms. The server answers with

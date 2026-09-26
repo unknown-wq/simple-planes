@@ -65,10 +65,20 @@ public record AviationSnapshot(String dimension, long gameTime, int nearRadius, 
      *                    index (last known) when false
      * @param mouthX      horizontal centre of the silo mouth; range is measured from here
      * @param distance    3D distance from the player to the silo mouth when the snapshot was built
-     * @param usable      whether this player could launch from it right now (target aside)
+     * @param minRange    strike minimum horizontal range of the tier
+     * @param maxRange    strike maximum horizontal range of the tier
+     * @param usable      whether this player could launch from it right now (target and permission aside)
      * @param status      why not, or "ready"
+     * @param serviceable whether this player could load or unload it right now (permission and the silo's own
+     *                    state aside): near enough and the chunk loaded. True for air-defence silos too
+     * @param serviceStatus why not, or "ready"
+     * @param detectionRadius air-defence detection radius of the tier (3D, from the mouth), from
+     *                    {@code InterceptorSpec#detectionRadius}; meaningful in either mode
+     * @param engagementRange air-defence interceptor motor path of the tier ({@code InterceptorSpec#range}): how far
+     *                    an interceptor can fly, so an upper bound on how far from the silo it can engage
      */
     public record Silo(BlockPos pos, int tier, boolean strike, boolean loaded, String phase, boolean chunkLoaded,
                        double mouthX, double mouthZ, int minRange, int maxRange, double distance,
-                       boolean usable, Component status) {}
+                       boolean usable, Component status, boolean serviceable, Component serviceStatus,
+                       double detectionRadius, double engagementRange) {}
 }
