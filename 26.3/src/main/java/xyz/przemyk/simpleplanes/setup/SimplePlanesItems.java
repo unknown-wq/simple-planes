@@ -53,13 +53,14 @@ public class SimplePlanesItems {
     }
 
     public static List<PlaneItem> getPlaneItems() {
-        ArrayList<PlaneItem> planeItems = new ArrayList<>(8);
+        ArrayList<PlaneItem> planeItems = new ArrayList<>(9);
         planeItems.add(PLANE_ITEM.get());
         planeItems.add(LARGE_PLANE_ITEM.get());
         planeItems.add(CARGO_PLANE_ITEM.get());
         planeItems.add(HELICOPTER_ITEM.get());
         planeItems.add(FIGHTER_ITEM.get());
         planeItems.add(AIRLINER_ITEM.get());
+        planeItems.add(REGIONAL_AIRLINER_ITEM.get());
         planeItems.add(AIRSHIP_ITEM.get());
         planeItems.add(MINI_HELICOPTER_ITEM.get());
         return planeItems;
@@ -103,6 +104,8 @@ public class SimplePlanesItems {
         properties -> new PlaneItem(properties, SimplePlanesEntities.FIGHTER), new Item.Properties());
     public static final Supplier<PlaneItem> AIRLINER_ITEM = register("airliner",
         properties -> new PlaneItem(properties, SimplePlanesEntities.AIRLINER), new Item.Properties());
+    public static final Supplier<PlaneItem> REGIONAL_AIRLINER_ITEM = register("regional_airliner",
+        properties -> new PlaneItem(properties, SimplePlanesEntities.REGIONAL_AIRLINER), new Item.Properties());
     public static final Supplier<PlaneItem> AIRSHIP_ITEM = register("airship",
         properties -> new PlaneItem(properties, SimplePlanesEntities.AIRSHIP), new Item.Properties());
     public static final Supplier<PlaneItem> MINI_HELICOPTER_ITEM = register("mini_helicopter",
@@ -172,7 +175,7 @@ public class SimplePlanesItems {
                 output.accept(cargoPlaneStack);
                 output.accept(heliStack);
 
-                for (Supplier<? extends Item> item : List.of(FIGHTER_ITEM, AIRLINER_ITEM, AIRSHIP_ITEM, MINI_HELICOPTER_ITEM, QUADCOPTER_ITEM)) {
+                for (Supplier<? extends Item> item : List.of(FIGHTER_ITEM, AIRLINER_ITEM, REGIONAL_AIRLINER_ITEM, AIRSHIP_ITEM, MINI_HELICOPTER_ITEM, QUADCOPTER_ITEM)) {
                     ItemStack stack = new ItemStack(item.get());
                     stack.set(SimplePlanesComponents.ENTITY_TAG, entityTag.copy());
                     output.accept(stack);

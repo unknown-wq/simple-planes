@@ -192,6 +192,7 @@ public final class UpgradesModels {
     private static boolean hasNoUpgradeVisuals(EntityType<?> entityType) {
         return entityType == SimplePlanesEntities.FIGHTER.get()
             || entityType == SimplePlanesEntities.AIRLINER.get()
+            || entityType == SimplePlanesEntities.REGIONAL_AIRLINER.get()
             || entityType == SimplePlanesEntities.AIRSHIP.get()
             || entityType == SimplePlanesEntities.MINI_HELICOPTER.get()
             || entityType == SimplePlanesEntities.STRIKE_DRONE.get()

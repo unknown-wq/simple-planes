@@ -21,10 +21,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * A hitbox along the airliner's fuselage, so that the nose, the cockpit and the tail can be clicked although
- * the airliner's own bounding box only covers the middle 3 blocks. It is invisible, is never saved, does not
+ * the airliner's own bounding box only covers the middle of it. It is invisible, is never saved, does not
  * collide and cannot be picked by the airliner's own riders; clicks and hits go to the airliner, with the hit
- * location translated into the airliner's frame. The airliner spawns and removes its parts
- * ({@link AirlinerEntity#PART_STATIONS}); both sides position them from the airliner every tick.
+ * location translated into the airliner's frame. The airliner spawns and removes its parts (stations in
+ * {@link AirlinerLayout}); both sides position them from the airliner every tick. Each size registers its own
+ * type of this class, sized to its fuselage.
  */
 public class AirlinerPartEntity extends Entity {
 
