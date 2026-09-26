@@ -9,13 +9,13 @@ import net.minecraft.resources.Identifier;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.client.render.AirlinerRenderer;
 import xyz.przemyk.simpleplanes.client.render.AirshipRenderer;
+import xyz.przemyk.simpleplanes.client.render.FighterRenderer;
 import xyz.przemyk.simpleplanes.client.render.MiniHeliRenderer;
 import xyz.przemyk.simpleplanes.client.render.ParachuteRenderer;
 import xyz.przemyk.simpleplanes.client.render.PlaneRenderer;
 import xyz.przemyk.simpleplanes.client.render.QuadcopterRenderer;
 import xyz.przemyk.simpleplanes.client.render.models.*;
 import xyz.przemyk.simpleplanes.entities.CargoPlaneEntity;
-import xyz.przemyk.simpleplanes.entities.FighterEntity;
 import xyz.przemyk.simpleplanes.entities.HelicopterEntity;
 import xyz.przemyk.simpleplanes.entities.LargePlaneEntity;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
@@ -52,6 +52,7 @@ public final class PlanesModelLayers {
     public static final ModelLayerLocation FIGHTER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "fighter"), "main");
     public static final ModelLayerLocation FIGHTER_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "fighter"), "metal");
     public static final ModelLayerLocation FIGHTER_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "fighter"), "propeller");
+    public static final ModelLayerLocation FIGHTER_GLASS_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "fighter"), "glass");
     public static final ModelLayerLocation AIRLINER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "main");
     public static final ModelLayerLocation AIRLINER_SKIN_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "skin");
     public static final ModelLayerLocation AIRLINER_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "metal");
@@ -118,6 +119,7 @@ public final class PlanesModelLayers {
         ModelLayerRegistry.registerModelLayer(FIGHTER_LAYER, FighterModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(FIGHTER_METAL_LAYER, FighterMetalModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(FIGHTER_PROPELLER_LAYER, FighterExhaustModel::createBodyLayer);
+        ModelLayerRegistry.registerModelLayer(FIGHTER_GLASS_LAYER, FighterGlassModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(AIRLINER_LAYER, AirlinerModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(AIRLINER_SKIN_LAYER, AirlinerSkinModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(AIRLINER_METAL_LAYER, AirlinerMetalModel::createBodyLayer);
@@ -202,10 +204,11 @@ public final class PlanesModelLayers {
                 Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "textures/plane_upgrades/helicopter_metal.png"),
                 Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "textures/plane_upgrades/iron_helicopter_propeller.png")));
 
-        EntityRendererRegistry.register(SimplePlanesEntities.FIGHTER.get(), context -> new PlaneRenderer<FighterEntity>(context,
+        EntityRendererRegistry.register(SimplePlanesEntities.FIGHTER.get(), context -> new FighterRenderer(context,
                 new FighterModel(context.bakeLayer(FIGHTER_LAYER)),
                 new FighterMetalModel(context.bakeLayer(FIGHTER_METAL_LAYER)),
                 new FighterExhaustModel(context.bakeLayer(FIGHTER_PROPELLER_LAYER)),
+                new FighterGlassModel(context.bakeLayer(FIGHTER_GLASS_LAYER)),
                 1.0F,
                 SimplePlanesMod.texture("fighter_metal.png"),
                 SimplePlanesMod.texture("fighter_metal.png")));

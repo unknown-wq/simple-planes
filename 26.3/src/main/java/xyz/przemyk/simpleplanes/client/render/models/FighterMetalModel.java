@@ -8,17 +8,18 @@ import net.minecraft.client.renderer.rendertype.RenderTypes;
 import xyz.przemyk.simpleplanes.client.render.PlaneRenderState;
 
 /**
- * Fighter jet, metal layer: nose cone and pitot probe, bubble canopy, instrument panel, side air intakes,
- * landing gear and the wingtip missiles. Uses {@code textures/plane_upgrades/fighter_metal.png} (128x128).
+ * Fighter jet, metal layer: nose cone and pitot probe, canopy frame (sill rails and windscreen bow), cockpit
+ * (instrument panel, coaming, seat and headrest), side air intakes, landing gear and the wingtip missiles. Uses
+ * {@code textures/plane_upgrades/fighter_metal.png} (128x128).
  *
- * <p>The canopy is opaque tinted glass. The pilot's eye sits inside {@code canopy_main}, and this layer is
- * rendered with {@link RenderTypes#entityCutoutCull}, which culls back faces, so the canopy does not block the
- * first-person view. The default {@code entityCutout} of {@code EntityModel} does NOT cull in 26.2
- * ({@code pipeline/entity_cutout} is built with {@code withCull(false)}) and would show the canopy from inside.
- * The parts of the lower tiers' top faces that lie under the next tier are cut out of the texture so this
- * still holds if the seat ends up slightly higher. See FIGHTER-MODEL.md.
+ * <p>The canopy glass is its own translucent layer, {@link FighterGlassModel}. This layer stays on
+ * {@link RenderTypes#entityCutoutCull}; the default {@code entityCutout} does not cull. The frame cubes are grown by
+ * {@link #FRAME_GROW} so none of their faces lies in the plane of a glass face. See FIGHTER-MODEL.md.
  */
 public class FighterMetalModel extends EntityModel<PlaneRenderState> {
+    /** Frame cubes stand this much (px) proud of the glass. */
+    public static final float FRAME_GROW = 0.05F;
+
     private final ModelPart Metal;
 
     public FighterMetalModel(ModelPart root) {
@@ -37,14 +38,25 @@ public class FighterMetalModel extends EntityModel<PlaneRenderState> {
                 .texOffs(48, 97).addBox(-2.0F, -18.0F, -60.0F, 4.0F, 4.0F, 6.0F, new CubeDeformation(0.0F))
                 .texOffs(112, 24).addBox(-0.5F, -16.5F, -66.0F, 1.0F, 1.0F, 6.0F, new CubeDeformation(0.0F)), PartPose.ZERO);
 
-        PartDefinition Canopy = Metal.addOrReplaceChild("Canopy", CubeListBuilder.create()
-                .texOffs(0, 97).addBox(-5.0F, -25.0F, -33.0F, 10.0F, 3.0F, 5.0F, new CubeDeformation(0.0F))
-                .texOffs(0, 0).addBox(-7.0F, -27.0F, -28.0F, 14.0F, 5.0F, 28.0F, new CubeDeformation(0.0F))
-                .texOffs(0, 69).addBox(-6.0F, -30.0F, -26.0F, 12.0F, 3.0F, 25.0F, new CubeDeformation(0.0F))
-                .texOffs(74, 57).addBox(-4.0F, -33.0F, -21.0F, 8.0F, 3.0F, 18.0F, new CubeDeformation(0.0F)), PartPose.ZERO);
+        CubeDeformation frame = new CubeDeformation(FRAME_GROW);
+        // Sill rails along canopy_main, and the windscreen bow at z -23..-22 following the stepped profile.
+        PartDefinition CanopyFrame = Metal.addOrReplaceChild("CanopyFrame", CubeListBuilder.create()
+                .texOffs(0, 0).addBox(6.0F, -23.0F, -28.0F, 1.0F, 1.0F, 28.0F, frame)
+                .texOffs(0, 0).mirror().addBox(-7.0F, -23.0F, -28.0F, 1.0F, 1.0F, 28.0F, frame).mirror(false)
+                .texOffs(42, 69).addBox(6.0F, -27.0F, -23.0F, 1.0F, 4.0F, 1.0F, frame)
+                .texOffs(42, 69).mirror().addBox(-7.0F, -27.0F, -23.0F, 1.0F, 4.0F, 1.0F, frame).mirror(false)
+                .texOffs(46, 69).addBox(5.0F, -30.0F, -23.0F, 1.0F, 3.0F, 1.0F, frame)
+                .texOffs(46, 69).mirror().addBox(-6.0F, -30.0F, -23.0F, 1.0F, 3.0F, 1.0F, frame).mirror(false)
+                .texOffs(50, 69).addBox(-5.0F, -30.0F, -23.0F, 10.0F, 1.0F, 1.0F, frame), PartPose.ZERO);
 
+        // Instrument panel with a coaming over it, seat pan, seat back and headrest. The rider sits with the feet
+        // point at (0, -1, -6): hips at y -12.25, back at z -4.1, back of the head at z -2.25.
         PartDefinition Cockpit = Metal.addOrReplaceChild("Cockpit", CubeListBuilder.create()
-                .texOffs(94, 99).addBox(-6.0F, -23.0F, -25.0F, 12.0F, 3.0F, 3.0F, new CubeDeformation(0.0F)), PartPose.ZERO);
+                .texOffs(94, 99).addBox(-6.0F, -23.0F, -25.0F, 12.0F, 3.0F, 3.0F, new CubeDeformation(0.0F))
+                .texOffs(0, 69).addBox(-5.0F, -24.0F, -25.0F, 10.0F, 1.0F, 4.0F, CubeDeformation.NONE)
+                .texOffs(58, 14).addBox(-4.0F, -12.0F, -9.0F, 8.0F, 1.0F, 5.0F, CubeDeformation.NONE)
+                .texOffs(58, 0).addBox(-4.0F, -24.0F, -4.0F, 8.0F, 12.0F, 2.0F, CubeDeformation.NONE)
+                .texOffs(28, 69).addBox(-3.0F, -29.0F, -2.25F, 6.0F, 5.0F, 1.0F, CubeDeformation.NONE), PartPose.ZERO);
 
         PartDefinition Intakes = Metal.addOrReplaceChild("Intakes", CubeListBuilder.create()
                 .texOffs(0, 33).addBox(8.0F, -20.0F, -20.0F, 4.0F, 8.0F, 28.0F, new CubeDeformation(0.0F))
