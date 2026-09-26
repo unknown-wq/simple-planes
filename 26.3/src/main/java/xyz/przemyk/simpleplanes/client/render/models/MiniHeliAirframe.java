@@ -6,8 +6,8 @@ import net.minecraft.client.model.geom.builders.*;
 import java.util.Map;
 
 /**
- * The mini helicopter's material airframe: cabin tub, nose, rear pod, tail boom, fin, ventral fin and
- * stabiliser. It is the single source of that geometry for both material layers, {@link MiniHeliModel}
+ * The mini helicopter's material airframe: cabin tub, nose and chin, door pillars and roof, rear pod, tail
+ * boom, fin, ventral fin and stabiliser. It is the single source of that geometry for both material layers, {@link MiniHeliModel}
  * (tiled block texture) and {@link MiniHeliMedicalModel} (painted air-ambulance livery), which differ only in
  * where each cube's UV net starts. Every cube is named; a {@link UvLayout} maps the name to its
  * {@code texOffs}.
@@ -33,6 +33,9 @@ final class MiniHeliAirframe {
         };
     }
 
+    /** How far the door pillars stand proud of the glass, px. */
+    static final float PILLAR_GROW = 0.05F;
+
     private MiniHeliAirframe() {}
 
     static MeshDefinition create(UvLayout uv) {
@@ -41,11 +44,20 @@ final class MiniHeliAirframe {
 
         PartDefinition MiniHeli = partdefinition.addOrReplaceChild("MiniHeli", CubeListBuilder.create(), PartPose.offset(0.0F, 24.0F, 0.0F));
 
-        // Cabin tub under the bubble (the bubble itself is glass, in MiniHeliMetalModel) and the nose under the
-        // bubble's front bulge.
+        // Cabin: the tub carries the body up to the door sill (y = -17); a stepped nose and chin sit in front of it,
+        // with the windscreen standing on the nose 2 px below the sill. Above the sill is a framed glasshouse (the
+        // glass is in MiniHeliMetalModel): four door pillars and a roof over the pilot's head. The front of the
+        // glasshouse is left roof-free, as eyebrow windows. The pillars are grown by PILLAR_GROW so their faces
+        // never lie in the plane of the glass.
         CubeListBuilder cabin = CubeListBuilder.create();
-        box(cabin, uv, "hull", -8, -12, -16, 16, 7, 18);
-        box(cabin, uv, "nose", -7, -12, -19, 14, 6, 3);
+        box(cabin, uv, "hull", -8, -17, -16, 16, 12, 18);
+        box(cabin, uv, "nose", -7, -15, -19, 14, 9, 3);
+        box(cabin, uv, "chin", -5, -13, -22, 10, 6, 3);
+        box(cabin, uv, "roof", -8, -31, -10, 16, 3, 12);
+        box(cabin, uv, "a_pillar", 7, -28, -16, 1, 11, 1, PILLAR_GROW);
+        box(cabin, uv, "a_pillar", -8, -28, -16, 1, 11, 1, PILLAR_GROW);
+        box(cabin, uv, "b_pillar", 7, -28, 1, 1, 11, 1, PILLAR_GROW);
+        box(cabin, uv, "b_pillar", -8, -28, 1, 1, 11, 1, PILLAR_GROW);
         MiniHeli.addOrReplaceChild("Cabin", cabin, PartPose.ZERO);
 
         // Engine bay behind the cabin; the engine sits on top of it and the mast rises from the engine.
@@ -68,7 +80,12 @@ final class MiniHeliAirframe {
 
     private static void box(CubeListBuilder builder, UvLayout uv, String name,
                             float x, float y, float z, float w, float h, float d) {
+        box(builder, uv, name, x, y, z, w, h, d, 0.0F);
+    }
+
+    private static void box(CubeListBuilder builder, UvLayout uv, String name,
+                            float x, float y, float z, float w, float h, float d, float grow) {
         int[] o = uv.texOffs(name);
-        builder.texOffs(o[0], o[1]).addBox(x, y, z, w, h, d, CubeDeformation.NONE);
+        builder.texOffs(o[0], o[1]).addBox(x, y, z, w, h, d, new CubeDeformation(grow));
     }
 }

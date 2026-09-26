@@ -36,15 +36,15 @@ public class MiniHeliRotorModel extends EntityModel<PlaneRenderState> {
 
         // Pivot on the mast axis at the blade root plane. The mast reaches down to the engine top (y = -20).
         Rotors.addOrReplaceChild("main_rotor", CubeListBuilder.create()
-                .texOffs(0, 0).addBox(-1.0F, 0.0F, -1.0F, 2.0F, 14.0F, 2.0F, CubeDeformation.NONE)
-                .texOffs(108, 0).addBox(-2.0F, -2.5F, -2.0F, 4.0F, 2.0F, 4.0F, CubeDeformation.NONE)
-                .texOffs(0, 43).addBox(-27.0F, -1.0F, -1.5F, 54.0F, 1.0F, 3.0F, CubeDeformation.NONE),
+                .texOffs(70, 0).addBox(-1.0F, 0.0F, -1.0F, 2.0F, 14.0F, 2.0F, CubeDeformation.NONE)
+                .texOffs(102, 0).addBox(-2.0F, -2.5F, -2.0F, 4.0F, 2.0F, 4.0F, CubeDeformation.NONE)
+                .texOffs(0, 25).addBox(-27.0F, -1.0F, -1.5F, 54.0F, 1.0F, 3.0F, CubeDeformation.NONE),
                 PartPose.offset(0.0F, -34.0F, 4.0F));
 
         // Pivot on the tail rotor shaft, against the left (+X) side of the fin.
         Rotors.addOrReplaceChild("tail_rotor", CubeListBuilder.create()
-                .texOffs(80, 0).addBox(-0.5F, -1.0F, -1.0F, 3.0F, 2.0F, 2.0F, CubeDeformation.NONE)
-                .texOffs(94, 0).addBox(0.5F, -1.0F, -6.0F, 1.0F, 2.0F, 12.0F, CubeDeformation.NONE),
+                .texOffs(114, 0).addBox(-0.5F, -1.0F, -1.0F, 3.0F, 2.0F, 2.0F, CubeDeformation.NONE)
+                .texOffs(26, 0).addBox(0.5F, -1.0F, -6.0F, 1.0F, 2.0F, 12.0F, CubeDeformation.NONE),
                 PartPose.offset(1.0F, -18.0F, 34.0F));
 
         return LayerDefinition.create(meshdefinition, 128, 64);
