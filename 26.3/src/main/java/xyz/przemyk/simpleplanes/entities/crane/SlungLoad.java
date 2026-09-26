@@ -16,7 +16,12 @@ public final class SlungLoad {
     /** Damping of the empty hook, which has no mass to carry a swing. */
     public static final double HOOK_DAMPING = 0.05;
     public static final double MIN_MASS = 0.05;
-    public static final double MAX_LOAD = 1.55;
+    /** Share of the thrust ceiling a steady hover may use; the rest is kept for control. */
+    public static final double HOVER_FRACTION = 0.9;
+    /** Ground assist: the thrust ceiling grows by up to this share as the load's bottom nears the ground. */
+    public static final double ASSIST_MAX = 0.8;
+    /** Load-bottom height above ground at which the assist has faded to nothing, blocks. */
+    public static final double ASSIST_HEIGHT = 2.0;
     /** Rope angle limit; beyond it a real rope would go slack, which is not modelled. */
     public static final double MAX_ANGLE = Math.toRadians(80);
 
@@ -122,7 +127,32 @@ public final class SlungLoad {
         thetaX = thetaZ = omegaX = omegaZ = 0;
     }
 
-    public static double massOf(double width, double height) {
-        return Math.max(MIN_MASS, width * width * height);
+    /** Mass in drone masses of a w x w x h box at the given density (1 = the reference density). */
+    public static double massOf(double width, double height, double density) {
+        return Math.max(MIN_MASS, width * width * height * density);
+    }
+
+    /** Thrust-ceiling multiplier for a load whose bottom is loadAgl blocks above the ground. */
+    public static double assist(double loadAgl) {
+        return 1.0 + ASSIST_MAX * Math.max(0.0, Math.min(1.0, 1.0 - loadAgl / ASSIST_HEIGHT));
+    }
+
+    /** Largest load (drone masses) hovered in free air within {@link #HOVER_FRACTION} of tMax. */
+    public static double capacity(double tMax) {
+        return HOVER_FRACTION * tMax / MultirotorPhysics.G - 1.0;
+    }
+
+    /** Largest load that can leave the ground at all (full assist). */
+    public static double liftLimit(double tMax) {
+        return HOVER_FRACTION * tMax * (1.0 + ASSIST_MAX) / MultirotorPhysics.G - 1.0;
+    }
+
+    /** Highest load-bottom height above ground at which the load still hovers; infinite within capacity, negative over the lift limit. */
+    public static double ceiling(double mass, double tMax) {
+        double need = (1.0 + mass) * MultirotorPhysics.G / (HOVER_FRACTION * tMax);
+        if (need <= 1.0) {
+            return Double.POSITIVE_INFINITY;
+        }
+        return ASSIST_HEIGHT * (1.0 - (need - 1.0) / ASSIST_MAX);
     }
 }

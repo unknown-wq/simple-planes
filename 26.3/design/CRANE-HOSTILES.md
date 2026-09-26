@@ -26,8 +26,10 @@ All of the code change is in `src/main/java/xyz/przemyk/simpleplanes/entities/Qu
     - `in tag simpleplanes:crane_never`
     - `hostile` (only when `ALLOW_HOSTILES` is false)
     - `it would not attach to the hook`
-  - `too heavy: <name> is m, limit 1.55` (unchanged)
-- **Limits kept.** The mass limit (`MAX_LOAD` 1.55), players (allowed unless in spectator mode),
+  - `too heavy: <name> is m, limit 1.55` (at the time; now `too heavy: <name> ≈ m, max 11.96 (p% of
+    capacity)`, see CRANE-MASS.md)
+- **Limits kept.** The mass limit (`MAX_LOAD` 1.55 then; replaced by the mass estimate and gradual lift
+  performance in CRANE-MASS.md), players (allowed unless in spectator mode),
   aircraft, riders and vehicles are all unchanged.
 - **Rope behaviour.** See the next section.
 - **Load bookkeeping.**
@@ -139,7 +141,8 @@ follow range, releases it and reads the range again.
   - `cannot lift Wither: boss`
   - `cannot lift Warden: boss`
   - `cannot lift Elder Guardian: boss`
-- Too heavy:
+- Too heavy (under the old 1.55 cutoff; superseded by CRANE-MASS.md, where the spider, horse and
+  iron golem are lifted and the ravager and hoglin are still refused):
   - `too heavy: Spider is 1.76, limit 1.55`
   - Ravager 8.37, Hoglin 2.73, Zoglin 2.73, Ghast 64.00, Creaking 2.19
   - Slime / Magma Cube `Size:2` 3.80 and `Size:3` 9.00
@@ -227,11 +230,8 @@ dark pieces.
 
 ## Open questions for the owner
 
-1. **Spider.** It is on your list, but its box is 1.4 × 1.4 × 0.9, which gives mass 1.76. That is
-   over `MAX_LOAD` 1.55 (85 % thrust at hover), so it is refused as too heavy. Options:
-   - raise `MAX_LOAD`: 1.76 needs about 92 % thrust at hover, with little overload margin;
-   - give flat mobs a lighter mass formula;
-   - leave it as it is.
+1. **Spider.** Answered by the owner's mass request: the hard 1.55 cutoff is gone, the spider (1.76,
+   28 % of capacity) is lifted with somewhat slower handling. See CRANE-MASS.md.
 2. **Lit creeper.** A creeper lit with flint and steel on the hook explodes and takes the crane
    down to 1 HP. A charged creeper would destroy it. Is that the wanted outcome, or should an
    ignited creeper be refused at pickup?
