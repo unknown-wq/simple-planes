@@ -16,6 +16,7 @@ import xyz.przemyk.simpleplanes.client.render.FpvDroneRenderer;
 import xyz.przemyk.simpleplanes.client.render.MiniHeliRenderer;
 import xyz.przemyk.simpleplanes.client.render.ParachuteRenderer;
 import xyz.przemyk.simpleplanes.client.render.PlaneRenderer;
+import xyz.przemyk.simpleplanes.client.render.PatrolDroneRenderer;
 import xyz.przemyk.simpleplanes.client.render.QuadcopterRenderer;
 import xyz.przemyk.simpleplanes.client.render.models.*;
 import xyz.przemyk.simpleplanes.entities.AirlinerEntity;
@@ -78,6 +79,7 @@ public final class PlanesModelLayers {
     public static final ModelLayerLocation QUADCOPTER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "quadcopter"), "main");
     public static final ModelLayerLocation QUADCOPTER_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "quadcopter"), "metal");
     public static final ModelLayerLocation QUADCOPTER_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "quadcopter"), "propeller");
+    public static final ModelLayerLocation PATROL_DRONE_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "patrol_drone"), "main");
     public static final ModelLayerLocation STRIKE_DRONE_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "strike_drone"), "main");
     public static final ModelLayerLocation STRIKE_DRONE_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "strike_drone"), "metal");
     public static final ModelLayerLocation STRIKE_DRONE_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "strike_drone"), "propeller");
@@ -151,6 +153,7 @@ public final class PlanesModelLayers {
         ModelLayerRegistry.registerModelLayer(STRIKE_DRONE_METAL_LAYER, StrikeDroneMetalModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(STRIKE_DRONE_PROPELLER_LAYER, StrikeDronePropellerModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(PARACHUTE_LAYER, ParachuteModel::createBodyLayer);
+        ModelLayerRegistry.registerModelLayer(PATROL_DRONE_LAYER, PatrolDroneModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(FURNACE_ENGINE, FurnaceEngineModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(LARGE_FURNACE_ENGINE, LargeFurnaceEngineModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(HELI_FURNACE_ENGINE, HeliFurnaceEngineModel::createBodyLayer);
@@ -261,6 +264,9 @@ public final class PlanesModelLayers {
                 0.5F,
                 SimplePlanesMod.texture("drone_metal.png")));
 
+        EntityRendererRegistry.register(SimplePlanesEntities.PATROL_DRONE.get(), context -> new PatrolDroneRenderer(context,
+                new PatrolDroneModel(context.bakeLayer(PATROL_DRONE_LAYER), false),
+                new PatrolDroneModel(context.bakeLayer(PATROL_DRONE_LAYER), true)));
         EntityRendererRegistry.register(SimplePlanesEntities.STRIKE_DRONE.get(), context -> new PlaneRenderer<StrikeDroneEntity>(context,
                 new StrikeDroneModel(context.bakeLayer(STRIKE_DRONE_LAYER)),
                 new StrikeDroneMetalModel(context.bakeLayer(STRIKE_DRONE_METAL_LAYER)),
