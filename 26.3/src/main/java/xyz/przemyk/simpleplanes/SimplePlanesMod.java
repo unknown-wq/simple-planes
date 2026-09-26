@@ -13,6 +13,7 @@ import xyz.przemyk.simpleplanes.autopilot.TowerWatch;
 import xyz.przemyk.simpleplanes.combat.GunshipCommand;
 import xyz.przemyk.simpleplanes.combat.GunshipRegistry;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
+import xyz.przemyk.simpleplanes.missile.Missiles;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesBlocks;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
@@ -76,6 +77,8 @@ public class SimplePlanesMod implements ModInitializer {
         // Nothing here loads a foreign class, so a server without a land-claim mod runs this line
         // and is thereafter indistinguishable from one built before the feature existed.
         AirspaceGuardCommand.register();
+
+        Missiles.init();
 
         registerUpgradeItems();
     }

@@ -170,5 +170,9 @@
     "simpleplanes.tower.waiting_only": "ждут вылета: %s, на полосу никто не выпущен",
     "simpleplanes.tower.waiting_header": "ждут вылета (очереди нет: полосу займёт тот, кто первым её опросит):",
     "simpleplanes.tower.wait_clock": "по таймеру ещё %s",
-    "simpleplanes.tower.wait_runway": "ждёт освобождения полосы"
+    "simpleplanes.tower.wait_runway": "ждёт освобождения полосы",
+
+    "entity.simpleplanes.missile": "Ракета",
+    "block.simpleplanes.launch_silo": "Пусковая шахта",
+    "block.simpleplanes.launch_silo_casing": "Корпус пусковой шахты"
 }

@@ -86,6 +86,9 @@
     "entity.simpleplanes.plane": "飞机",
     "entity.simpleplanes.large_plane": "大飞机",
     "entity.simpleplanes.helicopter": "直升机",
-    "entity.simpleplanes.parachute": "降落伞"
+    "entity.simpleplanes.parachute": "降落伞",
 
+    "entity.simpleplanes.missile": "导弹",
+    "block.simpleplanes.launch_silo": "导弹发射井",
+    "block.simpleplanes.launch_silo_casing": "导弹发射井外壳"
 }

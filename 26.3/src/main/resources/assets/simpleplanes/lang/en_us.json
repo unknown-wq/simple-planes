@@ -211,5 +211,9 @@
     "simpleplanes.tower.waiting_only": "%s waiting to depart, none cleared yet",
     "simpleplanes.tower.waiting_header": "waiting to depart (no sequence: the first to poll a free runway takes it):",
     "simpleplanes.tower.wait_clock": "%s on the clock",
-    "simpleplanes.tower.wait_runway": "waiting for the runway"
+    "simpleplanes.tower.wait_runway": "waiting for the runway",
+
+    "entity.simpleplanes.missile": "Missile",
+    "block.simpleplanes.launch_silo": "Launch Silo",
+    "block.simpleplanes.launch_silo_casing": "Launch Silo Casing"
 }
