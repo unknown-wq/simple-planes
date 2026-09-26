@@ -8,7 +8,7 @@ package xyz.przemyk.simpleplanes.entities.crane;
 public final class MultirotorPhysics {
 
     public static final double G = 0.04;
-    public static final double T_MAX = 3.0 * G;
+    public static final double T_MAX = 8.0 * G;
     public static final double TILT_MAX = 25.0;
     public static final double TILT_RATE = 4.0;
     public static final double TILT_TAU = 2.0;
@@ -28,8 +28,14 @@ public final class MultirotorPhysics {
     public double roll;
     public double thrust;
     public double mass = 1.0;
-    /** Thrust ceiling; {@link #T_MAX} except under a test override. */
+    /** Rated thrust ceiling; {@link #T_MAX} except under a test override. */
+    public double tMaxBase = T_MAX;
+    /** Thrust ceiling this tick: {@link #tMaxBase} times the ground assist of a low load (set by the owner). */
     public double tMax = T_MAX;
+    /** Drag coefficients; the crane's constants unless an airframe sets its own. */
+    public double dragHLin = DRAG_H_LIN;
+    public double dragHQuad = DRAG_H_QUAD;
+    public double dragV = DRAG_V;
 
     /** Attitude lag toward the commanded tilt, and the rate-limited yaw toward a heading. */
     public void attitude(double pitchCmd, double rollCmd, double yawCmd) {
@@ -69,9 +75,9 @@ public final class MultirotorPhysics {
     /** Drag as an acceleration, written into out. */
     public double[] drag(double[] out) {
         double vh = Math.sqrt(v[0] * v[0] + v[2] * v[2]);
-        double k = DRAG_H_LIN + DRAG_H_QUAD * vh;
+        double k = dragHLin + dragHQuad * vh;
         out[0] = -k * v[0];
-        out[1] = -DRAG_V * v[1];
+        out[1] = -dragV * v[1];
         out[2] = -k * v[2];
         return out;
     }

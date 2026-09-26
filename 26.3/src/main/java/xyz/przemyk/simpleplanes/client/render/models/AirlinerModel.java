@@ -11,7 +11,7 @@ import java.util.Map;
 import static java.util.Map.entry;
 
 /**
- * Mini airliner, wooden material layer: the {@link AirlinerAirframe} geometry textured with the block texture
+ * Airliner, wooden material layer: the {@link AirlinerAirframe} geometry of either size textured with the block texture
  * of the plane's material, tiled 1 texel per pixel like {@link PlaneModel}. {@link AirlinerSkinModel} is the
  * same airframe with a painted metal skin.
  *
@@ -32,6 +32,7 @@ public class AirlinerModel extends EntityModel<PlaneRenderState> {
             entry("pillar_3", new int[]{7, 2}), entry("pillar_4", new int[]{9, 2}), entry("pillar_5", new int[]{11, 2}),
             entry("pillar_6", new int[]{13, 2}), entry("pillar_7", new int[]{1, 10}), entry("pillar_8", new int[]{3, 10}),
             entry("pillar_9", new int[]{5, 10}), entry("pillar_10", new int[]{7, 10}), entry("pillar_11", new int[]{9, 10}),
+            entry("pillar_12", new int[]{11, 10}), entry("pillar_13", new int[]{13, 10}),
             entry("nose_1", new int[]{2, 2}), entry("nose_2", new int[]{6, 6}), entry("nose_3", new int[]{10, 10}),
             entry("nose_4", new int[]{14, 14}), entry("nose_5", new int[]{4, 12}), entry("nose_6", new int[]{12, 4}), entry("nose_7", new int[]{0, 14}),
             entry("tail_1", new int[]{4, 4}), entry("tail_2", new int[]{8, 2}), entry("tail_3", new int[]{12, 6}),
@@ -48,8 +49,8 @@ public class AirlinerModel extends EntityModel<PlaneRenderState> {
         super(root, RenderTypes::entityCutoutCull);
     }
 
-    public static LayerDefinition createBodyLayer() {
-        return LayerDefinition.create(AirlinerAirframe.create(AirlinerAirframe.table(WOOD_UV)), 16, 16);
+    public static LayerDefinition createBodyLayer(AirlinerShape shape) {
+        return LayerDefinition.create(AirlinerAirframe.create(shape, AirlinerAirframe.table(WOOD_UV)), 16, 16);
     }
 
     @Override

@@ -10,7 +10,6 @@ import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntityType;
@@ -23,8 +22,6 @@ import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 import xyz.przemyk.simpleplanes.upgrades.Upgrade;
 
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * Renderer for every plane / helicopter.
@@ -107,38 +104,10 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
     @Override
     public void submit(PlaneRenderState state, PoseStack poseStack, SubmitNodeCollector collector, CameraRenderState camera) {
         poseStack.pushPose();
-        poseStack.translate(0.0F, 0.375F, 0.0F);
-        poseStack.scale(-1.0F, -1.0F, 1.0F);
-        poseStack.rotate(Axis.YP.rotationDegrees(180.0F));
-        poseStack.rotate(new Quaternionf(state.rotation));
-
-        EntityType<?> entityType = state.entityType;
-        if (entityType == SimplePlanesEntities.PLANE.get()) {
-            poseStack.translate(0.0F, -0.5F, -0.5F);
-        } else if (entityType == SimplePlanesEntities.LARGE_PLANE.get()) {
-            poseStack.translate(0.0F, -0.3F, -1.0F);
-        } else if (entityType == SimplePlanesEntities.CARGO_PLANE.get()) {
-            poseStack.translate(0.0F, -0.8F, -1.0F);
-        } else if (entityType == SimplePlanesEntities.FIGHTER.get()) {
-            poseStack.translate(0.0F, -0.025F, 0.25F);
-        } else if (entityType == SimplePlanesEntities.AIRLINER.get()) {
-            poseStack.translate(0.0F, -0.025F, 0.375F);
-        } else if (entityType == SimplePlanesEntities.AIRSHIP.get()) {
-            poseStack.translate(0.0F, -0.025F, 0.0F);
-        } else if (entityType == SimplePlanesEntities.MINI_HELICOPTER.get()) {
-            poseStack.translate(0.0F, -0.025F, -0.25F);
-        } else {
-            poseStack.translate(0.0F, 0.0F, 0.9F);
-        }
-
-        if (state.timeSinceHit > 0.0F) {
-            float angle = Mth.clamp(state.timeSinceHit / 10.0F, -30.0F, 30.0F);
-            poseStack.rotate(Axis.ZP.rotationDegrees(Mth.sin(state.ageInTicks) * angle * wobbleScale(state)));
-        }
-
-        poseStack.translate(0.0F, -1.1F, 0.0F);
+        applyModelPose(state, poseStack);
 
         EntityModel<PlaneRenderState> body = bodyModel(state);
+
         collector.submitModel(body, state, poseStack,
                 body.renderType(bodyTexture(state)),
                 state.lightCoords, OverlayTexture.NO_OVERLAY, state.outlineColor);
@@ -169,6 +138,42 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
         super.submit(state, poseStack, collector, camera);
     }
 
+    /** Model space to entity space: the flip, the orientation, the per-type offset and the damage wobble. */
+    protected void applyModelPose(PlaneRenderState state, PoseStack poseStack) {
+        poseStack.translate(0.0F, 0.375F, 0.0F);
+        poseStack.scale(-1.0F, -1.0F, 1.0F);
+        poseStack.rotate(Axis.YP.rotationDegrees(180.0F));
+        poseStack.rotate(new Quaternionf(state.rotation));
+
+        EntityType<?> entityType = state.entityType;
+        if (entityType == SimplePlanesEntities.PLANE.get()) {
+            poseStack.translate(0.0F, -0.5F, -0.5F);
+        } else if (entityType == SimplePlanesEntities.LARGE_PLANE.get()) {
+            poseStack.translate(0.0F, -0.3F, -1.0F);
+        } else if (entityType == SimplePlanesEntities.CARGO_PLANE.get()) {
+            poseStack.translate(0.0F, -0.8F, -1.0F);
+        } else if (entityType == SimplePlanesEntities.FIGHTER.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.25F);
+        } else if (entityType == SimplePlanesEntities.AIRLINER.get() || entityType == SimplePlanesEntities.REGIONAL_AIRLINER.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.375F);
+        } else if (entityType == SimplePlanesEntities.AIRSHIP.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.0F);
+        } else if (entityType == SimplePlanesEntities.MINI_HELICOPTER.get()) {
+            poseStack.translate(0.0F, -0.025F, -0.25F);
+        } else if (entityType == SimplePlanesEntities.STRIKE_DRONE.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.09375F);
+        } else {
+            poseStack.translate(0.0F, 0.0F, 0.9F);
+        }
+
+        if (state.timeSinceHit > 0.0F) {
+            float angle = Mth.clamp(state.timeSinceHit / 10.0F, -30.0F, 30.0F);
+            poseStack.rotate(Axis.ZP.rotationDegrees(Mth.sin(state.ageInTicks) * angle * wobbleScale(state)));
+        }
+
+        poseStack.translate(0.0F, -1.1F, 0.0F);
+    }
+
     /** Multiplier on the damage wobble angle. */
     protected float wobbleScale(PlaneRenderState state) {
         return 1.0F;
@@ -189,33 +194,14 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
     protected void submitExtraLayers(PlaneRenderState state, PoseStack poseStack, SubmitNodeCollector collector) {
     }
 
-    /**
-     * Texture used for the wooden parts of the plane.
-     *
-     * <p>1.21.1 pulled the first quad's sprite out of the block's baked inventory model. That path is
-     * gone in 26.2 (baked models are resolved through {@code BlockModelResolver} and quads are no
-     * longer reachable without a level), so this now derives the texture from the block id, which is
-     * correct for every vanilla plank/wool style block the mod supports.
-     */
+    /** Texture used for the material (wooden) parts of an aircraft; see {@link MaterialTextures}. */
     public static Identifier getMaterialTexture(Block block) {
-        Identifier cached = cachedTextures.get(block);
-        if (cached != null) {
-            return cached;
-        }
-
-        Identifier key = BuiltInRegistries.BLOCK.getKey(block);
-        Identifier texture = key == null
-                ? FALLBACK_TEXTURE
-                : Identifier.fromNamespaceAndPath(key.getNamespace(), "textures/block/" + key.getPath() + ".png");
-
-        cachedTextures.put(block, texture);
-        return texture;
+        return MaterialTextures.get(block);
     }
 
     public static void clearTextureCache() {
-        cachedTextures.clear();
+        MaterialTextures.clear();
     }
 
-    public static final Map<Block, Identifier> cachedTextures = new HashMap<>();
-    public static final Identifier FALLBACK_TEXTURE = Identifier.fromNamespaceAndPath("minecraft", "textures/block/oak_planks.png");
+    public static final Identifier FALLBACK_TEXTURE = MaterialTextures.FALLBACK;
 }

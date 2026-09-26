@@ -8,7 +8,10 @@ import java.util.Locale;
  */
 public final class Sim {
 
-    static final double COW = 1.13;
+    /** Masses from QuadcopterEntity.massOf (w^2 * h * (1 + knockback resistance)). */
+    static final double CHICKEN = 0.112, ZOMBIE = 0.702, COW = 1.134, SPIDER = 1.764, HORSE = 3.120, GOLEM = 10.584;
+    /** Thrust ceiling used by new Sims; the golem runs with the ground assist of a load 0.5 b up. */
+    static double simTMax = MultirotorPhysics.T_MAX;
 
     final MultirotorPhysics drone = new MultirotorPhysics();
     final CraneController ctl = new CraneController();
@@ -19,6 +22,7 @@ public final class Sim {
         rope.mass = load;
         rope.length = rope.targetLength = length;
         drone.mass = 1.0 + load;
+        drone.tMax = simTMax;
         drone.thrust = drone.mass * MultirotorPhysics.G;
     }
 
@@ -32,7 +36,7 @@ public final class Sim {
     public static void main(String[] args) {
         boolean ok = true;
         System.out.println("== hover thrust");
-        for (double m : new double[]{0, COW, SlungLoad.MAX_LOAD}) {
+        for (double m : new double[]{0, COW, SlungLoad.capacity(MultirotorPhysics.T_MAX)}) {
             Sim s = new Sim(m, 3);
             for (int t = 0; t < 400; t++) {
                 s.tick(0, 0, 0);
@@ -102,9 +106,9 @@ public final class Sim {
             }
         }
 
-        System.out.println("== overload 2.2, target +30");
+        System.out.println("== overload: capacity + 1 in free air, target +30");
         {
-            Sim s = new Sim(2.2, 3);
+            Sim s = new Sim(SlungLoad.capacity(MultirotorPhysics.T_MAX) + 1.0, 3);
             int sat = 0;
             for (int t = 0; t < 300; t++) {
                 s.tick(0, 30, 0);
@@ -140,6 +144,31 @@ public final class Sim {
                 (last - first) / (double) crossings, 2 * Math.PI * Math.sqrt(6 / MultirotorPhysics.G));
         }
 
+        System.out.println("== mass classes: capacity use, climb, 20 b step (L=3)");
+        double cap = SlungLoad.capacity(MultirotorPhysics.T_MAX);
+        System.out.printf(Locale.ROOT, "  capacity %.3f, lift limit %.3f%n", cap, SlungLoad.liftLimit(MultirotorPhysics.T_MAX));
+        String[] names = {"empty", "chicken", "zombie", "cow", "spider", "horse", "at capacity", "golem @0.5 b"};
+        double[] masses = {0, CHICKEN, ZOMBIE, COW, SPIDER, HORSE, cap, GOLEM};
+        for (int i = 0; i < names.length; i++) {
+            double m = masses[i];
+            simTMax = i == names.length - 1 ? MultirotorPhysics.T_MAX * SlungLoad.assist(0.5) : MultirotorPhysics.T_MAX;
+            Sim c = new Sim(m, 3);
+            double vyPeak = 0;
+            for (int t = 0; t < 300; t++) {
+                c.tick(0, i == names.length - 1 ? 0 : 200, 0);
+                vyPeak = Math.max(vyPeak, c.drone.v[1]);
+            }
+            Step st = step(m, 3, 0);
+            // loads under SWING_FULL_MASS keep a bounded cosmetic swing (chicken 10 deg, as before)
+            boolean stable = st.settle() > 0 && st.overshoot() <= 1.0
+                && st.residual() <= (m < CraneController.SWING_FULL_MASS ? 15 : 5);
+            ok &= stable;
+            System.out.printf(Locale.ROOT, "  %-13s m %.3f  use %3.0f%%  ceiling %s  handling %.2f  climb %.3f b/t  | %s%s%n",
+                names[i], m, 100 * m / cap, fmtCeil(SlungLoad.ceiling(m, MultirotorPhysics.T_MAX)), c.ctl.handling, vyPeak, st,
+                stable ? "" : "  UNSTABLE");
+        }
+        simTMax = MultirotorPhysics.T_MAX;
+
         System.out.println("== spec split reaction model (for comparison)");
         SlungLoad.splitModel = true;
         System.out.println("  cow, L=6 step: " + step(COW, 6, 0));
@@ -149,6 +178,10 @@ public final class Sim {
         if (!ok) {
             System.exit(1);
         }
+    }
+
+    static String fmtCeil(double h) {
+        return Double.isInfinite(h) ? "none " : String.format(Locale.ROOT, "%.2f b", h);
     }
 
     record Step(int settle, double overshoot, double peakSwing, double residual, double maxTilt, double swing5, double swing10) {

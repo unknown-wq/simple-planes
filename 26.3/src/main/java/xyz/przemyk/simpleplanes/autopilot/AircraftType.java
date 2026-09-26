@@ -77,7 +77,13 @@ public enum AircraftType implements StringRepresentable {
     RANDOM("random"),
     /** Test tooling: flyable by name, never drawn by {@link #RANDOM}. */
     FIGHTER("fighter"),
-    AIRLINER("airliner");
+    AIRLINER("airliner"),
+    REGIONAL_AIRLINER("regional_airliner"),
+    /** The one-seat rotorcraft (two riders in the medical livery). Helicopter commands and dispatch only. */
+    MINI_HELICOPTER("mini_helicopter"),
+    /** One-way munitions: strike only, never drawn by {@link #RANDOM}. See {@link #isDrone()}. */
+    STRIKE_DRONE("strike_drone"),
+    FPV_DRONE("fpv_drone");
 
     /**
      * The three fixed-wing airframes, in the order {@link #RANDOM} draws from.
@@ -89,14 +95,19 @@ public enum AircraftType implements StringRepresentable {
     private static final AircraftType[] FLYABLE = {PLANE, LARGE, CARGO};
 
     /** Fixed-wing types that {@link #of} recognises but {@link #RANDOM} never draws. */
-    private static final AircraftType[] TESTABLE = {FIGHTER, AIRLINER};
+    private static final AircraftType[] TESTABLE = {FIGHTER, AIRLINER, REGIONAL_AIRLINER};
 
     /**
      * Airframes an attack run may be flown by, in the order they are suggested. Every one was flown
-     * into a target on the rig; see {@code AUTOPILOT.md}, "Choosing the aircraft". The rotorcraft is
+     * into a target on the rig; see {@code AUTOPILOT.md}, "Choosing the aircraft". The helicopters are
      * not here: {@code tickStrike} is a fixed-wing control law and a helicopter ignores its outputs.
+     * The FPV drone is the one multirotor that is, because it steers itself onto the aim point
+     * ({@code FpvDroneEntity#steer}).
      */
-    private static final AircraftType[] STRIKE = {PLANE, LARGE, CARGO, FIGHTER, AIRLINER, RANDOM};
+    private static final AircraftType[] STRIKE = {PLANE, LARGE, CARGO, FIGHTER, AIRLINER, RANDOM, STRIKE_DRONE, FPV_DRONE};
+
+    /** The drones: {@link #of} recognises them, and only a strike may fly one. */
+    private static final AircraftType[] DRONES = {STRIKE_DRONE, FPV_DRONE};
 
     public static final Codec<AircraftType> CODEC = StringRepresentable.fromEnum(AircraftType::values);
 
@@ -136,6 +147,10 @@ public enum AircraftType implements StringRepresentable {
             case HELICOPTER -> SimplePlanesEntities.HELICOPTER;
             case FIGHTER -> SimplePlanesEntities.FIGHTER;
             case AIRLINER -> SimplePlanesEntities.AIRLINER;
+            case REGIONAL_AIRLINER -> SimplePlanesEntities.REGIONAL_AIRLINER;
+            case MINI_HELICOPTER -> SimplePlanesEntities.MINI_HELICOPTER;
+            case STRIKE_DRONE -> SimplePlanesEntities.STRIKE_DRONE;
+            case FPV_DRONE -> SimplePlanesEntities.FPV_DRONE;
             // RANDOM only reaches here if resolve() was skipped; the starter plane is the safe answer.
             default -> SimplePlanesEntities.PLANE;
         };
@@ -180,9 +195,22 @@ public enum AircraftType implements StringRepresentable {
         return false;
     }
 
+    /**
+     * True for a one-way drone: it carries the fixed charge of {@link Blast#forDrone()}, and the
+     * runway commands refuse it, since it cannot land.
+     */
+    public boolean isDrone() {
+        return this == STRIKE_DRONE || this == FPV_DRONE;
+    }
+
+    /** The warhead this airframe flies when {@code asked} is ordered. */
+    public Blast warhead(Blast asked) {
+        return isDrone() ? asked.forDrone() : asked;
+    }
+
     /** True for the one airframe the fixed-wing commands refuse and the helicopter commands require. */
     public boolean isRotorcraft() {
-        return this == HELICOPTER;
+        return this == HELICOPTER || this == MINI_HELICOPTER;
     }
 
     /**
@@ -207,12 +235,20 @@ public enum AircraftType implements StringRepresentable {
         if (type == HELICOPTER.entityType().get()) {
             return HELICOPTER;
         }
+        if (type == MINI_HELICOPTER.entityType().get()) {
+            return MINI_HELICOPTER;
+        }
         for (AircraftType candidate : FLYABLE) {
             if (type == candidate.entityType().get()) {
                 return candidate;
             }
         }
         for (AircraftType candidate : TESTABLE) {
+            if (type == candidate.entityType().get()) {
+                return candidate;
+            }
+        }
+        for (AircraftType candidate : DRONES) {
             if (type == candidate.entityType().get()) {
                 return candidate;
             }

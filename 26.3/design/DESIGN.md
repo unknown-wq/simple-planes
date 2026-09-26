@@ -17,9 +17,10 @@ for b/s. Accelerations are b/t².
 | aircraft | class | family | headline numbers |
 |---|---|---|---|
 | Fighter | `FighterEntity extends PlaneEntity` | fixed-wing | cruise 2.30 b/t (46 b/s) at throttle 5, 3.1x the starter plane; take-off 0.45 b/t after a 12-block run; realised turn 58 deg/s, pitch 7 deg/tick, roll 8 deg/tick |
-| Mini airliner | `AirlinerEntity extends PlaneEntity` | fixed-wing | 22 seats (2 crew, 20 passengers, boarded by where you click; AIRLINER-MODEL.md); cruise 1.25 b/t (25 b/s); take-off 0.60 b/t, rotation at 34 blocks, airborne at 51 blocks; realised turn 10 deg/s; ground pitch clamped at 12 deg (tail strike at 14.5 deg); metal skin by material tag, 6 logos rolled on placement |
+| Mini airliner | `AirlinerEntity extends PlaneEntity` | fixed-wing | 22 seats (captain for a player, first officer, 20 passengers, boarded by where you click; villagers fill all but the captain's; AIRLINER-MODEL.md); cruise 1.25 b/t (25 b/s); take-off 0.60 b/t, rotation at 34 blocks, airborne at 51 blocks; realised turn 10 deg/s; ground pitch clamped at 12 deg (tail strike at 14.5 deg); metal skin by material tag, 6 logos rolled on placement |
+| Regional airliner | `RegionalAirlinerEntity extends AirlinerEntity` | fixed-wing | the mini airliner's narrow size (§4.4): 14 seats (captain, first officer, 12 passengers one either side of the aisle; villagers fill all but the captain's), 2.5 b wide; cruise 1.25 b/t; take-off 0.54 b/t, rotation at 23.5 blocks, airborne at 38 blocks; realised turn 12 deg/s; tail strike at 13.4 deg, same 12 deg clamp |
 | Airship | `AirshipEntity extends PlaneEntity` (all six flight hooks overridden, like the helicopter) | plane family, own physics | 7 seats; buoyancy + ballast trim, fly-by-wire altitude hold (captures with 0.08 b overshoot); cruise 0.81 b/t (16 b/s); 12 deg/s turn, radius 77 b; static climb/sink limit 0.2 b/t |
-| Quadcopter crane | `QuadcopterEntity extends Entity` (new family) | multirotor, server-flown | thrust-to-weight 3.0; position controller settles a 20-block move in 4.4 s empty, 5.8 s with a cow; rope 1..12 b, winch 0.15 b/t; load limit 1.55 drone masses (cow yes, horse no); carried mob is a passenger placed at the rope end, rope drawn with vanilla's leash renderer |
+| Quadcopter crane | `QuadcopterEntity extends Entity` (new family) | multirotor, server-flown | thrust-to-weight 8.0; position controller settles a 20-block move in 4.5 s empty, 6.3 s with a cow; rope 1..12 b, winch 0.15 b/t; load mass estimated from the mob's box and knockback resistance, lift performance falls with it (chicken barely felt, horse at half capacity, iron golem hovers 0.5 b off the ground, ravager refused; CRANE-MASS.md); carried mob is a passenger placed at the rope end, rope drawn with vanilla's leash renderer |
 | Mini helicopter | `MiniHelicopterEntity extends HelicopterEntity` | rotorcraft (existing model, smaller numbers) | one seat; hover at notch 2 (helicopter: 3), climb to +0.40 b/t at notch 5 (helicopter +0.24), level top speed 0.75 b/t (helicopter 1.11), pedal 90 deg/s, full cyclic in 8.6 ticks; thrust fades above y 100, absolute ceiling y 160; standard or medical livery by material tag |
 
 Five implementation agents: one foundation agent that lands every shared touch point first, then four
@@ -251,15 +252,16 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
 
 ### 4.3 Seats, skin and logo
 
-- 22 seats (`entities/AirlinerSeats`): captain (seat 0, the pilot) and first officer side by side in the
+- 22 seats (`entities/AirlinerLayout.WIDE`): captain (seat 0, the pilot) and first officer side by side in the
   cockpit, feet at `(±0.6875, 0.6875, 3.75)`; 20 cabin seats in five rows two by two either side of the
   aisle, feet at `x = ±1.3125, ±0.5625`, `y = 0.5625`, `z = 2.5, 1.375, 0.25, -0.875, -2.0`. No seats upgrade
   is needed or accepted.
 - A seat belongs to its rider: one synched int per seat holds the rider's entity id, assigned in
   `addPassenger`, cleared in `removePassenger`, saved as a `Seats` list of `{UUID, Seat}`. A player boards the
   seat nearest to where he clicked, the captain's when he clicks the cockpit or the nose; anyone else takes
-  the front-most free cabin seat and never a crew seat. The controlling passenger is the player in the
-  captain's seat, or nobody.
+  the front-most free cabin seat, then the first officer's, and never the captain's. The controlling
+  passenger is the player in the captain's seat, or nobody; a villager in the first officer's seat never
+  controls.
 - The nose and tail are clickable through four `AirlinerPartEntity` hitboxes (`sized(3.4, 3.3)`, never saved)
   that follow the airliner; its own bounding box stays `sized(3.0, 2.6)`. Details, the options weighed and the
   test command `airliner click` are in AIRLINER-MODEL.md.
@@ -267,11 +269,19 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
   5.4.0-beta.2 jar and on the cabin jar (`aircraft takeoff`; `hold`, throttle 5 and 1500 ticks; `launch 1.25`,
   `hold`, throttle 5, 300 ticks, then `set yaw 1`), both give: rotation at 33.8 b (90 t), airborne at 52.1 b
   (118 t) at 0.71 b/t; level speed 1.250 b/t at throttle 5; heading 53.0, 73.7, 94.7 deg at ticks 100, 140
-  and 180 of the turn (0.52 deg/t). With 20 villagers aboard: airborne at 51.4 b (117 t) at 0.71 b/t.
+  and 180 of the turn (0.52 deg/t). With 20 villagers aboard: airborne at 51.4 b (117 t) at 0.71 b/t; with
+  21 (the first officer's seat too) the same.
+- Seat rules, checked on the server with two real clients (`Tester`, `Tester2`) on both sizes: villagers
+  fill the cabin, then the first officer's seat, and are refused when only the captain's is left; a player
+  clicking the nose boards the captain's seat and controls; a second player clicking the cockpit boards the
+  first officer's seat when it is free (and is refused when a villager holds it and the cabin is full), and
+  does not control; with the captain gone nobody controls, and a villager offered the aircraft takes a
+  cabin seat, never the captain's. A villager's first officer seat survives a server restart.
 - Metal skin: `metalSkin = material block is in the new block tag simpleplanes:airliner_metal_skin`
   (`iron_block`, `copper_block`, `waxed_copper_block`, `gold_block`, `netherite_block`; the same blocks
   are added to `simpleplanes:plane_materials` so the workbench builds one). The renderer draws
-  `AirlinerSkinModel` with `AirlinerSkinModel.TEXTURE` instead of `AirlinerModel` with the block texture.
+  `AirlinerSkinModel` with the size's skin texture (`AirlinerShape.skinTexture()`) instead of `AirlinerModel`
+  with the block texture.
 - Logo: `int LOGO` synched, rolled with `random.nextInt(AirlinerEntity.LOGO_COUNT)` (6) the first time the
   entity is added to a level from an item without a `Logo` tag, saved as `Logo`, copied into
   `state.airlinerLogo` and applied with `AirlinerMetalModel.setLogo` in `setupAnim`. The item keeps the
@@ -279,6 +289,58 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
 
 Upgrades: engines, booster, armor, healing, folding, banner; seats and shooter refused; no upgrade
 model drawn.
+
+### 4.4 Regional airliner
+
+`RegionalAirlinerEntity extends AirlinerEntity` is the same aircraft in a narrow size: 1+1 seating with an
+aisle, 14 seats (`AirlinerLayout.REGIONAL`), 2.5 blocks wide, 11.94 long, 9.95 span (AIRLINER-MODEL.md,
+*Two sizes*). Seats, click-to-board, seat persistence, hitbox entities, finishes and logos are
+`AirlinerEntity`'s; the layout, the hitbox type (`regional_airliner_part`, `sized(2.6, 3.3)`) and the physics
+numbers below are its own. Beta.2 saves of `simpleplanes:airliner` still load as the mini airliner.
+
+**Derivation.** The regional is lighter: collision mass 1.3 against 1.6 (`PlaneCollisions.massOf`, tested
+before `AirlinerEntity`), so m = 1.3 / 1.6 = 0.8125. `PlaneEntity`'s forces are accelerations (per unit mass),
+so thrust per notch, drag, maximum speed and lift stay as in §4.1, and the regional cruises at the same
+1.25 b/t. What mass changes is scaled by m:
+
+| number | mini airliner | rule | regional |
+|---|---|---|---|
+| `takeOffSpeed` | 0.60 | lift ~ v^2 carries the weight: x sqrt(m) = 0.541 | **0.54** (stall 0.324) |
+| `getRotationSpeedMultiplier` | 0.35 | control moment over inertia: x 1/m = 0.431 | **0.43**: pitch ramps 0.215 deg/t^2 to 2.15 deg/t; yaw to 1.075 deg/t |
+| `maxRollRate` | 2.5 deg/t | x 1/m = 3.08 | **3.0** |
+| `getFuelCost` | 10 | x m = 8.1 | **8** |
+| `getCameraDistanceMultiplayer` | 1.6 | the smaller airframe | 1.4 |
+| collision mass | 1.6 | | 1.3 |
+
+Everything else is inherited: `PUSH_PER_NOTCH` 0.004, `MAX_SPEED` 2.0, drag, `maxLift` 2.0,
+`pitchToMotion` 0.16, `yawToMotion` 0.06, rolling resistance 0.007, ground factor 5, the 12 deg ground pitch
+clamp. The longer tail cone puts the keel end at z -3.5, so the tail-strike angle is asin(0.8125 / 3.5) =
+**13.4 deg**; the clamp keeps 1.4 deg of margin. Recipe: 2 propellers + 9 material (the mini airliner 4 + 12).
+
+**Numbers** (simulated, §11.1):
+
+| quantity | regional | mini airliner |
+|---|---|---|
+| stall / take-off | 0.324 / 0.54 b/t | 0.36 / 0.60 |
+| ground roll, full throttle | rotation at 71 t / 23.5 b, airborne at 96 t / **38 b** at 0.65 b/t | 89 t / 34 b, 116 t / 51 b at 0.70 |
+| taxi | T2 0.11, T3 0.40, T5 0.75 b/t | same |
+| level speed | T1 0.64, T2 0.91, T3 1.05, T4 1.16, **T5 1.26 b/t** | 0.64, 0.91, 1.05, 1.16, 1.25 |
+| climb at T5 | 0.165 b/t at 10 deg, 0.198 at 20 deg | 0.166, 0.196 |
+| glide ratio | 5.5 | 5.3 |
+| turn | nominal 1.07 deg/t; realised 0.60 deg/t (**12 deg/s**), radius 95 b at 1.0 b/t | 0.88; 0.49 (10 deg/s), 117 b |
+
+**Measured on the server** (26.3 test server, `flighttest.sh <type>`: `aircraft takeoff`; `hold`, throttle 5
+and 1500 ticks; `launch 1.25`, `hold`, throttle 5, 300 ticks, then `set yaw 1`), on the same jar:
+
+| test | regional airliner | mini airliner (re-run) |
+|---|---|---|
+| take-off, empty (regional 5 runs, mini 3) | rotation at 23.5 b (72 t) every run, airborne at 38.4 b (97 t) or 39.0 b (98 t) at 0.66 b/t | rotation at 33.8 b (90 t), airborne at 52.1 b (118 t) at 0.71 b/t every run, as before |
+| take-off, full (villagers boarded with `airliner board`, the first officer's seat included; `fullload.sh`) | 13 villagers (15 offered, 2 refused): rotation at 23.5 b (72 t), airborne at 39.1 b (98 t) at 0.66 b/t, within the empty runs' 97-98 t; riders stay in their seats | 21 villagers (23 offered, 2 refused): rotation at 33.8 b (90 t), airborne at 51.4 b (117 t) at 0.71 b/t, as with 20 |
+| level speed, throttle 5, after 1500 t | 1.250 b/t, pitch -3.7 | 1.250 b/t, pitch -3.3, as before |
+| turn, heading at ticks 100 / 140 / 180 | 65.2 / 90.8 / 116.8 deg: **0.65 deg/t (13 deg/s)** | 53.0 / 73.7 / 94.7: 0.52 deg/t, as before |
+
+The regional needs 26 % less runway and turns 25 % faster; the mini airliner's numbers are unchanged to the
+digit by the second size.
 
 ---
 
@@ -491,7 +553,8 @@ roll φ (right down positive = accelerates right). Mass unit: 1 = the empty dron
 G       = 0.04 b/t^2      (this airframe's gravity; the plane family uses 0.03, vanilla mobs 0.08.
                            0.04 gives a slung load's pendulum at 6 b a period of 77 t = 3.9 s, which reads
                            naturally; a released mob falls under vanilla gravity anyway)
-T_MAX   = 3.0 * G = 0.12  (thrust-to-weight 3.0 empty)
+T_MAX   = 8.0 * G = 0.32  (thrust-to-weight 8.0 empty; rated, `tMaxBase`. The effective ceiling `tMax`
+                           adds the ground assist of 6.6 while a load hangs near the ground)
 thrust vector    = T * up(ψ, θ, φ)
 drag             = -(0.02 + 0.01 |vh|) vh   horizontally, -0.05 vy vertically
 attitude         : commanded (θc, φc) reached through a first-order lag τ = 2 ticks, slewed <= 4 deg/t,
@@ -499,7 +562,8 @@ attitude         : commanded (θc, φc) reached through a first-order lag τ = 2
                    the real 1 kHz rate loop, so it is modelled as this lag)
 yaw              : ψ rate <= 6 deg/t (120 deg/s) toward the commanded heading, slewed 1 deg/t^2
                    (differential rotor torque; cosmetic for the crane, it faces its direction of travel)
-rotor animation  : propellerRotation += 0.6 + 4.0 * T / T_MAX per tick (client)
+rotor animation  : propellerRotation += 0.6 + 4.0 * T / (3 G) per tick (client; the old T_MAX, so the
+                   empty-hover spin is unchanged by the 8 G rating)
 ```
 
 Integration per tick: `v += thrust/m_total + drag + rope reaction - G; p += v`, then `move(MoverType.SELF)`
@@ -538,10 +602,11 @@ instead of 2 changes nothing visible. Stable at 20 Hz with a factor of about 2 i
 rope length L    : 1.0 (stowed, hook under the clamp) .. 12.0 b, winch rate 0.15 b/t (3 b/s) both ways
 winch point      : entity (0, 0.30, 0), the underside of the clamp servo
 load position    : p_drone + winch + L * (sin θx, -cos θ, sin θz)   with θ the rope angle from vertical
-load mass        : m = w^2 * h of the mob's bounding box (drone masses), clamped >= 0.05
-                   cow 1.13, sheep 1.05, pig 0.73, villager 0.70, player 0.65, wolf 0.31, chicken 0.11,
-                   llama 1.51; horse 3.12, donkey 2.92, panda 2.11, polar bear 2.74, iron golem 5.29 are over
-limit            : m <= MAX_LOAD = 1.55  (= 0.85 * T_MAX / G - 1: hover with 15 % thrust in hand)
+load mass        : m = w^2 * h * (1 + KBR) * tag multiplier (drone masses), clamped >= 0.05; w, h the
+                   current bounding box, KBR the knockback-resistance attribute clamped 0..1 (6.6)
+                   chicken 0.11, villager/zombie 0.70, sheep 1.05, cow 1.13, llama 1.51, spider 1.76,
+                   horse 3.12, iron golem 10.58, ravager 14.64 (over), hoglin 17.47 (tag x4, over)
+capacity         : 6.20 = 0.9 * T_MAX / G - 1, hovers anywhere; lift limit 11.96 with full ground assist
 ```
 
 **Pendulum.** In 2-D per axis, with pivot acceleration `a_p` (the drone's) and damping `c`:
@@ -575,27 +640,91 @@ cruise height agl 10 + L, transit at 0.8 b/t) -> LOWER_LOAD (over the drop point
 box bottom is 0.2 b above the heightmap, then winch out) -> RELEASE (stopRiding; jaws open) -> STOW
 (winch to 1.0) -> IDLE/RETURN`.
 
-**Mobs allowed.** `LivingEntity` that is alive, not a `Enemy` (hostiles are out for a peaceful crane),
-not a boss, not another vehicle's passenger, not a `PlaneEntity`, and `m <= MAX_LOAD`; players allowed
-unless in spectator mode. Configurable later by a tag `simpleplanes:crane_liftable` (deny-list tag
-`crane_never` also honoured) — start with the rule above and the two empty tags in the datapack.
+**Mobs allowed.** `LivingEntity` that is alive, hostile (`Enemy`) or not, not a boss (ender dragon,
+wither, warden, elder guardian, or tag `c:bosses`), not another vehicle's passenger or vehicle, not a
+`PlaneEntity`/`QuadcopterEntity`, not in tag `simpleplanes:crane_never`, and `m <=` the lift limit (11.96); players
+allowed unless in spectator mode. `QuadcopterEntity.ALLOW_HOSTILES` (true) is the switch back to the old
+rule, under which `simpleplanes:crane_liftable` is the allow-list for hostiles. Every refusal names its
+reason: `cannot lift <name>: boss|aircraft|spectator|riding <vehicle>|has a rider|dead|not a mob|in tag
+simpleplanes:crane_never|hostile` or `too heavy: <name> ≈ m, max 11.96 (p% of capacity)`. Under the mass rule the ravager, hoglin and zoglin
+(tag `crane_mass_x4`), ghast and happy ghast stay out; the iron golem, size-4 slimes and magma cubes are lifted
+but only just off the ground (6.6). `simpleplanes:crane_liftable` also exempts a type from `c:bosses`
+(the four vanilla bosses always stay refused); mass still applies to it.
 
-### 6.6 Payload mass and hover thrust
+**A slung mob does not fight** (Q8, answered). While a `Mob` is the crane's passenger it carries a transient
+`FOLLOW_RANGE` modifier `simpleplanes:crane_slung` (x0, added in `addPassenger`, removed in
+`removePassenger`, never saved), so target goals neither find nor keep a target; and every crane tick,
+which runs before the passenger's own tick, clears its target and `ATTACK_TARGET` memory, stops its
+navigation, and runs a creeper's fuse back down. Nothing else is stored on the mob, so its AI resumes as
+soon as it leaves the hook by any path (release, overload, crane destroyed or killed, teleport). A creeper
+lit with flint and steel still explodes; that explosion damages the crane (the passenger exemption in
+`hurtServer` does not cover explosions). Read in the 26.3 sources, not tested: an arrow cannot hit the crane
+while its shooter is on it (`Projectile.canHitEntity`), and a passenger does not despawn
+(`Mob.requiresCustomPersistence`). Tested: endermen do not teleport while riding (vanilla `Enderman`), undead
+still burn in daylight (`load lost: Zombie died`), and a load that converts on the hook (piglin to zombified
+piglin; zombie to drowned takes the same vanilla `ConversionType.SINGLE` path) is handed to its successor,
+which vanilla re-mounts at once: `load changed: Piglin is now Zombified Piglin`.
 
-`T_hover = m_total * G / (cos θ cos φ)`: empty 0.040, cow 0.085, at the limit 0.102 of `T_MAX` 0.120.
-Vertical climb: 0.24 b/t (4.8 b/s) empty, 0.25 with a cow, 0.21 at the limit — bounded by `VZ_MAX 0.30`
-and the vertical drag rather than by thrust, so a loaded crane climbs about as fast as an empty one until
-the limit.
+### 6.6 Payload mass and lift performance
+
+Mass is estimated from what every entity, modded ones included, exposes: its current bounding box and its
+knockback resistance. The box follows babies, slime size and the `SCALE` attribute; knockback resistance
+is vanilla's own "hard to push" number (iron golem and warden 1.0, ravager 0.75, hoglin 0.6, armour on a
+player) and stands in for density:
+
+```
+m = max(0.05, w^2 * h * (1 + clamp(KBR, 0, 1)) * mult)          mult: product of the tags the type is in
+    simpleplanes:crane_mass_x0_5 (x0.5), crane_mass_x2 (x2), crane_mass_x4 (x4; hoglin, zoglin shipped)
+```
+
+Thrust (`MultirotorPhysics`): `T_MAX = 8 G` rated. A load hanging within `ASSIST_HEIGHT = 2` b of the
+ground raises the usable ceiling (ground effect on the rotor wash off the load), linearly from x1 at 2 b to
+x1.8 at the ground:
+
+```
+assist(h)    = 1 + 0.8 * clamp(1 - h / 2, 0, 1)            h = load bottom above the ground
+tMax         = T_MAX * assist(h)                           recomputed every tick while a load hangs
+capacity     = 0.9 * T_MAX / G - 1         = 6.20          hovers anywhere with 10 % thrust in hand
+lift limit   = 0.9 * T_MAX * 1.8 / G - 1   = 11.96         leaves the ground at all
+ceiling(m)   = 2 * (1 - (need - 1) / 0.8), need = (1 + m) G / (0.9 T_MAX)   for m > capacity, else none
+handling     = clamp((1 - m_total G / tMax) / (1 - G / T_MAX), 0.15, 1)    thrust margin vs. empty
+```
+
+The controller scales with `handling`: climb limit `VZ_MAX * handling` (descent unchanged), horizontal
+acceleration `A_MAX * handling`, horizontal speed `V_MAX * (0.5 + 0.5 * handling)`. A chicken (0.11) is
+barely felt (0.98); a cow (1.13) 0.84, a horse (3.12) 0.55. Above capacity the target height is capped at
+the ceiling, so an iron golem (10.58, 171 %) hangs at about 0.48 b and is carried at that height. The
+swing-damping gain still scales with `min(1, m / 0.65)`; loads heavier than that damp like a cow.
+
+Numbers measured in game are in CRANE-MASS.md. Offline (Sim, L = 3, 20 b vertical step):
+
+```
+load      m      use   ceiling  handling  climb     settle
+empty     0      0 %   -        1.00      0.240     90 t
+chicken   0.112  2 %   -        0.98      0.236     119 t (10 deg cosmetic swing, as before)
+zombie    0.702  11 %  -        0.90      0.216     122 t
+cow       1.134  18 %  -        0.84      0.201     125 t
+spider    1.764  28 %  -        0.75      0.180     133 t
+horse     3.120  50 %  -        0.55      0.133     158 t
+capacity  6.2    100 % -        0.15      0.036     410 t
+golem     10.584 171 % 0.48 b   0.15      -         409 t to its ceiling, stable
+```
 
 ### 6.7 Too heavy
 
-- Before winching in, the mass rule refuses the pickup: the jaws never close, a feedback line says
-  "too heavy: horse is 3.1, limit 1.55", the crane returns to `IDLE`.
-- If the load grows while attached (a mob that changes size, a player who becomes... nothing does today)
-  or the required hover thrust exceeds `0.95 * T_MAX`, the controller saturates, the drone sinks (simulated
-  with 2.2 masses: -0.07 b/t with thrust pinned for 300 ticks). The state machine watches
-  `thrust saturated for 20 ticks && vy < -0.02` and releases the load where it is if it is within 1.5 b
-  of the ground, else winches it down first and then releases; message "load released: overweight".
+- Over the lift limit, the pickup is refused before the crane moves: "too heavy: Ravager ≈ 14.64, max 11.96
+  (236% of capacity)". The limit is checked against the rated `T_MAX`.
+- A carried load whose ceiling turns negative (a debug `tmax` cut, a load that converts into a
+  heavier mob) is reported "overloaded: <name> is over the lift limit, lowering it" and set down.
+- If the hover thrust of a load within capacity still saturates (thrust pinned for `OVERLOAD_TICKS` 20 with
+  `vy < -0.02`; a lift-limited load sinking onto its ceiling is exempt), the
+  controller sinks and the state machine releases the load where it is if it is within 1.5 b of the ground,
+  else winches it down first; message "load released: overweight".
+- In transit, a lift-limited load flies at its ceiling. If the horizontal distance to the drop point does not
+  shrink by 0.5 b in `CARRY_STALL_TICKS` 200, the crane reports "stuck: no progress with <name> for 200
+  ticks (max lift h b), setting it down here" and lowers the load where it is. The ceiling follows the ground
+  under the load and a passenger has no collision, so a golem crosses a 1-block step; at a 3-block wall it
+  stalled on the top and was set down there (CRANE-MASS.md).
 
 ### 6.8 Rendering
 
@@ -645,17 +774,18 @@ Power: the quadcopter is electric and always powered (no fuel, no engine upgrade
 | new class | extends | why |
 |---|---|---|
 | `entities/FighterEntity` | `PlaneEntity` | fixed-wing; one seat; only numbers and two clamps differ |
-| `entities/AirlinerEntity` | `PlaneEntity` | fixed-wing, 22 assigned seats (`AirlinerSeats`, synched per seat) by its own `canAddPassenger`/`addPassenger`/`positionRider`, the captain is the controlling passenger, nose-to-tail hitboxes `AirlinerPartEntity`; not `LargeAirframeEntity` because of the livestock magnet, the large-upgrade bay and the -0.4 player offset |
+| `entities/AirlinerEntity` | `PlaneEntity` | fixed-wing, 22 assigned seats (`AirlinerLayout`, synched per seat) by its own `canAddPassenger`/`addPassenger`/`positionRider`, the captain is the controlling passenger, nose-to-tail hitboxes `AirlinerPartEntity`; not `LargeAirframeEntity` because of the livestock magnet, the large-upgrade bay and the -0.4 player offset |
+| `entities/RegionalAirlinerEntity` | `AirlinerEntity` | the narrow size (§4.4): its `AirlinerLayout`, hitbox type and mass-scaled numbers; everything else inherited |
 | `entities/AirshipEntity` | `PlaneEntity` | overrides all six flight hooks (helicopter pattern); inherits controls, rendering, riders, persistence, collisions |
 | `entities/QuadcopterEntity` | `Entity` | own physics, server-authoritative, load as passenger; no plane plumbing |
 | `entities/MiniHelicopterEntity` | `HelicopterEntity` | the helicopter's model with smaller numbers through new getters; one rider; a ceiling |
 | `client/render/MiniHeliRenderer` | `PlaneRenderer<MiniHelicopterEntity>` | body model/texture by livery |
 | `entities/crane/{MultirotorPhysics, CraneController, SlungLoad}` | plain | unit-testable with `javac` alone |
 | `client/render/AirshipRenderer` | `PlaneRenderer<AirshipEntity>` | fourth layer, culling box |
-| `client/render/AirlinerRenderer` | `PlaneRenderer<AirlinerEntity>` | body model/texture by skin |
+| `client/render/AirlinerRenderer` | `PlaneRenderer<AirlinerEntity>` | body model/texture by skin; one per size, built from an `AirlinerShape` |
 | `client/render/QuadcopterRenderer`, `QuadcopterRenderState` | `EntityRenderer`, `PlaneRenderState` | rope via leash state |
 | `items/CraneRemoteItem`, `items/QuadcopterItem` | `Item` | the crane's remote; the placeable item (a `PlaneItem` cannot place a non-`PlaneEntity`) |
-| `autopilot/AircraftType.FIGHTER, AIRLINER` | enum values | test tooling: `/autopilot route ... type fighter`; not in `FLYABLE`/`RANDOM` |
+| `autopilot/AircraftType.FIGHTER, AIRLINER, REGIONAL_AIRLINER` | enum values | test tooling: `/autopilot route ... type fighter`; not in `FLYABLE`/`RANDOM` |
 
 `PlaneEntity` gains the hooks in §8.3 and `HelicopterEntity` the getters in §5b.2, all with defaults that
 keep every existing aircraft bit-identical.
@@ -712,14 +842,15 @@ entity types (`FIGHTER`, `AIRLINER`, `AIRSHIP`, `MINI_HELICOPTER`; the quadcopte
 | hook | default | used by |
 |---|---|---|
 | `protected float pushPerNotch()` | `0.00625f` (replaces the literal in `tick()`) | fighter 0.012, airliner 0.004, airship 0.004 |
-| `protected float maxRollRate()` | `5.0f` (literal in `tickRoll`) | fighter 8, airliner 2.5 |
+| `protected float maxRollRate()` | `5.0f` (literal in `tickRoll`) | fighter 8, airliner 2.5, regional airliner 3.0 |
 | `protected float groundPitchLimit()` | `90f` (no clamp; applied at the end of `tickPitch` while `getOnGround()`) | fighter 10, airliner 12 |
 | `protected double groundRollingResistance()` | `0` (added to `drag` in `tickOnGround` when `onGround()`) | fighter 0.030, airliner 0.007 |
 | `protected double groundLinearDragFactor(float friction)` | `20 * (3 - friction)` (replaces the literal) | fighter 24, airliner 5 |
 | `TempMotionVars.yawToMotion` | `0.1` (replaces the literal `0.1f` in `tickRotateMotion`) | fighter 0.2, airliner 0.06 |
 | `protected boolean acceptsUpgrade(UpgradeType)` | `true`, consulted by `canAddUpgrade` | all three planes |
 
-`PlaneCollisions.massOf` gets `FighterEntity 1.1`, `AirlinerEntity 1.6`, `AirshipEntity 2.0`,
+`PlaneCollisions.massOf` gets `FighterEntity 1.1`, `AirlinerEntity 1.6` (`RegionalAirlinerEntity 1.3`, tested
+before it), `AirshipEntity 2.0`,
 `MiniHelicopterEntity 0.8` (tested before `HelicopterEntity`).
 
 `HelicopterEntity` gets the twelve protected getters of §5b.2, each returning its constant; every
@@ -731,25 +862,29 @@ constants remain public for the callers outside the class.
 ### 8.4 Registration (all in the foundation)
 
 - `SimplePlanesEntities`: `FIGHTER sized(3.0, 2.0)`, `AIRLINER sized(3.0, 2.6)` (plus the `AIRLINER_PART` hitboxes,
-  `sized(3.4, 3.3)`, added with the cabin), `AIRSHIP sized(3.0, 2.5)`,
+  `sized(3.4, 3.3)`, added with the cabin), `REGIONAL_AIRLINER sized(2.2, 2.6)` with `REGIONAL_AIRLINER_PART`
+`sized(2.6, 3.3)` (added with the second size), `AIRSHIP sized(3.0, 2.5)`,
   `QUADCOPTER sized(1.0, 0.875)`, `MINI_HELICOPTER sized(1.5, 1.95)` with the aircraft tracking range;
-- `SimplePlanesItems`: `FIGHTER_ITEM`, `AIRLINER_ITEM`, `AIRSHIP_ITEM`, `MINI_HELICOPTER_ITEM` as
+- `SimplePlanesItems`: `FIGHTER_ITEM`, `AIRLINER_ITEM`, `REGIONAL_AIRLINER_ITEM` (added with the second size),
+  `AIRSHIP_ITEM`, `MINI_HELICOPTER_ITEM` as
   `PlaneItem`s, `QUADCOPTER_ITEM` (`QuadcopterItem`), `CRANE_REMOTE`; all added to `getPlaneItems()` where
   they are planes, and to the creative tab; item model JSONs (`items/*.json`, `models/item/*.json`)
   reusing `plane.png`/`helicopter.png` with tints until real icons exist (open question Q5);
-- `PlanesModelLayers`: `FIGHTER_LAYER/METAL/PROPELLER`, `AIRLINER_LAYER/SKIN/METAL/PROPELLER`,
+- `PlanesModelLayers`: `FIGHTER_LAYER/METAL/PROPELLER`, `AIRLINER_LAYER/SKIN/METAL/PROPELLER` and
+  `REGIONAL_AIRLINER_LAYER/SKIN/METAL/PROPELLER`,
   `AIRSHIP_LAYER/METAL/PROPELLER/ENVELOPE`, `MINI_HELI_LAYER/MEDICAL/METAL/PROPELLER`,
   `QUADCOPTER_LAYER/METAL/PROPELLER`, and the renderer registrations (`PlaneRenderer` for the fighter;
   `AirlinerRenderer`, `AirshipRenderer`, `MiniHeliRenderer`, `QuadcopterRenderer` as thin subclasses the
   foundation creates with the hooks wired and the aircraft agents extend);
 - block tag `mini_heli_medical` beside `airliner_metal_skin`;
 - `lang/en_us.json`: item and entity names, the remote's tooltip, the key for the airliner's logo tooltip;
-- datapack: workbench recipes (`fighter` 2 propellers + 6 material, `airliner` 4 + 12, `airship` 2 + 14,
+- datapack: workbench recipes (`fighter` 2 propellers + 6 material, `airliner` 4 + 12, `regional_airliner`
+  2 + 9, `airship` 2 + 14,
   `quadcopter` 1 + 3), tags `airliner_metal_skin`, `plane_materials` additions, `crane_liftable`,
   `crane_never` (empty);
 - `SimplePlanesMod`: `CraneCommand.register()` and `AircraftCommand.register()` (the shared test command,
   §8.7); the aircraft agents fill in their subcommands in their own classes;
-- `AircraftType.FIGHTER`, `AIRLINER`;
+- `AircraftType.FIGHTER`, `AIRLINER` (and `REGIONAL_AIRLINER`, added with the second size);
 - `simpleplanes.accesswidener` re-added with the Loom and `fabric.mod.json` wiring, initially **empty** (§9).
 
 ### 8.5 Stub entities
@@ -783,13 +918,15 @@ the synched `Q`. Each boots, summons, ticks and renders (on a client) before the
 
 | subcommand | effect |
 |---|---|
-| `spawn <type> <x y z> [heading]` | summons `fighter`/`airliner`/`airship`/`quadcopter`/`plane`/`large`/`cargo`/`helicopter` at the position facing `heading`, with a furnace engine and 64 coal (planes) so `isPowered()` is true with nobody aboard; sets `Q`, `Q_Client`, `Q_Prev` from the heading as `GunshipCommand.spawn` does; tags it `aircraft-test`; prints `Aircraft #<id> spawned` |
+| `spawn <type> <x y z> [heading]` | summons `fighter`/`airliner`/`regional_airliner`/`airship`/`quadcopter`/`plane`/`large`/`cargo`/`helicopter` at the position facing `heading`, with a furnace engine and 64 coal (planes) so `isPowered()` is true with nobody aboard; sets `Q`, `Q_Client`, `Q_Prev` from the heading as `GunshipCommand.spawn` does; tags it `aircraft-test`; prints `Aircraft #<id> spawned` |
 | `set <id> throttle <0-10>`, `set <id> pitch <-1..1>`, `set <id> yaw <-1..1>`, `set <id> roll <-1..1>` | writes the synched controls (`roll` writes a synched `TEST_STRAFE` byte the physics reads as `moveStrafing` when no player is aboard) |
 | `set <id> cyclic <fwd> <right>`, `set <id> boost on|off` | helicopters (`HelicopterEntity` and subclasses): `setCyclicForward/Right` in percent, `setCollectiveBoost` |
 | `launch <id> <speed> [pitch]` | sets `deltaMovement` along the heading |
 | `status [id]` | one line per test aircraft: `#id type pos= vel= spd= vs= hdg= pitch= roll= thr= og=` |
 | `trace <id> on|off` | per-tick line `trace #id t= pos= spd= vs= hdg= pitch= roll= thr= og= agl=` to the log (planes) |
 | `kill` | removes every `aircraft-test`-tagged entity in loaded chunks |
+| `punch <id> [creative]` | one melee hit on the aircraft by a fake player (survival, or creative) through vanilla `Player#attack`; prints health and whether it was removed (§8.9) |
+| `fold <id>` | fits a folding upgrade and runs the dismount hook for a survival fake player; prints what the player got back (§8.9) |
 
 Planes with nobody aboard fly the server path (`transformPosPhysics`, no `RotationPacket`), which is the
 same path the autopilot exercises and the one every number in this design was computed for. Rider-side
@@ -801,6 +938,25 @@ All new per-tick traces are gated on a `Boolean.getBoolean` system property read
 final (`simpleplanes.aircraft.trace`, `simpleplanes.crane.trace`), print through the mod's logger at
 `INFO` with the `trace ` prefix, and are formatted with `String.format(Locale.ROOT, ...)` so
 `grep "trace #7" console.log` per aircraft works as it does for the autopilot.
+
+### 8.9 When an aircraft gives its item back
+
+Every airframe (`PlaneEntity` and its subclasses, `QuadcopterEntity`) drops its item only when a
+player breaks it by hand. The test is `PlaneEntity.isPlayerBreak(DamageSource)`: the damage type is in
+`#minecraft:is_player_attack` (`player_attack`, `spear`, `mace_smash`) and the direct and the causing
+entity are the same `Player`. The hit that takes health from above 0 to 0 or below must be that hit;
+the aircraft is then removed at once, on the ground or in reach in the air, and drops its item if the
+`entity_drops` game rule is on. The item carries the full save data, upgrades and their contents
+included, as before.
+
+Anything else is destruction and drops nothing: `crash()` (impacts, a strike flight hitting its target,
+falling at 0 HP), explosions (TNT, missiles, air defence, a player's own TNT or fireball), projectiles
+(arrows and tridents, the player's too), shooter fire, mobs, fire, lava, `/damage` without a player
+attacker, `/kill` and the void. What the aircraft carried is lost with it.
+
+A creative player's hit removes the aircraft without a drop, as before. The folding upgrade's return
+to the inventory on dismount is a deliberate pickup and is unchanged. The parachute is not an aircraft
+and still packs back into its item on landing. Test record: `design/NO-DROP.md`.
 
 ---
 
@@ -890,7 +1046,16 @@ acceptance tests in the specs are written from these numbers with tolerances.
   run: rotation t=89 x=34; airborne t=116 x=51 v=0.70
   climb T5: 10 deg 0.166, 20 deg 0.19; glide ratio 5.0
   turn: nominal 0.875, realised 0.49 deg/t (10 deg/s), radius 70/117/175/234 b
+=== regional airliner (as the airliner, with takeOff 0.54, rotMult 0.43, maxRollRate 3.0; §4.4)
+  stall 0.324; take-off 0.54
+  ground T2 0.107 T3 0.401 T5 0.750 | level T1 0.641 T2 0.910 T3 1.047 T4 1.158 T5 1.259, trim +6..-3.6
+  run: rotation t=71 x=23.5; airborne t=96 x=38.3 v=0.651
+  climb T5: 10 deg 0.165, 20 deg 0.198, best 0.198 at 25 deg; glide ratio 5.5
+  turn: nominal 1.07, realised 0.60 deg/t (12 deg/s), radius 57/95/143/190 b
 ```
+
+The regional's run reuses the same port (the airliner's configuration re-run in it gives rotation at t=89
+x=33.8, airborne t=116 x=51.3, T5 1.252, the numbers above).
 
 Sweeps that set the numbers: airliner rolling resistance 0.006..0.008 moved the run between 45 and 63
 blocks; `groundLinearFactor` 4..6 was second order; with the stock factor 48 the airliner's ground speed
@@ -917,6 +1082,8 @@ capture overshoot.
 
 ```
 hover thrust: empty 0.040, cow (1.13) 0.085, T_MAX 0.120 -> max load at 85 % thrust 1.55
+  (superseded by 6.6: T_MAX 0.32, capacity 6.20, lift limit 11.96 with ground assist; the gains below
+  were re-checked with Sim.java at the new rating, C1 PASS)
 climb (target +200): empty 0.240 b/t, 0.65 load 0.248, cow 0.251, 1.50 load 0.211
 20 b step, empty: settle 88 t, overshoot 0
 20 b step, cow, L=6, final law: settle 116 t, overshoot 0.63 b, peak swing 25.1 deg, residual after 15 s 0.0
@@ -997,8 +1164,9 @@ code, which is the calibration.
   upgrade item. Which do you prefer?
 - **Q7. Recall behaviour for the crane** when the remote's owner is far away (> 64 b): the crane hovers
   where it is and waits. Should it fly home to a "base" block instead?
-- **Q8. Hostile mobs** are refused by the crane. Allow them (a zombie on a rope is funny but not
-  peaceful)?
+- **Q8. Hostile mobs** — answered: allowed. Ordinary hostiles are lifted under the same mass limit;
+  bosses are refused; a slung mob does not fight (see 6.5, "A slung mob does not fight"). Details and
+  test results in `design/CRANE-HOSTILES.md`.
 - **Q9. Autopilot types.** `AircraftType.FIGHTER`/`AIRLINER` are added for testing (not random). Keep
   them player-visible on `/autopilot flight ... type airliner`, or hide them?
 - **Q10. Mini helicopter livery and ceiling.** The medical livery is chosen by building from a white block

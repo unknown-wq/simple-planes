@@ -299,9 +299,14 @@ public final class AutopilotCommand {
                         .suggests(HELIPAD_SUGGESTIONS)
                         .executes(AutopilotCommand::heliflight)
                         .then(heliDelayArgument())
+                        .then(rotorcraftTypeArgument(AutopilotCommand::heliflight))
                         .then(Commands.argument("speed", heliSpeedArgument())
                             .executes(AutopilotCommand::heliflight)
-                            .then(heliDelayArgument())))));
+                            .then(heliDelayArgument())
+                            .then(rotorcraftTypeArgument(AutopilotCommand::heliflight))))));
+
+            // medevac and dispatch: the rotorcraft dispatch API, for operators and tests.
+            DispatchCommand.attach(root);
 
             root.then(Commands.literal("heliinbound")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
@@ -464,7 +469,19 @@ public final class AutopilotCommand {
         return Commands.literal("type")
             .then(Commands.argument("aircraft", StringArgumentType.word())
                 .suggests((context, builder) -> SharedSuggestionProvider.suggest(
-                    Arrays.stream(AircraftType.values()).map(AircraftType::getSerializedName), builder))
+                    Arrays.stream(AircraftType.values()).filter(type -> !type.isDrone())
+                        .map(AircraftType::getSerializedName), builder))
+                .executes(action));
+    }
+
+    /** {@code type <aircraft>} on {@code heliflight}: the rotorcraft airframes only. */
+    private static LiteralArgumentBuilder<CommandSourceStack> rotorcraftTypeArgument(
+            com.mojang.brigadier.Command<CommandSourceStack> action) {
+        return Commands.literal("type")
+            .then(Commands.argument("aircraft", StringArgumentType.word())
+                .suggests((context, builder) -> SharedSuggestionProvider.suggest(
+                    Arrays.stream(AircraftType.values()).filter(AircraftType::isRotorcraft)
+                        .map(AircraftType::getSerializedName), builder))
                 .executes(action));
     }
 
@@ -512,8 +529,8 @@ public final class AutopilotCommand {
     }
 
     /**
-     * True when the caller asked a fixed-wing command for a helicopter, having already told them
-     * what to type instead.
+     * True when the caller asked a fixed-wing command for a helicopter or a drone, having already
+     * told them what to type instead.
      *
      * <p>{@code type helicopter} now parses — {@link AircraftType} has the value, because a status
      * line has to be able to name a rotorcraft — so the refusal has to be here rather than in the
@@ -522,7 +539,14 @@ public final class AutopilotCommand {
      * cannot use any of the three would not fly them badly, it would sit on a threshold for ever.
      */
     private static boolean refusedRotorcraft(CommandContext<CommandSourceStack> context, String alternative) {
-        if (!aircraftType(context).isRotorcraft()) {
+        AircraftType type = aircraftType(context);
+        if (type.isDrone()) {
+            context.getSource().sendFailure(Component.literal("A " + type.getSerializedName()
+                + " is a one-way munition and cannot land. Use /autopilot strike ... type "
+                + type.getSerializedName() + " or the Plane Strike Tool."));
+            return true;
+        }
+        if (!type.isRotorcraft()) {
             return false;
         }
         context.getSource().sendFailure(Component.literal(
@@ -594,10 +618,10 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
         }
-        AllegianceOption.apply(context, plane);
+        // Always hostile (set in launchStrike); the trailing keyword is accepted and changes nothing.
         source.sendSuccess(() -> Component.literal(
             AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
-                + " Warhead: " + blast.describe() + ". " + AutopilotSpawner.describeAirframe(plane)), true);
+                + " Warhead: " + plane.warhead(blast).describe() + ". " + AutopilotSpawner.describeAirframe(plane)), true);
         return 1;
     }
 
@@ -666,7 +690,8 @@ public final class AutopilotCommand {
             + PlaneStrikeToolItem.getDistance(configured) + " blocks out, bearing "
             + (reportedBearing == null
                 ? "from wherever you stand" : String.format("%03d", reportedBearing))
-            + ", warhead " + blast.describe() + ", aircraft " + type.getSerializedName() + "."), false);
+            + ", warhead " + blast.describe() + (type.isDrone() ? " (a drone flies " + type.warhead(blast).describe() + ")" : "")
+            + ", aircraft " + type.getSerializedName() + "."), false);
         return 1;
     }
 
@@ -965,7 +990,7 @@ public final class AutopilotCommand {
     private static int heliflight(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         ServerLevel level = source.getLevel();
-        double cruiseSpeed = heliSpeed(context);
+        double orderedSpeed = heliSpeed(context);
         int delayTicks = optionalInt(context, "seconds", 0) * 20;
         String fromName = StringArgumentType.getString(context, "from");
         String toName = StringArgumentType.getString(context, "to");
@@ -996,15 +1021,27 @@ public final class AutopilotCommand {
             return 0;
         }
 
+        AircraftType type = AircraftType.HELICOPTER;
+        if (has(context, "aircraft")) {
+            type = AircraftType.byNameOrNull(StringArgumentType.getString(context, "aircraft"));
+            if (type == null || !type.isRotorcraft()) {
+                source.sendFailure(Component.literal("Not a rotorcraft: "
+                    + StringArgumentType.getString(context, "aircraft")));
+                return 0;
+            }
+        }
+        double cruiseSpeed = has(context, "speed") ? RotorcraftProfile.of(type).clampCruiseSpeed(orderedSpeed)
+            : RotorcraftProfile.of(type).defaultCruiseSpeed();
         PlaneEntity plane = AutopilotSpawner.launchHelicopterSortie(level, from, to,
-            source.getPlayer(), cruiseSpeed, delayTicks);
+            source.getPlayer(), cruiseSpeed, delayTicks, type);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the helicopter."));
             return 0;
         }
         AllegianceOption.apply(context, plane);
         double distance = AutopilotMath.horizontalDistance(from.touchdown(), to.touchdown());
-        source.sendSuccess(() -> Component.literal("Helicopter #" + plane.getId() + " on the pad at "
+        String noun = RotorcraftProfile.of(plane).label();
+        source.sendSuccess(() -> Component.literal(noun + " #" + plane.getId() + " on the pad at "
             + from.name() + " (" + String.format("%.1f, %.1f, %.1f",
                 plane.getX(), plane.getY(), plane.getZ())
             + "), sortie to " + to.name() + " - " + Math.round(distance) + " blocks"

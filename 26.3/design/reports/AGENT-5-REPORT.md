@@ -78,7 +78,7 @@ All results are from the final jar (sha1 `35f6bdbe`), in one scripted run with `
 | C8 | yes | peak θ **22.8°**, at the deceleration into the arrival. After arrival: 5.0° (0 to 2 s), 1.15° (2 to 4 s), **0.21° (4 to 5 s)**, 0.09° (5 to 6 s). The load is released 5.4 s after arrival, so there is no 10 s value | ≤ 32°; ≤ 3° within 300 t |
 | C9 | yes | **Villager** (0.70): delivered alive, 20 HP; peak 22.2°; after arrival 8.2 / 4.5 / 2.0° (0 to 2 / 2 to 4 / 4 to 6 s). **Chicken** (0.11): delivered alive, 4/4 HP, 0.03 b from the point; peak 24.5°; residual swing **16 / 15 / 12°**, as the design predicts for chicken-weight loads (cosmetic) | both alive; report the chicken |
 | C10 | yes | `refused: too heavy: Horse is 3.12, limit 1.55`; the crane stays IDLE; the horse is untouched at (-39.5, -60, 10.5) | as spec |
-| C11 | yes | `refused: cannot lift Zombie` | as spec |
+| C11 | yes | `refused: cannot lift Zombie` (superseded: hostiles are now lifted, see `design/CRANE-HOSTILES.md`) | as spec |
 | C12 | yes | with `debug tmax 0.07`: OVERLOAD **20 t** after the cut, released **44 t** after it (`load released: overweight (Cow)`); the cow is on the ground with 10 HP | ≤ 40 t, ≤ 300 t, alive |
 | C13 | yes | see the table above; negative sign kept | smallest 5 s peak |
 | C14 | yes | 300 b to (-350, -60, 10) with no force-load: **0 gaps** in the trace; arrived after **984 t** (0.31 b/t loaded); cow set down alive; no "lost" line. On the first flight into never-generated chunks, `tick sprint` outran generation: the crane ran 590 of 12000 sprinted ticks, then continued in real time and delivered. The measured run was on the generated corridor | arrives, no "lost" |
@@ -157,7 +157,7 @@ None.
 - **Q7, recall range.**
   - `QuadcopterEntity.RECALL_RANGE` (64).
   - "Fly home instead" is a change in `orderReturn` and `tickReturn`: when the owner is out of range, target `home`, which is already saved and set at spawn or placement, instead of `holdHere()`.
-- **Q8, hostiles.**
+- **Q8, hostiles.** (Answered later: allowed; see `design/CRANE-HOSTILES.md`.)
   - `QuadcopterEntity.ALLOW_HOSTILES = true`, or list individual types in the datapack tag `simpleplanes:crane_liftable`, which `refusal()` already honours.
   - All load rules are in `refusal()` and the constants just above it.
 

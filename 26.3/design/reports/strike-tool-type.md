@@ -121,4 +121,80 @@ it. The workaround is to pin a bearing over open ground.
 4. **Rotorcraft strikes.** A helicopter strike would need its own law, built on `HelicopterAutopilot`.
 5. **`random`.** Keep it? It draws plane, large or cargo, as on `route`.
 6. **`/autopilot tooltest`.** Keep it in the shipped jar, or strip it?
+
+## Drones
+
+Added on top of the above: `strike_drone` (fixed-wing, render model ported from the 26.2 line —
+`STRIKE-DRONE-MODEL.md`) and `fpv_drone` (a second, armed multirotor entity, separate from the
+peaceful `QuadcopterEntity`, sharing only `MultirotorPhysics`). Both are `AircraftType#isDrone()`,
+`type strike_drone|fpv_drone` on `strike`/`tool`, or the item in the other hand.
+
+**Warhead override.** `AircraftType#warhead`/`PlaneEntity#warhead` swap in `Blast#forDrone()` —
+`DRONE_POWER` (1.0F), `breaksBlocks` kept, `fire` forced off — at read time
+(`PlaneEntity#explode`), so whatever the tool/command asked for is replaced. Still through
+`Blast#detonate`, so `BlastGuards` and the explosion game rules still apply.
+
+**Picking `DRONE_POWER`.** New `tooltest charge <pos> <power> [<blocks>]` and
+`tooltest crater snapshot/diff` (bare `Blast#detonate`, no aircraft) gave, on the superflat rig:
+
+| Power | Blocks removed | Farthest | Fire |
+|---|---|---|---|
+| 0.5 | 1 | 0.71 | 0 |
+| **1.0** | **8** | **1.22** | **0** |
+| 1.5 | 8 | 1.22 | 0 |
+
+1.0 is the cheapest power that reliably takes the full 2×2×2 around the point (effective radius
+about a block); 1.5 removes nothing more. No fire at any of the three.
+
+**Flown into a target**, bearing 0, superflat, tool defaults (4.0/breaks blocks/no fire, overridden
+to 1.0/no fire on launch):
+
+| Aircraft | 100 | 200 | 400 | 800 |
+|---|---|---|---|---|
+| `strike_drone` | 56 t, 4.7 off | 91 t, 5.8 off | 165 t, 5.6 off | 306 t, 5.1 off |
+| `fpv_drone` | 67 t, 1.2 off | 137 t, 1.2 off | 236 t, 0.6 off | 437 t, 1.3 off |
+
+Every crater diff: 4-8 blocks removed, fire 0.
+
+**Finding: `strike_drone` shares the starter plane's dive precision (~5 blocks), which is not
+precise enough for a ~1-block charge; `fpv_drone` is.** `strike_drone` is the same fixed-wing
+`tickStrike` control law on a lighter airframe, and its miss (4.7-5.8) is the same few blocks
+`plane`/`large`/`airliner` already show in the table above — fine for their 4.0-16.0 warheads and
+multi-block craters, not fine for a warhead that only reaches about a block. All four
+`strike_drone` runs crashed into the ground short of the target (the "committed" dive points the
+nose straight at the aim point on a fixed dive angle, and a fast, low-drag airframe can reach the
+ground before it closes the horizontal gap) rather than registering a hit
+(`PlaneAutopilot.STRIKE_DRONE_HIT_RADIUS` is 2.0). `fpv_drone` does not fly that law at all —
+`FpvDroneEntity#steer`/`#control` close on the aim point by velocity feedback — and landed within
+0.6-1.3 blocks on all four distances, a hit every time. This is read as the intended split (a fast,
+cheap, somewhat-imprecise munition versus a slow, precise one), not a bug to fix in this session;
+flagged here in case the owner wants `strike_drone`'s dive re-tuned or its hit radius loosened to
+match.
+
+**Refusals reverified** on every path: `strike`/`tool type quadcopter|crane|helicopter` unchanged;
+`route`/`flight`/`inbound`/`shuttle add type strike_drone|fpv_drone` refused the same way
+`helicopter` already was ("a one-way munition and cannot land"); `type random` never drew a drone
+(8/8 draws were plane/large/cargo).
+
+**Regression: the five already-shipped types rerun unaffected** at 200 blocks — `plane` 96 t/6,
+`large` 96 t/5, `cargo` 139 t/7 (raised to 318), `fighter` 82 t/3, `airliner` 137 t/5 (raised to
+234) — every figure matches the Results table above exactly.
+
+No exceptions or errors in the server log across the whole session (`grep -icE "exception|error"
+console.log` after the run: only the four startup "offline mode" `WARN` lines and JOML's `Unsafe`
+deprecation notice, both pre-existing and unrelated).
+
+Docs updated: `AUTOPILOT.md` ("Plane Strike Tool", "Choosing the aircraft" intro, "The warhead", and
+a new "The drones" subsection), `COMMANDS.md` (Strike, Strike Tool, Flights), `TESTING.md` (the new
+`tooltest` subcommands).
+
+### Open questions (drones)
+
+1. **`strike_drone`'s accuracy vs. its own hit radius**, as above — leave as documented behaviour,
+   retune the dive, or loosen `STRIKE_DRONE_HIT_RADIUS`?
+2. **No recipe.** Neither drone item has a crafting recipe; they reach a player's inventory through
+   the creative tab or `/give` only, same as the render/physics work this session did not add a way
+   to build one in survival. Worth one, or is `/give`-only acceptable for a one-way weapon?
+3. **Drone item tooltip/rendering** was reviewed in source and via the headless log only — this
+   session had no real client to confirm the item icon or the in-world model on screen.
 7. **Translations.** Keys are needed for `zh_cn` and other languages.

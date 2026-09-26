@@ -1,6 +1,6 @@
 # dist
 
-## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.4.jar`
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.6.jar`
 
 A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
 has had a full play-through yet; most of it was tested on a headless dedicated server, and the fighter
@@ -12,7 +12,7 @@ glass, the airliner cabin and the world-map tab also in a real client.
 | Loader | Fabric, loader ≥ 0.19.5 |
 | Java | 25 |
 | Requires | Fabric API 0.160.5+26.3 or newer |
-| sha256 | `418ac48e1a09a21a594a028933724d62502ee685d35c8d7e1bf8a51a33993836` |
+| sha256 | `dd562a8fc09b166c6c65595cb82dbbfc2b03c61c769a28a801f7747ab022d027` |
 
 What it adds on top of 5.3.14:
 
@@ -39,6 +39,26 @@ What it adds on top of 5.3.14:
 - World-map support: with the world map installed, an aviation tab shows airfields, routes and silos,
   and operators can launch, load and unload a nearby silo; hover or toggle to see strike ranges and
   air-defence detection and reach. Map API 2: needs World Map 0.1.7 or newer for the tab.
+- Regional airliner: a narrow 14-seat (1 + 1) size next to the 22-seat airliner; villagers may take the
+  first officer's seat, only a player in the captain's seat flies.
+- Strike drones for the Plane Strike Tool: `strike_drone` and `fpv_drone`, single use, small blast
+  (radius about 1 block, no fire).
+- Crane lifts hostile mobs (bosses refused). Load mass is estimated from the mob's size and knockback
+  resistance: light loads barely matter, heavy ones climb and fly slower, an iron golem only hovers about
+  half a block up, a ravager is refused with the numbers. Slung mobs do not target or attack.
+- Remote launch from the map: operators can fire a strike silo at any distance; the server loads the
+  silo's chunk first, the silo's own range still applies. Map API 3 (World Map 0.1.9 or newer shows it).
+- Destroyed aircraft no longer drop their item (crash, explosion, missile, lava, mobs, /kill); only a
+  player breaking it by hand in survival gets it back. Cargo is lost with a destroyed aircraft.
+- Creative tab: one entry per new aircraft type; the built-in four keep one per material. Material
+  textures are read from the block model, so no more purple aircraft for logs, wood, hyphae, quartz or
+  waxed copper.
+- Rotorcraft dispatch API for other mods (`api/dispatch/RotorcraftDispatch`): the mini helicopter flies on
+  its own to a point with no pad, lands on an ad-hoc zone it finds, waits, and flies home; the medical
+  livery seats a crew member and a stretcher. Operators: `/autopilot medevac`, `/autopilot dispatch`.
+  Air defence never engages dispatch aircraft.
+- Strike aircraft are always hostile: everything launched by the Plane Strike Tool or `/autopilot strike`,
+  drones included.
 - Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`, `/airdefence`, `/aviation`.
 
 Design and test reports are in `../26.3/design/` and `../26.3/MISSILES.md`. Checked here: a clean
@@ -47,6 +67,10 @@ matching its measured numbers (beta.1); on this jar a boot with no errors, the f
 (with its seat hitboxes) spawning, a tier 1 missile arriving on target with a miss of 0.00, a fighter
 strike from the strike command hitting 3 blocks off, and the silo and all four missile recipes resolving. On
 beta.4 also: an operator load through the map request path, then a tier 1 launch arriving with a miss of 0.00.
+On beta.5: a boot with no errors, the regional airliner, fighter, crane and strike drone spawning and a
+silo placed; each merged feature was tested on its own branch (PRs #44–#49).
+On beta.6: a boot with no errors, a strike launched hostile, the dispatch list and a landing-zone search
+answering; the dispatch API and the hostile strikes were tested on their branches (PRs #50, #51).
 
 ## Stable builds
 

@@ -45,6 +45,9 @@ public record Blast(float power, boolean breaksBlocks, boolean fire) {
     /** Upper bound. See the class comment — this is a cost limit, not a taste limit. */
     public static final float MAX_POWER = 16.0F;
 
+    /** A strike drone's warhead strength: a crater about one block across. See {@code AUTOPILOT.md}. */
+    public static final float DRONE_POWER = 1.0F;
+
     /** Exactly what an aircraft did before any of this was configurable. */
     public static final Blast DEFAULT = new Blast(DEFAULT_POWER, true, false);
 
@@ -82,6 +85,14 @@ public record Blast(float power, boolean breaksBlocks, boolean fire) {
             level.explode(source, at.x, at.y, at.z, applied.power(), applied.fire(), applied.interaction());
         }
         return applied;
+    }
+
+    /**
+     * The fixed charge of a strike drone: {@link #DRONE_POWER}, never incendiary. Whether it breaks
+     * blocks is still the caller's choice, so a no-block-damage tool stays one with a drone.
+     */
+    public Blast forDrone() {
+        return new Blast(DRONE_POWER, breaksBlocks, false);
     }
 
     public boolean isDefault() {

@@ -199,6 +199,9 @@ public final class PlaneCollisions {
         if (plane instanceof FighterEntity) {
             return 1.1;
         }
+        if (plane instanceof RegionalAirlinerEntity) {
+            return 1.3;
+        }
         if (plane instanceof AirlinerEntity) {
             return 1.6;
         }

@@ -11,6 +11,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Rarity;
 import net.minecraft.world.level.gamerules.GameRule;
 import net.minecraft.world.level.gamerules.GameRuleCategory;
@@ -21,6 +22,10 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
 import net.minecraft.world.level.material.PushReaction;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Registration for the missile feature: one entity type, the silo's two blocks, its block entity and its item, the
@@ -66,8 +71,11 @@ public final class Missiles {
         MissileCommand.register();
         CreativeModeTabEvents.modifyOutputEvent(ResourceKey.create(Registries.CREATIVE_MODE_TAB, id("planes_tab")))
             .register(output -> {
-                output.accept(LAUNCH_SILO_ITEM);
-                for (MissileTier tier : MissileTier.values()) output.accept(missileItem(tier));
+                // Next to the other tools, ahead of the per-material aircraft.
+                List<ItemStack> stacks = new ArrayList<>();
+                stacks.add(new ItemStack(LAUNCH_SILO_ITEM));
+                for (MissileTier tier : MissileTier.values()) stacks.add(new ItemStack(missileItem(tier)));
+                output.insertAfter(SimplePlanesItems.CRANE_REMOTE.get(), stacks);
             });
     }
 
