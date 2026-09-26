@@ -75,6 +75,8 @@
     "simpleplanes.strike_tool_blast": "Боевая часть: %s",
     "simpleplanes.strike_tool_bearing": "Курс захода: %s",
     "simpleplanes.strike_tool_bearing_auto": "Курс захода: со стороны игрока",
+    "simpleplanes.strike_tool_aircraft": "Самолёт: %s",
+    "simpleplanes.strike_tool_aircraft_hint": "Самолёт во второй руке будет отправлен вместо этого",
     "simpleplanes.route_wand_desc": "ПКМ по блокам — точки маршрута, Shift+ПКМ — запуск",
     "simpleplanes.route_wand_waypoints": "Отмечено точек: %s",
     "simpleplanes.runway_tool_desc": "ПКМ по двум противоположным углам ВПП — снять характеристики",
@@ -192,6 +194,8 @@
     "simpleplanes.airline.5": "Marigold Hop",
     "simpleplanes.autopilot.airframe.fighter": "fighter",
     "simpleplanes.autopilot.airframe.airliner": "airliner",
+    "simpleplanes.autopilot.airframe.plane": "самолёт",
+    "simpleplanes.autopilot.airframe.random": "случайный",
     "entity.simpleplanes.missile": "Ракета",
     "block.simpleplanes.launch_silo": "Пусковая шахта",
     "block.simpleplanes.launch_silo_casing": "Корпус пусковой шахты"

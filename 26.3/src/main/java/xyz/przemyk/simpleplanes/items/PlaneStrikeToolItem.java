@@ -1,7 +1,10 @@
 package xyz.przemyk.simpleplanes.items;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.Nullable;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -12,17 +15,23 @@ import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.autopilot.AircraftType;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
 import xyz.przemyk.simpleplanes.autopilot.Blast;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotConfig;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotFeedback;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotMath;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotSpawner;
+import xyz.przemyk.simpleplanes.autopilot.AutopilotText;
 import xyz.przemyk.simpleplanes.autopilot.RunwayOccupancy;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
 
+import java.util.Locale;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * Scripted attack run. Right-clicking a block spawns an aircraft the configured distance away and
@@ -32,7 +41,14 @@ import java.util.function.Consumer;
  *   <li>right-click a block — launch a strike at it</li>
  *   <li>right-click the air — status report, including the blast setting</li>
  *   <li>sneak + right-click the air — cycle the spawn distance, and the blast each time it wraps</li>
+ *   <li>a plane item in the other hand — that airframe, in that material, flies the strike</li>
  * </ul>
+ *
+ * <p><b>Aircraft.</b> Chosen the way a bow chooses its arrow: whatever aircraft is in the other hand
+ * is what gets sent, and it is spent outside creative; nothing is written back onto the tool. With
+ * no aircraft there, the tool's own setting ({@code /autopilot tool type}) flies, and unset that is
+ * the starter plane. Only {@link AircraftType#canStrike()} airframes are accepted; anything else is
+ * refused by name rather than replaced, and the quadcopter crane is never a strike aircraft.
  *
  * <p><b>Settings.</b> The gesture cycles the two settings anyone changes in flight — spawn distance
  * and blast strength — because a held item offers exactly one spare gesture and cycling five
@@ -69,6 +85,77 @@ public class PlaneStrikeToolItem extends Item {
         }
         return new Blast(power == null ? Blast.DEFAULT_POWER : power,
             blocks == null || blocks, fire != null && fire);
+    }
+
+    /** Airframe stored on the tool; unset is the starter plane, as before the setting existed. */
+    public static AircraftType getType(ItemStack stack) {
+        AircraftType type = stack.get(AutopilotComponents.STRIKE_TYPE);
+        return type == null ? AircraftType.PLANE : type;
+    }
+
+    /** "plane, large, cargo, fighter, airliner or random", for refusals. */
+    public static String strikeTypeList() {
+        String all = AircraftType.strikeTypes().stream().map(AircraftType::getSerializedName)
+            .collect(Collectors.joining(", "));
+        int last = all.lastIndexOf(", ");
+        return last < 0 ? all : all.substring(0, last) + " or " + all.substring(last + 2);
+    }
+
+    /**
+     * Why an aircraft by this name (an {@code /autopilot} type or an entity id path) is not sent on
+     * a strike, ending with the list of those that are.
+     */
+    public static String strikeRefusal(String name) {
+        String reason = switch (name.toLowerCase(Locale.ROOT)) {
+            case "quadcopter", "crane" -> "The quadcopter crane is peaceful and is never sent on a strike.";
+            case "helicopter", "mini_helicopter" -> "A helicopter cannot fly an attack run: the run is a"
+                + " fixed-wing control law and a rotorcraft does not answer it.";
+            case "airship" -> "An airship cannot fly an attack run: it cannot dive, and drifts past the target.";
+            default -> "A " + name + " cannot fly an attack run.";
+        };
+        return reason + " Strike aircraft: " + strikeTypeList() + ".";
+    }
+
+    /**
+     * What the next launch flies: the airframe and skin of an aircraft item in the other hand, else
+     * the tool's own setting. {@code refusal} is set, and nothing may be launched, when the aircraft
+     * on offer is not one the attack run can fly. {@code held} is that item, or empty.
+     */
+    public record Selection(AircraftType type, @Nullable Block material, String label, @Nullable String refusal,
+                            ItemStack held) {}
+
+    public static Selection select(Player player, InteractionHand toolHand, ItemStack tool) {
+        ItemStack other = player.getItemInHand(
+            toolHand == InteractionHand.MAIN_HAND ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND);
+        if (other.getItem() instanceof QuadcopterItem) {
+            return new Selection(getType(tool), null, "quadcopter (other hand, refused)", strikeRefusal("quadcopter"),
+                other);
+        }
+        if (other.getItem() instanceof PlaneItem planeItem) {
+            AircraftType type = AircraftType.of(planeItem.planeEntityType.get());
+            if (type == null || !type.canStrike()) {
+                String name = BuiltInRegistries.ENTITY_TYPE.getKey(planeItem.planeEntityType.get()).getPath();
+                return new Selection(getType(tool), null, name + " (other hand, refused)", strikeRefusal(name), other);
+            }
+            return new Selection(type, materialOf(other), type.getSerializedName() + " (other hand)", null, other);
+        }
+        // Only reachable through /give or an edited stack: /autopilot tool refuses these names.
+        AircraftType type = getType(tool);
+        return type.canStrike()
+            ? new Selection(type, null, type.getSerializedName(), null, ItemStack.EMPTY)
+            : new Selection(type, null, type.getSerializedName() + " (refused)", strikeRefusal(type.getSerializedName()),
+                ItemStack.EMPTY);
+    }
+
+    /** The material a plane item would be built in, or null for the airframe's default. */
+    private static @Nullable Block materialOf(ItemStack planeItem) {
+        CompoundTag tag = planeItem.get(SimplePlanesComponents.ENTITY_TAG);
+        if (tag == null) {
+            return null;
+        }
+        // tryParse and getOptional: player-supplied data, as in PlaneItem's tooltip.
+        return tag.getString("material").map(Identifier::tryParse)
+            .flatMap(BuiltInRegistries.BLOCK::getOptional).orElse(null);
     }
 
     /** Pinned run-in bearing in compass degrees, or null to work one out from the player. */
@@ -110,6 +197,11 @@ public class PlaneStrikeToolItem extends Item {
         }
 
         ItemStack stack = context.getItemInHand();
+        Selection aircraft = select(player, context.getHand(), stack);
+        if (aircraft.refusal() != null) {
+            AutopilotFeedback.warn(player, aircraft.refusal());
+            return InteractionResult.CONSUME;
+        }
         BlockPos target = context.getClickedPos();
         int distance = getDistance(stack);
         Integer pinned = getBearing(stack);
@@ -119,15 +211,25 @@ public class PlaneStrikeToolItem extends Item {
             ? AutopilotMath.yawFromCompass(pinned)
             : AutopilotSpawner.approachBearingFrom(player.position(), target);
         Blast blast = getBlast(stack);
-        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing, player, blast);
+        PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing, player, blast,
+            aircraft.type());
         if (plane == null) {
             AutopilotFeedback.warn(player, "Could not create the aircraft.");
             return InteractionResult.CONSUME;
         }
+        if (aircraft.material() != null) {
+            plane.setMaterial(aircraft.material());
+        }
+        // Spent like a bow's arrow outside creative: a crashed strike aircraft drops its own item, so
+        // a template that stayed in hand would print a new aircraft of that type with every click.
+        if (!player.getAbilities().instabuild) {
+            aircraft.held().shrink(1);
+        }
         // Compass degrees, not the internal yaw: describeLaunch prints the number as a bearing, and
         // the two conventions are 180 degrees apart.
         AutopilotFeedback.success(player, AutopilotSpawner.describeLaunch(plane, target, distance,
-            AutopilotMath.compassHeading(bearing)) + " Warhead: " + blast.describe() + ".");
+            AutopilotMath.compassHeading(bearing)) + " Warhead: " + blast.describe() + ". "
+            + AutopilotSpawner.describeAirframe(plane));
         return InteractionResult.CONSUME;
     }
 
@@ -137,6 +239,7 @@ public class PlaneStrikeToolItem extends Item {
         if (level.isClientSide()) {
             return InteractionResult.SUCCESS;
         }
+        Selection aircraft = select(player, hand, stack);
 
         if (player.isShiftKeyDown()) {
             // One gesture, two settings. The distance advances on every use, and the blast advances
@@ -163,12 +266,16 @@ public class PlaneStrikeToolItem extends Item {
                 stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
             }
             AutopilotFeedback.info(player, "Strike spawn distance: " + next
-                + " blocks, blast " + blast.describe() + describeBearing(stack) + ".");
+                + " blocks, blast " + blast.describe() + describeBearing(stack)
+                + ", aircraft " + aircraft.label() + ".");
         } else {
             AutopilotFeedback.info(player, "Spawn distance " + getDistance(stack) + " blocks, blast "
-                + getBlast(stack).describe() + describeBearing(stack) + ". "
+                + getBlast(stack).describe() + describeBearing(stack) + ", aircraft " + aircraft.label() + ". "
                 + RunwayOccupancy.activeCount() + "/" + AutopilotConfig.MAX_ACTIVE_AUTOPILOTS
                 + " autopilot aircraft active.");
+        }
+        if (aircraft.refusal() != null) {
+            AutopilotFeedback.warn(player, aircraft.refusal());
         }
         return InteractionResult.CONSUME;
     }
@@ -180,10 +287,14 @@ public class PlaneStrikeToolItem extends Item {
         builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_distance", getDistance(stack)));
         builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_blast",
             getBlast(stack).describe()));
+        AircraftType type = getType(stack);
+        builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_aircraft",
+            AutopilotText.tr("airframe." + type.getSerializedName(), type.getSerializedName())));
         Integer bearing = getBearing(stack);
         builder.accept(bearing == null
             ? Component.translatable(SimplePlanesMod.MODID + ".strike_tool_bearing_auto")
             : Component.translatable(SimplePlanesMod.MODID + ".strike_tool_bearing",
                 String.format("%03d", bearing)));
+        builder.accept(Component.translatable(SimplePlanesMod.MODID + ".strike_tool_aircraft_hint"));
     }
 }

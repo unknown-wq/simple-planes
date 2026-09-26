@@ -230,14 +230,20 @@ belongs to the moment someone asks for it. See COMMANDS.md, "Seeing airfields in
 
 * **Right-click a block** — spawns an aircraft the configured distance away (default 400 blocks, on
   the far side of you so it runs in past you) and sends it at that block at full throttle.
-* **Right-click the air** — status report: distance, warhead and run-in bearing.
+* **Right-click the air** — status report: distance, warhead, run-in bearing and aircraft.
 * **Sneak + right-click the air** — cycle the spawn distance: 100 → 200 → 400 → 800, and the blast
   strength one step each time the distance wraps. See [The strike tool](#the-strike-tool).
-* `/autopilot tool <distance> [bearing] [blast] [blocks] [fire]` — write the full set of settings,
-  including "do not break blocks", "set fire" and a pinned run-in bearing, onto the tool in hand.
+* **A plane item in the other hand** — that plane flies the strike instead of the tool's own
+  aircraft, and is used up (not in creative). See [Choosing the aircraft](#choosing-the-aircraft).
+* `/autopilot tool <distance> [bearing] [blast] [blocks] [fire] [type <aircraft>]` — write the full
+  set of settings, including "do not break blocks", "set fire", a pinned run-in bearing and the
+  aircraft, onto the tool in hand. `/autopilot tool type <aircraft>` changes the aircraft alone.
 
 The aircraft is launched already at attack speed with a booster fitted, cruises the run-in at
 **100 blocks above the ground**, and only then dives — see [The attack run](#the-attack-run).
+It is the starter plane unless the tool says otherwise: `plane`, `large`, `cargo`, `fighter`,
+`airliner` or `random`. The quadcopter crane is peaceful and is never offered; helicopters and the
+airship cannot fly the run and are refused.
 
 ### Route Wand
 
@@ -369,6 +375,13 @@ looks like. Tracking an altitude in the terminal phase does not work either: the
 altitude error into vertical speed and then into a flight path angle, and the aircraft arrives over
 the target still high, going in 54–57 blocks long (measured twice). Aiming the nose is
 self-correcting — the further behind the profile it falls, the steeper the dive it commands.
+
+**Slow airframes push over earlier.** The dive point above is tuned on the starter plane. An airframe
+that pitches more slowly needs a wider arc to get onto the 32° line, and without allowing for it the
+cargo plane went in 88 blocks past the target. `strikePushOverLead` moves the dive point out by the
+extra arc, `(R − R_plane) × tan(16°)`, doubled for the flight path trailing the nose — zero for the
+starter plane and the fighter, so their runs are unchanged. See
+[Choosing the aircraft](#choosing-the-aircraft).
 
 **Fusing.** A 3-block sphere is too small at 3 blocks/tick, so the fuse radius scales with speed and
 is backed by closest-point-of-approach detection: if the range starts opening again inside 24
@@ -2604,6 +2617,10 @@ A keyword branch for the same reason `delay` is one, and accepted after it, so t
 order a person says them (`… delay 30 type cargo`). Omitted, the airframe is the starter plane,
 exactly as before.
 
+`strike` and `tool` take the same `type <aircraft>` keyword with a different set — `plane`, `large`,
+`cargo`, `fighter`, `airliner`, `random` — because an attack run needs no runway but does need a
+fixed wing. See [Choosing the aircraft](#choosing-the-aircraft).
+
 The three are not interchangeable. `getRotationSpeedMultiplier` scales both the pitch and the yaw
 ramp, and the turn radius that falls out of it is what the whole arrival has to be sized around:
 
@@ -2822,7 +2839,8 @@ one spare gesture, and cycling five independent settings through it would be wor
 them — so the full set is written onto the tool in hand by a command:
 
 ```
-/autopilot tool <distance> [bearing] [blast] [blocks] [fire]
+/autopilot tool <distance> [bearing] [blast] [blocks] [fire] [type <aircraft>]
+/autopilot tool type <aircraft>
 ```
 
 The same arguments in the same order as `strike`, minus the target, because the target of a tool
@@ -2836,12 +2854,67 @@ their current value rather than resetting to the default, so a second call can c
 without restating the rest.
 
 Every setting lives on the stack as a data component, so it survives logging out, a chest, and
-death. They are four separate components rather than one `Blast` component because tools already in
+death. They are separate components rather than one `Blast` component because tools already in
 players' inventories carry a bare float under the old key: adding fields beside it keeps those
-tools working, where changing the type would silently reset them.
+tools working, where changing the type would silently reset them. The aircraft is one more,
+`simpleplanes:autopilot_strike_type`; a tool without it sends the starter plane, as every tool did
+before it existed.
 
 The sneak-cycle deliberately preserves `blocks` and `fire` when it advances the strength — a
 gesture meant for the two numbers must not quietly undo the two settings it does not show.
+
+#### Choosing the aircraft
+
+**The gesture: the other hand.** Hold a plane item in the other hand and that plane flies the strike
+— the way a bow takes whatever arrow is in the other hand. The tool has no spare gesture left (the
+sneak-cycle already carries two settings), a GUI would be the only one in the mod's tools, and a
+plane item already says which airframe it is, down to its wood. So nothing new has to be learned or
+remembered: what you hold is what flies. The plane item is **used up** (not in creative) and nothing
+is written back onto the tool, so the next strike without one in hand is the tool's own aircraft
+again. Using it up is not only for feel: a strike aircraft that crashes drops its item, so a plane
+that was merely copied would print a free aircraft on every click. Its material comes along; its
+upgrades do not, because a strike aircraft is built fresh with a booster.
+
+**The stored aircraft.** For repeatable strikes the tool carries its own:
+`/autopilot tool type <aircraft>`, or `type <aircraft>` at the end of the full form. Arguments left
+off keep their current value, as for everything else on the tool. It is on the tooltip, on the
+right-click-the-air status line (`aircraft fighter`, or `aircraft cargo (other hand)` when the other
+hand overrides it) and in the launch message, which names the airframe that was actually built —
+so a `random` strike says what it drew. `random` draws from `plane`, `large` and `cargo`, as on
+`route`.
+
+**Which aircraft.** `plane`, `large`, `cargo`, `fighter` and `airliner`, each flown into a target on
+the rig. Refused with a reason, by the command, by a plane in the other hand and by a stored value
+alike:
+
+| aircraft | why not |
+|---|---|
+| quadcopter (crane) | peaceful; never offered |
+| helicopter | `tickStrike` is a fixed-wing control law. Given the run, it climbed without end (+0.57 blocks/tick, past y=1400) |
+| mini helicopter, medical mini helicopter | same entity. It climbed to 160 above ground, stalled and went off 397 blocks short |
+| airship | cannot dive (at most 0.12 blocks/tick down). It drifted 90 blocks past the target and went down after 1021 ticks |
+
+**Push-over and the minimum distance.** A slow airframe needs room to push over into the dive (see
+[The attack run](#the-attack-run)). Too close in there is no room at all, so the spawn distance is
+raised to `run-in height / tan 32° + push-over lead` — `large` 200, `airliner` 234, `cargo` 318; the
+starter plane and the fighter are not affected. The launch message says so:
+`spawned 318 blocks (not 100: this airframe needs 318 to push over into the dive)`. Both figures come
+from `getRotationSpeedMultiplier`, the same per-airframe number the landing planner sizes its turns
+by; no airframe is named in the strike code.
+
+Measured on a superflat rig, bearing 0, ticks to impact and miss distance in blocks:
+
+| aircraft | 100 | 200 | 400 | 800 |
+|---|---|---|---|---|
+| `plane` | 74 t, 5 | 96 t, 6 | 164 t, 6 | 305 t, 6 |
+| `large` | 95 t, 5 (from 200) | 96 t, 5 | 170 t, 5 | 319 t, 5 |
+| `cargo` | 151 t, 7 (from 318) | 139 t, 7 (from 318) | 166 t, 7 | 299 t, 7 |
+| `fighter` | 50 t, 3 | 82 t, 3 | 149 t, 4 | 268 t, 3 |
+| `airliner` | 138 t, 5 (from 234) | 137 t, 5 (from 234) | 210 t, 5 | 417 t, 5 |
+
+The cargo plane's final is the longest and flattest, so it is the one that meets obstacles: at two
+superflat sites a floating structure in the dive corridor brought it down 73 and 119 blocks short,
+reproducibly, where the steeper airframes passed over. Pin a bearing over open ground.
 
 `status` is the one to watch while debugging. Per aircraft it prints:
 

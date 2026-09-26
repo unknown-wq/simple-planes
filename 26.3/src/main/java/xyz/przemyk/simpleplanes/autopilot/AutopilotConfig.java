@@ -1123,6 +1123,16 @@ public final class AutopilotConfig {
      *  un-flyable one. */
     public static final double STRIKE_MIN_DIVE_DISTANCE = 60.0;
     public static final double STRIKE_MAX_DIVE_DISTANCE = 320.0;
+    /**
+     * How much wider the flight path's push-over into the dive is than the nose's, on an airframe
+     * slower in pitch than the starter plane. Measured on the cargo plane: the nose comes down at
+     * 0.55 deg/tick while the flight path trails it by 10 to 17 degrees of angle of attack. With no
+     * lead it went in 88 blocks past the target from 400 out, with the nose's arc alone 18 to 22 at
+     * 400 and 800, and with twice that arc it hit at 7. Closer in than
+     * {@code AutopilotSpawner#minimumStrikeDistance} there is no room to push over at all.
+     * See {@code PlaneAutopilot#strikePushOverLead}.
+     */
+    public static final double STRIKE_PUSH_OVER_LAG = 2.0;
     /** Speed under which an aircraft on a strike run is considered to have hit something. */
     public static final double STRIKE_STALLED_SPEED = 0.35;
 

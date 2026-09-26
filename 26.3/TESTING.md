@@ -257,7 +257,8 @@ Useful commands (all `/autopilot …`, console works, permission level 2):
 
 | Command | Use |
 |---|---|
-| `strike <x y z> [distance] [bearing] [blast] [blocks] [fire]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test. The last three set the warhead: strength 0–16 (default 4), whether it breaks blocks, whether it sets fire |
+| `strike <x y z> [distance] [bearing] [blast] [blocks] [fire] [type <aircraft>]` | spawns a plane `distance` blocks out and flies an attack run onto the target — the impact test. The last three set the warhead: strength 0–16 (default 4), whether it breaks blocks, whether it sets fire. `type` picks the aircraft: `plane`, `large`, `cargo`, `fighter`, `airliner`, `random` |
+| `tooltest hold\|use\|air\|run …` | the strike tool in a fake player's hands, so the item itself can be tested without a client — see "Recipe: the strike tool without a client" |
 | `route <from> <to> [speed]` | point-to-point cruise — the "does it explode for no reason" test, and the speed-regulation test |
 | `flight <from> <to> [speed] [delay <s>]` | full sortie between two registered airfields — park, wait, taxi, take-off, cruise, approach, landing. `delay` is seconds spent on the parking spot before the runway is asked for |
 | `inbound <x y z> <airfield> [speed]` | one-way arrival into a named airfield — the landing test, without the departure |
@@ -368,6 +369,33 @@ Count fires the same way, one layer higher, before counting blocks (fire sits on
 Use a fresh site per shot — craters must not overlap — and `tick query` for the cost: it prints the
 average and the P50/P95/P99 over the last 100 ticks, which is how the 16.0 ceiling was shown to be
 affordable (1.3 ms average, 6.1 ms P99, against a 50 ms budget).
+
+### Recipe: the strike tool without a client
+
+`/autopilot tooltest` puts items into the hands of a Fabric `FakePlayer` standing at the command's
+position and clicks with them through `ServerPlayerGameMode`, so the item's own code runs: the block
+click, the air click, sneaking, the other hand, the data components. Everything the player is told,
+the strike's outcome report included, goes to the log with the ticks since the last `use`:
+
+```sh
+./cmd.sh "execute positioned 7000 -60 400 run autopilot tooltest hold simpleplanes:plane_strike_tool[simpleplanes:autopilot_strike_type=\"cargo\"]"
+./cmd.sh "execute positioned 7000 -60 400 run autopilot tooltest air"            # status line
+./cmd.sh "execute positioned 7000 -60 400 run autopilot tooltest use 7000 -61 0"
+grep -F "[StrikeTest]" console.log
+# ... +0t Aircraft #12 spawned 400 blocks out ... Aircraft: cargo.
+# ... +166t ... hit the target ... 7 blocks off
+
+# a plane in the other hand overrides the stored aircraft, and is used up
+./cmd.sh "execute positioned 7000 -60 400 run autopilot tooltest hold simpleplanes:plane_strike_tool simpleplanes:large_plane"
+# /autopilot tool, as the fake player (it needs a player holding the tool). The command is queued
+# behind this one, so its effect shows in the next call's report, not in this one's
+./cmd.sh "execute positioned 7000 -60 400 run autopilot tooltest run tool type fighter"
+```
+
+Each `tooltest` call also prints the tool's settings afterwards, with `(component absent)` for a
+tool that has never had an aircraft set, which is how an old tool is told apart from one set to
+`plane`. Time strikes in real time, not under `tick sprint`: chunk loading falls behind and the
+tick counts come out inflated.
 
 ### Recipe: proving something survives a save
 
