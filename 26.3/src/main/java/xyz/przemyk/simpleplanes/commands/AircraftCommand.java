@@ -189,6 +189,7 @@ public final class AircraftCommand {
                 .then(Commands.literal("off").executes(c -> trace(c, false)))));
 
             root.then(Commands.literal("kill").executes(AircraftCommand::kill));
+            FighterCommand.register(root);
 
             dispatcher.register(root);
         });
