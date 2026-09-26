@@ -1,5 +1,32 @@
 # dist
 
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.1.jar`
+
+A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
+has been flown by a player in a client yet, only on a headless dedicated server.
+
+| | |
+|---|---|
+| Minecraft | 26.3 (`>=26.3-alpha.0 <26.4`) |
+| Loader | Fabric, loader ≥ 0.19.5 |
+| Java | 25 |
+| Requires | Fabric API 0.160.5+26.3 or newer |
+| sha256 | `70369dd07c1758516d9aff08a748e9bfd78dd870806674479621a2a65ec5e53e` |
+
+What it adds on top of 5.3.14:
+
+- Fighter jet, mini airliner (wooden or metal skin, six tail logos), airship, mini helicopter
+  (standard or medical livery) and a quadcopter crane that carries mobs on a rope.
+- Missiles in four tiers, launched from silos to coordinates. In this build every flight ends
+  harmlessly: no explosion, no damage, no fire.
+- Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`.
+
+Design and test reports are in `../26.3/design/` and `../26.3/MISSILES.md`. Checked here: a clean
+build, a headless server boot with no errors, every new aircraft spawning, the fighter's take-off
+matching its measured numbers, and a missile arriving on target.
+
+## Stable builds
+
 Compiled builds. **Two jars, one per Minecraft version — take the one that matches your game.**
 Neither needs compiling; drop it and Fabric API into `mods/`.
 
