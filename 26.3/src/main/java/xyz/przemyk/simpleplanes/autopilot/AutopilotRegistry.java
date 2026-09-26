@@ -54,6 +54,7 @@ public final class AutopilotRegistry {
         // seen from opposite ends: this class renews the chunk ticket of an aircraft that is flying,
         // and the dispatcher renews the ticket of one that is waiting to.
         AutopilotDispatcher.init();
+        DispatchService.init();
     }
 
     /** Server-side only: a single-player client shares this JVM and must not add to the count. */

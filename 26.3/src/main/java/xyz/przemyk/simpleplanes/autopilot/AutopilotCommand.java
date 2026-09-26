@@ -299,9 +299,14 @@ public final class AutopilotCommand {
                         .suggests(HELIPAD_SUGGESTIONS)
                         .executes(AutopilotCommand::heliflight)
                         .then(heliDelayArgument())
+                        .then(rotorcraftTypeArgument(AutopilotCommand::heliflight))
                         .then(Commands.argument("speed", heliSpeedArgument())
                             .executes(AutopilotCommand::heliflight)
-                            .then(heliDelayArgument())))));
+                            .then(heliDelayArgument())
+                            .then(rotorcraftTypeArgument(AutopilotCommand::heliflight))))));
+
+            // medevac and dispatch: the rotorcraft dispatch API, for operators and tests.
+            DispatchCommand.attach(root);
 
             root.then(Commands.literal("heliinbound")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
@@ -465,6 +470,17 @@ public final class AutopilotCommand {
             .then(Commands.argument("aircraft", StringArgumentType.word())
                 .suggests((context, builder) -> SharedSuggestionProvider.suggest(
                     Arrays.stream(AircraftType.values()).filter(type -> !type.isDrone())
+                        .map(AircraftType::getSerializedName), builder))
+                .executes(action));
+    }
+
+    /** {@code type <aircraft>} on {@code heliflight}: the rotorcraft airframes only. */
+    private static LiteralArgumentBuilder<CommandSourceStack> rotorcraftTypeArgument(
+            com.mojang.brigadier.Command<CommandSourceStack> action) {
+        return Commands.literal("type")
+            .then(Commands.argument("aircraft", StringArgumentType.word())
+                .suggests((context, builder) -> SharedSuggestionProvider.suggest(
+                    Arrays.stream(AircraftType.values()).filter(AircraftType::isRotorcraft)
                         .map(AircraftType::getSerializedName), builder))
                 .executes(action));
     }
@@ -974,7 +990,7 @@ public final class AutopilotCommand {
     private static int heliflight(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         ServerLevel level = source.getLevel();
-        double cruiseSpeed = heliSpeed(context);
+        double orderedSpeed = heliSpeed(context);
         int delayTicks = optionalInt(context, "seconds", 0) * 20;
         String fromName = StringArgumentType.getString(context, "from");
         String toName = StringArgumentType.getString(context, "to");
@@ -1005,15 +1021,27 @@ public final class AutopilotCommand {
             return 0;
         }
 
+        AircraftType type = AircraftType.HELICOPTER;
+        if (has(context, "aircraft")) {
+            type = AircraftType.byNameOrNull(StringArgumentType.getString(context, "aircraft"));
+            if (type == null || !type.isRotorcraft()) {
+                source.sendFailure(Component.literal("Not a rotorcraft: "
+                    + StringArgumentType.getString(context, "aircraft")));
+                return 0;
+            }
+        }
+        double cruiseSpeed = has(context, "speed") ? RotorcraftProfile.of(type).clampCruiseSpeed(orderedSpeed)
+            : RotorcraftProfile.of(type).defaultCruiseSpeed();
         PlaneEntity plane = AutopilotSpawner.launchHelicopterSortie(level, from, to,
-            source.getPlayer(), cruiseSpeed, delayTicks);
+            source.getPlayer(), cruiseSpeed, delayTicks, type);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the helicopter."));
             return 0;
         }
         AllegianceOption.apply(context, plane);
         double distance = AutopilotMath.horizontalDistance(from.touchdown(), to.touchdown());
-        source.sendSuccess(() -> Component.literal("Helicopter #" + plane.getId() + " on the pad at "
+        String noun = RotorcraftProfile.of(plane).label();
+        source.sendSuccess(() -> Component.literal(noun + " #" + plane.getId() + " on the pad at "
             + from.name() + " (" + String.format("%.1f, %.1f, %.1f",
                 plane.getX(), plane.getY(), plane.getZ())
             + "), sortie to " + to.name() + " - " + Math.round(distance) + " blocks"
