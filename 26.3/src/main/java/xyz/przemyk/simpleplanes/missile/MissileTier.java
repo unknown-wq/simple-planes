@@ -1,16 +1,18 @@
 package xyz.przemyk.simpleplanes.missile;
 
+import xyz.przemyk.simpleplanes.autopilot.Blast;
+
 /**
  * Per-tier geometry and flight parameters. Distances in blocks, speeds in blocks per tick, angles in degrees.
  * Geometry mirrors {@code MissileModel} and {@code LaunchTubeModel} (see MISSILES-MODEL.md); it is repeated here
  * because those are client-only classes.
  */
 public enum MissileTier {
-    //    len  hitbox footprint seat   cruise accel  range   minRange cruiseAgl midTurn termTurn hatchTicks
-    T1(1, 1.0, 0.4F,  1, 1.25, 2.0, 0.10, 1200.0,  24.0, 24.0, 6.0, 12.0, 25),
-    T2(2, 2.0, 0.5F,  1, 2.25, 2.5, 0.10, 2500.0,  32.0, 32.0, 5.0, 10.0, 30),
-    T3(3, 3.0, 0.625F, 2, 3.25, 3.0, 0.10, 5000.0, 48.0, 48.0, 4.0,  9.0, 35),
-    T4(4, 4.0, 1.0F,  2, 4.25, 4.0, 0.12, 10000.0, 64.0, 64.0, 3.5,  8.0, 40);
+    //    len  hitbox footprint seat   cruise accel  range   minRange cruiseAgl midTurn termTurn hatchTicks warhead
+    T1(1, 1.0, 0.4F,  1, 1.25, 2.0, 0.10, 1200.0,  24.0, 24.0, 6.0, 12.0, 25, new Blast(2.0F, true, false)),
+    T2(2, 2.0, 0.5F,  1, 2.25, 2.5, 0.10, 2500.0,  32.0, 32.0, 5.0, 10.0, 30, new Blast(Blast.DEFAULT_POWER, true, false)),
+    T3(3, 3.0, 0.625F, 2, 3.25, 3.0, 0.10, 5000.0, 48.0, 48.0, 4.0,  9.0, 35, new Blast(8.0F, true, true)),
+    T4(4, 4.0, 1.0F,  2, 4.25, 4.0, 0.12, 10000.0, 64.0, 64.0, 3.5,  8.0, 40, new Blast(Blast.MAX_POWER, true, true));
 
     public final int tier;
     /** Nozzle exit to nose tip. */
@@ -31,9 +33,12 @@ public enum MissileTier {
     public final double midcourseTurn;
     public final double terminalTurn;
     public final int hatchTicks;
+    /** What the missile does on arrival or terrain impact, unless the {@code missile_explosions} game rule is off. */
+    public final Blast warhead;
 
     MissileTier(int tier, double length, float hitbox, int footprint, double seatDepth, double cruiseSpeed, double accel,
-                double maxRange, double minRange, double cruiseAgl, double midcourseTurn, double terminalTurn, int hatchTicks) {
+                double maxRange, double minRange, double cruiseAgl, double midcourseTurn, double terminalTurn, int hatchTicks,
+                Blast warhead) {
         this.tier = tier;
         this.length = length;
         this.hitbox = hitbox;
@@ -47,6 +52,7 @@ public enum MissileTier {
         this.midcourseTurn = midcourseTurn;
         this.terminalTurn = terminalTurn;
         this.hatchTicks = hatchTicks;
+        this.warhead = warhead;
     }
 
     /** Silo layers: the top layer plus {@code tier} shaft layers, i.e. the tube is {@code tier + 1} blocks deep. */

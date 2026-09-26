@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "iRi",
+    "S S",
+    "SiS"
+  ],
+  "key": {
+    "i": "#c:ingots/iron",
+    "R": "#c:dusts/redstone",
+    "S": "minecraft:smooth_stone"
+  },
+  "result": {
+    "id": "simpleplanes:launch_silo"
+  }
+}
