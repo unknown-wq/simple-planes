@@ -652,11 +652,20 @@ public final class AutopilotSpawner {
             : AircraftReuse.claim(level, field, stands, airframe, type, spawn);
         if (claimed != null) {
             PlaneEntity plane = claimed.plane();
+            BlockPos stand = claimed.stand();
+            // A fixed-wing airframe standing on its own stand departs from there: the autopilot
+            // chooses the runway end by the ground route from where it actually is, so moving it to
+            // the spawner's square first would only hide the taxi it is about to plan.
+            boolean inPlace = type != AircraftType.HELICOPTER && plane.onGround()
+                && AutopilotMath.horizontalDistance(plane.position(),
+                    new Vec3(stand.getX() + 0.5, 0, stand.getZ() + 0.5)) <= AutopilotConfig.PARKING_SPOT_CLEARANCE;
             AircraftReuse.scrub(plane);
-            orient(plane, spawn.x, spawn.y, spawn.z, heading);
-            // Already tracked, so the move has to land as a teleport rather than as a step: without
-            // this the client interpolates the whole distance from wherever it was parked.
-            plane.setOldPosAndRot();
+            if (!inPlace) {
+                orient(plane, spawn.x, spawn.y, spawn.z, heading);
+                // Already tracked, so the move has to land as a teleport rather than as a step: without
+                // this the client interpolates the whole distance from wherever it was parked.
+                plane.setOldPosAndRot();
+            }
             // "Helicopter" or "Plane", the same two words every other report about an aircraft
             // uses, so a reader does not have to work out which kind of field this was.
             AutopilotFeedback.progress(owner,

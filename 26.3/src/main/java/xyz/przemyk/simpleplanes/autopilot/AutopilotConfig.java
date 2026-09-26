@@ -362,6 +362,56 @@ public final class AutopilotConfig {
     public static final double TAXI_IN_STALLED_SPEED = 0.02;
     /** Ticks below {@link #TAXI_IN_STALLED_SPEED} before a taxi in is declared stuck. */
     public static final int TAXI_IN_STALLED_TICKS = 100;
+
+    // ---- taxi route planner and driver (see TaxiPlanner, TaxiDriver and design/TAXI.md)
+
+    /** Largest height change between neighbouring cells a taxi route may cross; slabs pass, full blocks do not. */
+    public static final double TAXI_MAX_STEP = 0.55;
+    /** Terrain clearance around the collision box: every column this far out must be level ground. */
+    public static final double TAXI_TERRAIN_MARGIN = 0.75;
+    /** Band beyond {@link #TAXI_TERRAIN_MARGIN} in which a cell costs {@link #TAXI_EDGE_COST} extra. */
+    public static final double TAXI_EDGE_BAND = 1.5;
+    public static final double TAXI_EDGE_COST = 0.4;
+    /** Extra cost per block on soil, sand or gravel, so paved aprons and taxiways are preferred. */
+    public static final double TAXI_UNPAVED_COST = 0.15;
+    /** Extra cost per block on the strip for an arrival, so it leaves the runway at the nearest exit. */
+    public static final double TAXI_ARRIVAL_RUNWAY_COST = 1.0;
+    /** Clearance between this aircraft's swept radius and another aircraft's wings or hull. */
+    public static final double TAXI_WING_MARGIN = 1.0;
+    /** Band outside the wing clearance in which parked traffic is avoided by cost rather than by rule. */
+    public static final double TAXI_TRAFFIC_SOFT_BAND = 4.0;
+    public static final double TAXI_TRAFFIC_SOFT_COST = 3.0;
+    /** Radius round the start and a stand in which wing clearance becomes a cost; hull contact never does. */
+    public static final double TAXI_RELAX_RADIUS = 3.0;
+    /** Planner grid margin round the runway, the stands and the requested points, in blocks. */
+    public static final int TAXI_GRID_MARGIN = 24;
+    /** Largest planner grid side; a request beyond it has no route. */
+    public static final int TAXI_GRID_MAX_SIDE = 640;
+    /** Ticks a sampled grid is trusted before the terrain is read again. */
+    public static final int TAXI_GRID_TTL = 200;
+    /** Node expansions one route search may make. */
+    public static final int TAXI_MAX_EXPANSIONS = 150_000;
+    /** Taxi lengths closer than this are treated as equal and the destination decides the end. */
+    public static final double TAXI_TIE_TOLERANCE = 8.0;
+    /** Runway rolled while lining up after an intersection entry, kept in reserve on top of the run. */
+    public static final double TAXI_LINEUP_ALLOWANCE = 8.0;
+    /** Planner cost per block of runway left behind the entry point: a small preference for full length. */
+    public static final double TAXI_ENTRY_COST = 0.1;
+    /** Speed reduction per block of distance to a slower point (braking ramp), blocks/tick per block. */
+    public static final double TAXI_BRAKE_RAMP = 0.08;
+    /** Slowest commanded rolling speed; turning below it is done by pivoting. */
+    public static final double TAXI_CREEP_SPEED = 0.03;
+    /** Ticks held behind a stationary obstacle before the route is planned again. */
+    public static final int TAXI_REPLAN_HOLD_TICKS = 20;
+    /** Interval between route attempts while holding without a route. */
+    public static final int TAXI_REPLAN_INTERVAL = 40;
+    /** Ticks a departure may hold on the taxiway before giving the runway back and waiting parked. */
+    public static final int TAXI_OUT_HOLD_RELEASE = 600;
+    /** Moving time allowed per block of planned route, plus {@link #TAXI_TIME_BASE}. */
+    public static final int TAXI_TIME_PER_BLOCK = 40;
+    public static final int TAXI_TIME_BASE = 600;
+    /** Distance to the stand at which a taxi in stops chasing it. */
+    public static final double TAXI_STAND_RADIUS = 1.5;
     /**
      * Longest departure delay {@code /autopilot flight … delay <seconds>} accepts.
      *

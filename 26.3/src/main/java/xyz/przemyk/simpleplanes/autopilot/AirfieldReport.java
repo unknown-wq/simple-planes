@@ -61,7 +61,7 @@ public final class AirfieldReport {
         Airfield airfield = existing == null
             ? surveyed.withName(uniqueName(data))
             : surveyed.withName(existing.name()).withParkingSpots(existing.parkingSpots())
-                .withRequiredStands(existing.requiresStands());
+                .withRequiredStands(existing.requiresStands()).withOneWay(existing.oneWay());
 
         String surface = airfield.surfaceProblem(level);
         if (surface != null) {

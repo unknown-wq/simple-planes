@@ -248,7 +248,13 @@ public final class AutopilotCommand {
                     .then(Commands.argument("airfield", StringArgumentType.string())
                         .suggests(AIRFIELD_SUGGESTIONS)
                         .then(Commands.argument("spot", BlockPosArgument.blockPos())
-                            .executes(AutopilotCommand::airfieldUnpark)))));
+                            .executes(AutopilotCommand::airfieldUnpark))))
+                // oneway <airfield> <designator|off>: the runway is used in one direction only.
+                .then(Commands.literal("oneway")
+                    .then(Commands.argument("airfield", StringArgumentType.string())
+                        .suggests(AIRFIELD_SUGGESTIONS)
+                        .then(Commands.argument("direction", StringArgumentType.word())
+                            .executes(AutopilotCommand::airfieldOneWay)))));
 
             // ---- helipads and helicopter sorties ----
             //
@@ -1178,6 +1184,13 @@ public final class AutopilotCommand {
         BlockPos spot = BlockPosArgument.getBlockPos(context, "spot");
         return AirfieldBrowser.unpark(AutopilotOutput.toSource(source), source.getLevel(),
             StringArgumentType.getString(context, "airfield"), spot) ? 1 : 0;
+    }
+
+    private static int airfieldOneWay(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        return AirfieldBrowser.oneWay(AutopilotOutput.toSource(source), source.getLevel(),
+            StringArgumentType.getString(context, "airfield"),
+            StringArgumentType.getString(context, "direction")) ? 1 : 0;
     }
 
     private static @Nullable Airfield named(CommandContext<CommandSourceStack> context) {

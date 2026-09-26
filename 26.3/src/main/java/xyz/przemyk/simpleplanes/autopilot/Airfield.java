@@ -32,7 +32,7 @@ import java.util.List;
  */
 public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, int width,
                       List<BlockPos> parkingSpots, int approachObstaclesA, int approachObstaclesB,
-                      boolean requiresStands) {
+                      boolean requiresStands, String oneWay) {
 
     /** Stored obstacle count meaning "never measured" — an airfield from before they were recorded. */
     public static final int OBSTACLES_UNKNOWN = -1;
@@ -56,11 +56,22 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         // rule existed also has no marked stand, and it has to go on working exactly as it did.
         // Nothing already on disk is reinterpreted — an absent key means "grandfathered", which is
         // what every saved airfield is. Only a survey run by this build writes true.
-        Codec.BOOL.optionalFieldOf("requires_stands", false).forGetter(Airfield::requiresStands)
+        Codec.BOOL.optionalFieldOf("requires_stands", false).forGetter(Airfield::requiresStands),
+        // Designator of the only direction the runway is used in, or empty for both. Optional, so
+        // every stored airfield loads as two-way.
+        Codec.STRING.optionalFieldOf("one_way", "").forGetter(Airfield::oneWay)
     ).apply(instance, Airfield::new));
 
     public Airfield {
         parkingSpots = List.copyOf(parkingSpots);
+        oneWay = oneWay == null ? "" : oneWay;
+    }
+
+    public Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, int width,
+                    List<BlockPos> parkingSpots, int approachObstaclesA, int approachObstaclesB,
+                    boolean requiresStands) {
+        this(name, thresholdA, thresholdB, width, parkingSpots, approachObstaclesA, approachObstaclesB,
+            requiresStands, "");
     }
 
     /** An airfield with no marked parking, no measured approaches and no stand requirement. */
@@ -70,17 +81,46 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
 
     public Airfield withName(String newName) {
         return new Airfield(newName, thresholdA, thresholdB, width, parkingSpots,
-            approachObstaclesA, approachObstaclesB, requiresStands);
+            approachObstaclesA, approachObstaclesB, requiresStands, oneWay);
     }
 
     public Airfield withParkingSpots(List<BlockPos> spots) {
         return new Airfield(name, thresholdA, thresholdB, width, spots,
-            approachObstaclesA, approachObstaclesB, requiresStands);
+            approachObstaclesA, approachObstaclesB, requiresStands, oneWay);
     }
 
     public Airfield withRequiredStands(boolean required) {
         return new Airfield(name, thresholdA, thresholdB, width, parkingSpots,
-            approachObstaclesA, approachObstaclesB, required);
+            approachObstaclesA, approachObstaclesB, required, oneWay);
+    }
+
+    /** This airfield restricted to one direction ({@code designator}), or two-way for "". */
+    public Airfield withOneWay(String designator) {
+        return new Airfield(name, thresholdA, thresholdB, width, parkingSpots,
+            approachObstaclesA, approachObstaclesB, requiresStands, designator);
+    }
+
+    /**
+     * The only end in use when the runway is one-way, or null for a two-way runway. A stored
+     * designator that matches neither end (the strip was re-surveyed the other way round) reads as
+     * two-way rather than closing the field.
+     */
+    public @Nullable RunwayEnd oneWayEnd() {
+        if (oneWay.isEmpty()) {
+            return null;
+        }
+        for (RunwayEnd end : ends()) {
+            if (end.designator().equals(oneWay)) {
+                return end;
+            }
+        }
+        return null;
+    }
+
+    /** Whether movements in the direction of {@code end} are allowed. */
+    public boolean allows(RunwayEnd end) {
+        RunwayEnd only = oneWayEnd();
+        return only == null || only.designator().equals(end.designator());
     }
 
     /**
@@ -191,6 +231,10 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      *             a departure does, since it is standing on the runway either way
      */
     public RunwayEnd bestEnd(Level level, @Nullable Vec3 from) {
+        RunwayEnd only = oneWayEnd();
+        if (only != null) {
+            return only;
+        }
         RunwayEnd a = endA();
         RunwayEnd b = endB();
         int obstaclesA = approachObstacles(level, a);
@@ -330,7 +374,7 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         for (double side : new double[] {90.0, -90.0}) {
             Vec3 apron = AutopilotMath.pointAlong(behind, heading + side, sideways);
             Vec3 spot = groundedIfLevelWith(level, apron, threshold.y);
-            if (spot != null && taxiPathIsRollable(level, spot, threshold)
+            if (spot != null && reachesRunway(level, departure.airfield(), spot, threshold)
                 && standFree(level, spot, null, null)) {
                 return new ParkingSpot(spot, AutopilotMath.headingTo(spot, threshold), false, null);
             }
@@ -338,7 +382,7 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
 
         // Straight back from the threshold — now held to the same tolerance as the aprons.
         Vec3 straightBack = groundedIfLevelWith(level, behind, threshold.y);
-        if (straightBack != null && taxiPathIsRollable(level, straightBack, threshold)
+        if (straightBack != null && reachesRunway(level, departure.airfield(), straightBack, threshold)
             && standFree(level, straightBack, null, null)) {
             return new ParkingSpot(straightBack, AutopilotMath.headingTo(straightBack, threshold), false, null);
         }
@@ -406,39 +450,43 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * @param from  where the aircraft came to rest
      * @param asker the aircraft asking, excluded from the "already taken" tests
      */
-    public static @Nullable TaxiIn arrivalStand(Level level, Airfield airfield, Vec3 from,
-                                                @Nullable PlaneEntity asker) {
-        ParkingSpot best = null;
-        List<Vec3> bestRoute = List.of();
-        double bestDistance = Double.MAX_VALUE;
+    public static TaxiIn arrivalStand(Level level, Airfield airfield, Vec3 from, @Nullable PlaneEntity asker) {
+        List<TaxiPlanner.Goal> goals = new ArrayList<>();
+        List<ParkingSpot> spots = new ArrayList<>();
         for (BlockPos spot : airfield.parkingSpots()) {
             double distance = AutopilotMath.horizontalDistance(from,
                 new Vec3(spot.getX() + 0.5, from.y, spot.getZ() + 0.5));
-            if (distance > AutopilotConfig.TAXI_IN_MAX_DISTANCE || distance >= bestDistance) {
+            if (distance > AutopilotConfig.TAXI_IN_MAX_DISTANCE) {
                 continue;
             }
-            // Level ground on the square and level ground every couple of blocks along the line the
-            // aircraft is going to drive down — the same two tests a departure's spot passes, asked
-            // about the legs that are actually going to be driven rather than about the threshold.
             Vec3 probe = new Vec3(spot.getX() + 0.5, 0, spot.getZ() + 0.5);
             Vec3 position = groundedIfLevelWith(level, probe, from.y);
             if (position == null || !standFree(level, airfield, position, spot, asker)) {
                 continue;
             }
-            List<Vec3> route = taxiInRoute(level, airfield, from, position);
-            if (route == null) {
-                continue;
-            }
-            best = new ParkingSpot(position, AutopilotMath.headingTo(from, position),
-                airfield.isOnStrip(spot), spot);
-            bestRoute = route;
-            bestDistance = distance;
+            goals.add(TaxiPlanner.standGoal(position, spot));
+            spots.add(new ParkingSpot(position, AutopilotMath.headingTo(from, position),
+                airfield.isOnStrip(spot), spot));
         }
-        return best == null ? null : new TaxiIn(best, bestRoute);
+        if (goals.isEmpty()) {
+            return new TaxiIn(null, null, "no free stand", false);
+        }
+        TaxiPlanner.Dims dims = asker == null ? TaxiPlanner.dims((AircraftType) null) : TaxiPlanner.dims(asker);
+        TaxiPlanner.Plan plan = TaxiPlanner.plan(level, airfield, asker, dims, from, goals, true);
+        if (plan.route() == null) {
+            String problem = plan.problem() == null ? "no route" : plan.problem();
+            return new TaxiIn(null, null, problem, plan.blocker() != 0 || problem.startsWith("blocked"));
+        }
+        return new TaxiIn(spots.get(plan.route().goal()), plan.route(), null, false);
     }
 
-    /** A chosen stand and the legs to drive to it, in order, ending on the stand itself. */
-    public record TaxiIn(ParkingSpot stand, List<Vec3> route) {}
+    /**
+     * A chosen stand and the route to it, or why there is none.
+     *
+     * @param traffic true when only other aircraft are in the way, so waiting may help
+     */
+    public record TaxiIn(@Nullable ParkingSpot stand, TaxiPlanner.@Nullable Route route,
+                         @Nullable String problem, boolean traffic) {}
 
     /**
      * The first marked apron this departure can actually use, or null when the airfield has none
@@ -480,7 +528,7 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         ParkingSpot distant = null;
         double distantRoll = Double.MAX_VALUE;
         for (BlockPos spot : airfield.parkingSpots()) {
-            Vec3 position = usableParkingSpot(level, spot, threshold);
+            Vec3 position = usableParkingSpot(level, airfield, spot, threshold);
             if (position == null || !standFree(level, airfield, position, spot, null)) {
                 continue;
             }
@@ -510,96 +558,13 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * here, however long it is, so a stand separated from the departure threshold by a ditch is
      * rejected exactly as it always was.
      */
-    private static @Nullable Vec3 usableParkingSpot(Level level, BlockPos spot, Vec3 threshold) {
+    private static @Nullable Vec3 usableParkingSpot(Level level, Airfield airfield, BlockPos spot, Vec3 threshold) {
         Vec3 probe = new Vec3(spot.getX() + 0.5, 0, spot.getZ() + 0.5);
         Vec3 position = groundedIfLevelWith(level, probe, threshold.y);
-        if (position == null || !taxiPathIsRollable(level, position, threshold)) {
+        if (position == null || !reachesRunway(level, airfield, position, threshold)) {
             return null;
         }
         return position;
-    }
-
-    /**
-     * The route an arrival drives from where it stopped to a stand: turn off the runway, run down
-     * the apron, turn in. Null when none of the ground it would cross is usable.
-     *
-     * <p>This is the only routing in the whole feature, and it is three straight legs rather than a
-     * path search. Two measurements on the rig made each of them necessary.
-     *
-     * <p><b>Turning off first, rather than heading straight for the stand.</b> A stand beside the far
-     * threshold of a 183-block runway is 150 blocks from where an arrival stops, and the straight
-     * line to it runs down the strip for most of that — the aircraft would still be holding the
-     * runway 545 ticks after touchdown, against 794 ticks for the entire arrival it is meant to
-     * improve on. Turning off sideways costs about 16 blocks of extra track, 80 ticks at
-     * {@link AutopilotConfig#TAXI_SPEED}, and clears the landing surface in that time instead.
-     *
-     * <p><b>Running down the apron rather than cutting across it.</b> Stands are usually marked in a
-     * row, and a straight line from the runway to the far one goes through the near one — where an
-     * aircraft is very likely to be standing, since that is what stands are for. Measured: two
-     * arrivals a few seconds apart, the second correctly picked the further stand because the nearer
-     * was claimed, drove at it in a straight line and came to rest against the first aircraft 18
-     * blocks short. So the middle leg is flown one {@link AutopilotConfig#PARKING_SPOT_CLEARANCE}
-     * outboard of the outermost stand on that side, which is a taxiway lane in everything but name,
-     * and the aircraft turns in only when it is abeam its own stand.
-     *
-     * <p>A stand that is not off to one side at all — marked off the end of the runway, or on the
-     * strip itself — gets neither leg: there is no side to turn off towards, and the natural exit is
-     * along the strip. Whatever route is produced, every leg is checked for level ground before the
-     * aircraft is committed to it, and a lane that fails falls back to the direct line rather than
-     * costing the aircraft its stand.
-     */
-    public static @Nullable List<Vec3> taxiInRoute(Level level, Airfield airfield, Vec3 from, Vec3 stand) {
-        double heading = AutopilotMath.headingTo(airfield.pointA(), airfield.pointB());
-        double standLateral = AutopilotMath.lateralOffset(airfield.pointA(), heading, stand);
-        double halfWidth = airfield.width() / 2.0;
-        if (Math.abs(standLateral) > halfWidth) {
-            double side = Math.signum(standLateral);
-            // Outboard of every stand on this side, and never inside the rectangle the runway
-            // release is tested against — a lane on the boundary would leave the release depending
-            // on which side of a rounding the nosewheel happened to sit.
-            double lane = halfWidth + AutopilotConfig.RUNWAY_CLEAR_MARGIN + 1.0;
-            for (BlockPos other : airfield.parkingSpots()) {
-                double lateral = AutopilotMath.lateralOffset(airfield.pointA(), heading,
-                    new Vec3(other.getX() + 0.5, 0, other.getZ() + 0.5));
-                if (Math.signum(lateral) == side) {
-                    lane = Math.max(lane, Math.abs(lateral) + AutopilotConfig.PARKING_SPOT_CLEARANCE);
-                }
-            }
-            List<Vec3> route = new ArrayList<>(3);
-            double fromAlong = AutopilotMath.alongTrack(airfield.pointA(), heading, from);
-            double standAlong = AutopilotMath.alongTrack(airfield.pointA(), heading, stand);
-            if (AutopilotMath.lateralOffset(airfield.pointA(), heading, from) * side < lane - 1.0) {
-                route.add(airfield.stripPoint(fromAlong, lane * side, stand.y));
-            }
-            if (Math.abs(standAlong - fromAlong) > AutopilotConfig.TAXI_IN_ARRIVED_RADIUS) {
-                route.add(airfield.stripPoint(standAlong, lane * side, stand.y));
-            }
-            route.add(stand);
-            if (routeIsRollable(level, from, route)) {
-                return route;
-            }
-        }
-        List<Vec3> direct = List.of(stand);
-        return routeIsRollable(level, from, direct) ? direct : null;
-    }
-
-    /** A point in runway coordinates: {@code along} blocks from threshold A, {@code lateral} across. */
-    private Vec3 stripPoint(double along, double lateral, double elevation) {
-        double heading = AutopilotMath.headingTo(pointA(), pointB());
-        Vec3 point = AutopilotMath.pointAlong(
-            AutopilotMath.pointAlong(pointA(), heading, along), heading + 90.0, lateral);
-        return new Vec3(point.x, elevation, point.z);
-    }
-
-    private static boolean routeIsRollable(Level level, Vec3 from, List<Vec3> route) {
-        Vec3 previous = from;
-        for (Vec3 leg : route) {
-            if (!taxiPathIsRollable(level, previous, leg)) {
-                return false;
-            }
-            previous = leg;
-        }
-        return true;
     }
 
     /**
@@ -686,8 +651,8 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
 
         double distance = AutopilotMath.horizontalDistance(probe, nearest);
         if (distance > AutopilotConfig.PARKING_MAX_TAXI_DISTANCE) {
-            return String.format("%.0f blocks from the nearest threshold; the taxi is a straight line,"
-                + " so keep it within %.0f", distance, AutopilotConfig.PARKING_MAX_TAXI_DISTANCE);
+            return String.format("%.0f blocks from the nearest threshold; keep it within %.0f",
+                distance, AutopilotConfig.PARKING_MAX_TAXI_DISTANCE);
         }
         int surface = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
         if (surface == TerrainScanner.UNKNOWN_HEIGHT) {
@@ -702,8 +667,8 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
                 + " down a step", Math.abs(surface - nearest.y));
         }
         Vec3 position = new Vec3(probe.x, surface, probe.z);
-        if (!taxiPathIsRollable(level, position, nearest)) {
-            return "the ground between it and the threshold is not level all the way";
+        if (!reachesRunway(level, airfield, position, nearest)) {
+            return "there is no level route from it to the runway";
         }
         for (BlockPos existing : airfield.parkingSpots()) {
             // Horizontally, and about the column rather than the block that was named. A stand is
@@ -851,6 +816,19 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
             return null;
         }
         return new Vec3(probe.x, surface, probe.z);
+    }
+
+    /**
+     * Whether an aircraft on {@code from} can taxi onto the runway. On the server this is a route
+     * search ({@link TaxiPlanner#reachable}) with a generic airframe and no traffic; on the client,
+     * which has no planner grid, the straight line to {@code threshold} is walked instead.
+     */
+    static boolean reachesRunway(Level level, Airfield airfield, Vec3 from, Vec3 threshold) {
+        if (level.isClientSide()) {
+            return taxiPathIsRollable(level, from, threshold);
+        }
+        return TaxiPlanner.reachable(level, airfield, TaxiPlanner.dims((AircraftType) null), from,
+            List.of(TaxiPlanner.centrelineGoal(airfield)));
     }
 
     /**
@@ -1399,7 +1377,7 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         Airfield moved = new Airfield(airfield.name(), a, b, airfield.width());
         return new Airfield(airfield.name(), a, b, airfield.width(), airfield.parkingSpots(),
             countApproachObstacles(level, moved.endA()),
-            countApproachObstacles(level, moved.endB()), airfield.requiresStands());
+            countApproachObstacles(level, moved.endB()), airfield.requiresStands(), airfield.oneWay());
     }
 
     /**
