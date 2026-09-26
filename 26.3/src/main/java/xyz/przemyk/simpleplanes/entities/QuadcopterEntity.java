@@ -1,44 +1,62 @@
 package xyz.przemyk.simpleplanes.entities;
 
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
 import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.InterpolationHandler;
 import net.minecraft.world.entity.LinearInterpolationHandler;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Explosion;
+import net.minecraft.world.level.ExplosionDamageCalculator;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.gamerules.GameRules;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.storage.TagValueInput;
 import net.minecraft.world.level.storage.TagValueOutput;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
-import org.joml.Vector3f;
-import org.joml.Vector3fc;
 import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.SimplePlanesMod;
+import xyz.przemyk.simpleplanes.autopilot.Blast;
+import xyz.przemyk.simpleplanes.crane.CraneFeedback;
+import xyz.przemyk.simpleplanes.crane.CraneRegistry;
+import xyz.przemyk.simpleplanes.entities.crane.CraneController;
+import xyz.przemyk.simpleplanes.entities.crane.MultirotorPhysics;
+import xyz.przemyk.simpleplanes.entities.crane.SlungLoad;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
 
+import java.util.Locale;
+import java.util.UUID;
+
 /**
- * Quadcopter crane. Stub: server-authoritative, holds its position (no gravity, no controller) and keeps
- * a straight-down rope. The multirotor physics, controller and load handling replace the tick later.
+ * Quadcopter crane: an unmanned, server-flown multirotor that carries one mob or player on a rope.
+ * Physics in {@code entities/crane}; this class owns the state machine, the load as a passenger,
+ * collisions, damage and persistence.
  */
 public class QuadcopterEntity extends Entity {
 
@@ -48,11 +66,61 @@ public class QuadcopterEntity extends Entity {
     public static final EntityDataAccessor<Integer> TIME_SINCE_HIT = SynchedEntityData.defineId(QuadcopterEntity.class, EntityDataSerializers.INT);
     public static final EntityDataAccessor<Boolean> CARRYING = SynchedEntityData.defineId(QuadcopterEntity.class, EntityDataSerializers.BOOLEAN);
     public static final EntityDataAccessor<Float> ROPE_LENGTH = SynchedEntityData.defineId(QuadcopterEntity.class, EntityDataSerializers.FLOAT);
-    /** Hook position relative to the winch point, which is 0.30 above the entity origin. */
-    public static final EntityDataAccessor<Vector3fc> HOOK_OFFSET = SynchedEntityData.defineId(QuadcopterEntity.class, EntityDataSerializers.VECTOR3);
+    public static final EntityDataAccessor<Float> ROPE_THETA_X = SynchedEntityData.defineId(QuadcopterEntity.class, EntityDataSerializers.FLOAT);
+    public static final EntityDataAccessor<Float> ROPE_THETA_Z = SynchedEntityData.defineId(QuadcopterEntity.class, EntityDataSerializers.FLOAT);
+    public static final EntityDataAccessor<Float> THRUST = SynchedEntityData.defineId(QuadcopterEntity.class, EntityDataSerializers.FLOAT);
 
     public static final int MAX_HEALTH = 10;
-    public static final double WINCH_HEIGHT = 0.30;
+    public static final double WINCH_HEIGHT = SlungLoad.WINCH_Y;
+
+    /** Q3, the power model: true = electric and always powered. */
+    public static final boolean ALWAYS_POWERED = true;
+
+    public static final double PICK_CLEARANCE = 1.5;
+    public static final double ARRIVE_H = 0.6;
+    public static final double ARRIVE_V = 0.8;
+    public static final int ARRIVE_TICKS = 10;
+    public static final double HOOK_REACH = 0.6;
+    public static final double FOLLOW_RANGE = 8.0;
+    public static final int LOWER_TIMEOUT = 160;
+    public static final int PICKUP_TIMEOUT = 2400;
+    public static final double CRUISE_AGL = 10.0;
+    public static final double CLIMB_FIRST = 3.0;
+    public static final double CLIMB_FIRST_SPEED = 0.15;
+    public static final int LOOKAHEAD = 24;
+    public static final double RELEASE_GAP = 0.2;
+    public static final double RELEASE_BAND = 0.3;
+    public static final int RELEASE_TICKS = 5;
+    public static final double FINAL_DESCENT_SPEED = 0.10;
+    public static final int LOWER_LOAD_TIMEOUT = 600;
+    public static final double STOW_AGL = 6.0;
+    public static final double RETURN_DISTANCE = 4.0;
+    public static final double RETURN_AGL = 3.0;
+    public static final double LAND_RATE = 0.15;
+    public static final double LAND_ALIGN = 0.3;
+    public static final double LAND_HOLD_AGL = 1.5;
+    /** Q7: beyond this distance a recall is refused and the crane hovers where it is. */
+    public static final double RECALL_RANGE = 64.0;
+    public static final int OVERLOAD_TICKS = 20;
+    public static final double OVERLOAD_VY = -0.02;
+    public static final double OVERLOAD_RELEASE_AGL = 1.5;
+    public static final double IMPACT_SPEED = 0.3;
+    public static final double IMPACT_DAMAGE = 4.0;
+    public static final int IMPACT_COOLDOWN = 8;
+    public static final float DEATH_BLAST = 1.5F;
+    public static final int FALL_TIMEOUT = 1200;
+    public static final String LOAD_TAG = "crane-load";
+
+    // Load rules (Q8): these constants and refusal() are the only place that decides what may be lifted.
+    public static final TagKey<EntityType<?>> CRANE_LIFTABLE = TagKey.create(Registries.ENTITY_TYPE,
+        Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_liftable"));
+    public static final TagKey<EntityType<?>> CRANE_NEVER = TagKey.create(Registries.ENTITY_TYPE,
+        Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_never"));
+    public static final boolean ALLOW_HOSTILES = false;
+
+    public enum State { IDLE, TO_PICKUP, LOWER, ATTACH, WINCH_IN, CARRY, LOWER_LOAD, RELEASE, STOW, RETURN, LAND, OVERLOAD }
+
+    private static final boolean TRACE_ALL = Boolean.getBoolean("simpleplanes.crane.trace");
 
     public Quaternionf Q_Client = new Quaternionf();
     public Quaternionf Q_Prev = new Quaternionf();
@@ -62,7 +130,34 @@ public class QuadcopterEntity extends Entity {
     private Block material = Blocks.OAK_PLANKS;
     private int damageTimeout;
     private int lerpStepsQ;
-    private Vector3f hookOffsetPrev = new Vector3f(0, -1, 0);
+    private final double[] hookPrev = {0, WINCH_HEIGHT - 1, 0};
+    private final double[] hookNow = {0, WINCH_HEIGHT - 1, 0};
+
+    public final MultirotorPhysics phys = new MultirotorPhysics();
+    public final CraneController controller = new CraneController();
+    public final SlungLoad rope = new SlungLoad();
+    private final double[] extra = new double[3];
+    private State state = State.IDLE;
+    private State afterStow = State.IDLE;
+    private @Nullable Vec3 target;
+    private @Nullable Vec3 delivery;
+    private @Nullable Vec3 home;
+    private @Nullable Vec3 lowerStart;
+    private @Nullable UUID owner;
+    private @Nullable UUID pickupId;
+    private @Nullable Entity pendingLoad;
+    private @Nullable UUID releasedLoad;
+    private boolean rotorsOff;
+    private boolean physInit;
+    private boolean checkLoadAfterLoad;
+    private boolean dying;
+    private boolean trace = TRACE_ALL;
+    private int stateTicks;
+    private int arriveTicks;
+    private int satTicks;
+    private int impactCooldown;
+    private int traceTick;
+    private String loadName = "none";
 
     public QuadcopterEntity(EntityType<? extends QuadcopterEntity> entityType, Level level) {
         super(entityType, level);
@@ -75,13 +170,15 @@ public class QuadcopterEntity extends Entity {
         builder.define(HEALTH, MAX_HEALTH);
         builder.define(TIME_SINCE_HIT, 0);
         builder.define(CARRYING, false);
-        builder.define(ROPE_LENGTH, 1.0f);
-        builder.define(HOOK_OFFSET, new Vector3f(0, -1.0f, 0));
+        builder.define(ROPE_LENGTH, (float) SlungLoad.L_MIN);
+        builder.define(ROPE_THETA_X, 0.0F);
+        builder.define(ROPE_THETA_Z, 0.0F);
+        builder.define(THRUST, 0.0F);
     }
 
     @Override
     protected InterpolationHandler createInterpolationHandler() {
-        return LinearInterpolationHandler.create(this, 10);
+        return LinearInterpolationHandler.create(this, 3);
     }
 
     // ---- synched state ----
@@ -141,33 +238,75 @@ public class QuadcopterEntity extends Entity {
     }
 
     public void setRopeLength(float length) {
-        entityData.set(ROPE_LENGTH, length);
+        rope.length = Mth.clamp(length, SlungLoad.L_MIN, SlungLoad.L_MAX);
+        rope.targetLength = rope.length;
+        entityData.set(ROPE_LENGTH, (float) rope.length);
     }
 
-    public Vector3fc getHookOffset() {
-        return entityData.get(HOOK_OFFSET);
+    public float getThrust() {
+        return entityData.get(THRUST);
     }
 
-    public void setHookOffset(Vector3fc offset) {
-        entityData.set(HOOK_OFFSET, new Vector3f(offset));
+    /** Hook (the load's box top) relative to the entity origin, from the synched rope. */
+    public double[] hookOffset(double[] out) {
+        return SlungLoad.hookOffset(getRopeLength(), entityData.get(ROPE_THETA_X), entityData.get(ROPE_THETA_Z), out);
     }
 
     /** World position of the hook, interpolated for rendering. */
     public Vec3 hookWorld(float partialTicks) {
-        Vector3fc now = getHookOffset();
         Vec3 base = getPosition(partialTicks);
         return new Vec3(
-            base.x + Mth.lerp(partialTicks, hookOffsetPrev.x, now.x()),
-            base.y + WINCH_HEIGHT + Mth.lerp(partialTicks, hookOffsetPrev.y, now.y()),
-            base.z + Mth.lerp(partialTicks, hookOffsetPrev.z, now.z()));
+            base.x + Mth.lerp(partialTicks, hookPrev[0], hookNow[0]),
+            base.y + Mth.lerp(partialTicks, hookPrev[1], hookNow[1]),
+            base.z + Mth.lerp(partialTicks, hookPrev[2], hookNow[2]));
     }
 
-    // ---- behaviour ----
-
-    @Override
-    public boolean isNoGravity() {
-        return true;
+    public Vec3 hookPosition() {
+        double[] o = hookOffset(new double[3]);
+        return position().add(o[0], o[1], o[2]);
     }
+
+    public State getState() {
+        return state;
+    }
+
+    public @Nullable UUID getOwner() {
+        return owner;
+    }
+
+    public void setOwner(@Nullable UUID owner) {
+        this.owner = owner;
+    }
+
+    public @Nullable Vec3 getTarget() {
+        return target;
+    }
+
+    public @Nullable Vec3 getDelivery() {
+        return delivery;
+    }
+
+    public @Nullable Vec3 getHome() {
+        return home;
+    }
+
+    public boolean isSaturated() {
+        return controller.saturated;
+    }
+
+    public String getLoadName() {
+        return loadName;
+    }
+
+    public boolean isDying() {
+        return dying;
+    }
+
+    public void setTrace(boolean on) {
+        trace = on;
+    }
+
+    // ---- entity behaviour ----
 
     @Override
     public @Nullable LivingEntity getControllingPassenger() {
@@ -176,7 +315,19 @@ public class QuadcopterEntity extends Entity {
 
     @Override
     protected boolean canAddPassenger(Entity passenger) {
-        return false;
+        return passenger == pendingLoad && getPassengers().isEmpty();
+    }
+
+    @Override
+    protected void positionRider(Entity passenger, MoveFunction moveFunction) {
+        double[] o = hookOffset(new double[3]);
+        moveFunction.accept(passenger, getX() + o[0], getY() + o[1] - passenger.getBbHeight(), getZ() + o[2]);
+    }
+
+    @Override
+    public Vec3 getDismountLocationForPassenger(LivingEntity passenger) {
+        double[] o = hookOffset(new double[3]);
+        return new Vec3(getX() + o[0], getY() + o[1] - passenger.getBbHeight(), getZ() + o[2]);
     }
 
     @Override
@@ -197,31 +348,200 @@ public class QuadcopterEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
-        hookOffsetPrev.set(getHookOffset());
         if (level().isClientSide()) {
-            propellerRotationOld = propellerRotationNew;
-            propellerRotationNew += 0.6f;
-            if (getTimeSinceHit() > 0) {
-                setTimeSinceHit(getTimeSinceHit() - 1);
-            }
-            tickLerp();
+            clientTick();
             return;
         }
-
-        setDeltaMovement(getDeltaMovement().scale(0.9));
-        move(MoverType.SELF, getDeltaMovement());
-
-        float rope = getRopeLength();
-        Vector3fc hook = getHookOffset();
-        if (hook.x() != 0 || hook.z() != 0 || hook.y() != -rope) {
-            setHookOffset(new Vector3f(0, -rope, 0));
+        ServerLevel level = (ServerLevel) level();
+        if (!physInit) {
+            initPhysics();
         }
+        CraneRegistry.track(this);
         if (damageTimeout > 0) {
             damageTimeout--;
         }
         if (getTimeSinceHit() > 0) {
             setTimeSinceHit(getTimeSinceHit() - 1);
         }
+        if (impactCooldown > 0) {
+            impactCooldown--;
+        }
+        phys.p[0] = getX();
+        phys.p[1] = getY();
+        phys.p[2] = getZ();
+
+        if (dying || getHealth() <= 0) {
+            tickDying(level);
+            return;
+        }
+        checkLoad();
+        tickStateMachine(level);
+
+        if (rotorsOff || !ALWAYS_POWERED) {
+            phys.thrust = 0;
+            phys.attitude(0, 0, phys.yaw);
+            controller.saturated = false;
+            if (onGround()) {
+                phys.v[0] = phys.v[2] = 0;
+            }
+        } else {
+            Vec3 t = target == null ? position() : target;
+            controller.control(phys, rope, t.x, t.y, t.z);
+        }
+        satTicks = controller.saturated ? satTicks + 1 : 0;
+        physicsStep();
+        rope.winch();
+        syncOut();
+        if (trace) {
+            CraneFeedback.trace(this, traceTick++);
+        }
+    }
+
+    private void initPhysics() {
+        physInit = true;
+        phys.yaw = getYRot();
+        Vec3 v = getDeltaMovement();
+        phys.v[0] = v.x;
+        phys.v[1] = v.y;
+        phys.v[2] = v.z;
+        rope.mass = 0;
+        phys.mass = 1;
+        if (target == null && !rotorsOff) {
+            target = position();
+        }
+        if (home == null) {
+            home = position();
+        }
+        if (checkLoadAfterLoad) {
+            checkLoadAfterLoad = false;
+            Entity load = getFirstPassenger();
+            if (isCarrying() && load != null) {
+                attachMass(load);
+            } else if (isCarrying()) {
+                setCarrying(false);
+                CraneFeedback.report(this, "load lost: " + loadName + " did not come back with the save");
+                loadName = "none";
+                if (isCarryingState(state)) {
+                    enter(State.STOW);
+                }
+            }
+        }
+    }
+
+    private void physicsStep() {
+        double vx0 = phys.v[0], vy0 = phys.v[1], vz0 = phys.v[2];
+        double thX = rope.thetaX, thZ = rope.thetaZ;
+        rope.reaction(phys, extra);
+        phys.step(extra);
+        Vec3 wanted = new Vec3(phys.v[0], phys.v[1], phys.v[2]);
+        Vec3 before = position();
+        setDeltaMovement(wanted);
+        move(MoverType.SELF, wanted);
+
+        Entity load = getFirstPassenger();
+        if (load != null && isCarrying()) {
+            // the load collides too: the drone may not move where the load's box would enter a block
+            if (!collides(load, loadBox(load, before)) && collides(load, loadBox(load, position()))) {
+                setPos(before.x, getY(), before.z);
+                if (collides(load, loadBox(load, position()))) {
+                    setPos(before);
+                }
+                rope.thetaX = thX;
+                rope.thetaZ = thZ;
+                rope.omegaX = rope.omegaZ = 0;
+            }
+        }
+
+        Vec3 achieved = position().subtract(before);
+        double[] w = {wanted.x, wanted.y, wanted.z};
+        double[] got = {achieved.x, achieved.y, achieved.z};
+        double worst = 0;
+        for (int i = 0; i < 3; i++) {
+            if (Math.abs(w[i] - got[i]) > 1.0E-4) {
+                worst = Math.max(worst, Math.abs(w[i]));
+                phys.v[i] = got[i];
+            }
+        }
+        phys.a[0] = phys.v[0] - vx0;
+        phys.a[1] = phys.v[1] - vy0;
+        phys.a[2] = phys.v[2] - vz0;
+        phys.p[0] = getX();
+        phys.p[1] = getY();
+        phys.p[2] = getZ();
+        setDeltaMovement(phys.v[0], phys.v[1], phys.v[2]);
+        thX = rope.thetaX;
+        thZ = rope.thetaZ;
+        rope.swing(phys);
+        if (load != null && isCarrying()) {
+            stopSwingAtBlocks(load, thX, thZ);
+        }
+        if (worst > IMPACT_SPEED && impactCooldown == 0 && level() instanceof ServerLevel level) {
+            impactCooldown = IMPACT_COOLDOWN;
+            float damage = (float) (IMPACT_DAMAGE * (worst - IMPACT_SPEED));
+            CraneFeedback.log(this, String.format(Locale.ROOT, "impact at %.2f b/t, %.1f damage", worst, damage));
+            applyDamage(level, damage, null);
+        }
+    }
+
+    /** A swing that would put the load into a block stops on that axis (the rope hits and goes slack). */
+    private void stopSwingAtBlocks(Entity load, double oldX, double oldZ) {
+        double newX = rope.thetaX, newZ = rope.thetaZ;
+        rope.thetaX = oldX;
+        rope.thetaZ = oldZ;
+        if (collides(load, loadBox(load, position()))) {
+            rope.thetaX = newX;
+            rope.thetaZ = newZ;
+            return;
+        }
+        rope.thetaX = newX;
+        rope.thetaZ = newZ;
+        if (!collides(load, loadBox(load, position()))) {
+            return;
+        }
+        rope.thetaZ = oldZ;
+        if (!collides(load, loadBox(load, position()))) {
+            rope.omegaZ = 0;
+            return;
+        }
+        rope.thetaX = oldX;
+        rope.thetaZ = newZ;
+        if (!collides(load, loadBox(load, position()))) {
+            rope.omegaX = 0;
+            return;
+        }
+        rope.thetaZ = oldZ;
+        rope.omegaX = rope.omegaZ = 0;
+    }
+
+    private AABB loadBox(Entity load, Vec3 dronePos) {
+        double[] o = SlungLoad.hookOffset(rope.length, rope.thetaX, rope.thetaZ, new double[3]);
+        double top = dronePos.y + o[1];
+        return load.getDimensions(load.getPose())
+            .makeBoundingBox(dronePos.x + o[0], top - load.getBbHeight(), dronePos.z + o[2]).deflate(0.01);
+    }
+
+    private boolean collides(Entity load, AABB box) {
+        return !level().noCollision(load, box);
+    }
+
+    private void syncOut() {
+        setYRot((float) phys.yaw);
+        setQ(MathUtil.toQuaternionf(phys.yaw, -phys.pitch, -phys.roll));
+        entityData.set(THRUST, (float) phys.thrust);
+        entityData.set(ROPE_LENGTH, (float) rope.length);
+        entityData.set(ROPE_THETA_X, (float) rope.thetaX);
+        entityData.set(ROPE_THETA_Z, (float) rope.thetaZ);
+    }
+
+    private void clientTick() {
+        propellerRotationOld = propellerRotationNew;
+        propellerRotationNew += (float) (0.6 + 4.0 * getThrust() / MultirotorPhysics.T_MAX);
+        if (getTimeSinceHit() > 0) {
+            setTimeSinceHit(getTimeSinceHit() - 1);
+        }
+        tickLerp();
+        System.arraycopy(hookNow, 0, hookPrev, 0, 3);
+        hookOffset(hookNow);
     }
 
     private void tickLerp() {
@@ -250,12 +570,530 @@ public class QuadcopterEntity extends Entity {
                 Q_Client = getQ();
                 Q_Prev = getQ();
             } else {
-                lerpStepsQ = 10;
+                lerpStepsQ = 3;
             }
-        } else if (HOOK_OFFSET.equals(key) && firstTick) {
-            hookOffsetPrev.set(getHookOffset());
+        } else if (firstTick && (ROPE_LENGTH.equals(key) || ROPE_THETA_X.equals(key) || ROPE_THETA_Z.equals(key))) {
+            hookOffset(hookNow);
+            System.arraycopy(hookNow, 0, hookPrev, 0, 3);
         }
     }
+
+    // ---- load rules ----
+
+    /** Why this entity cannot be lifted, or null if it can. */
+    public static @Nullable String refusal(Entity entity) {
+        String name = entity.getName().getString();
+        if (!(entity instanceof LivingEntity living) || !living.isAlive()) {
+            return "cannot lift " + name;
+        }
+        if (entity instanceof QuadcopterEntity || entity instanceof PlaneEntity || entity.isSpectator()
+            || entity.isPassenger() || entity.isVehicle()) {
+            return "cannot lift " + name;
+        }
+        var type = entity.getType().builtInRegistryHolder();
+        if (type.is(CRANE_NEVER) || entity.getType() == EntityTypes.ENDER_DRAGON || entity.getType() == EntityTypes.WITHER) {
+            return "cannot lift " + name;
+        }
+        if (entity instanceof Enemy && !ALLOW_HOSTILES && !type.is(CRANE_LIFTABLE)) {
+            return "cannot lift " + name;
+        }
+        double m = massOf(entity);
+        if (m > SlungLoad.MAX_LOAD) {
+            return String.format(Locale.ROOT, "too heavy: %s is %.2f, limit %.2f", name, m, SlungLoad.MAX_LOAD);
+        }
+        return null;
+    }
+
+    public static double massOf(Entity entity) {
+        return SlungLoad.massOf(entity.getBbWidth(), entity.getBbHeight());
+    }
+
+    // ---- orders (remote item and /crane) ----
+
+    /** Orders a pickup; returns the refusal text, or null if accepted. */
+    public @Nullable String orderPickup(Entity mob) {
+        String refused = refusal(mob);
+        if (refused != null) {
+            CraneFeedback.report(this, "refused: " + refused);
+            if (!isCarrying()) {
+                holdHere();
+            }
+            return refused;
+        }
+        if (isCarrying()) {
+            String busy = "busy: already carrying " + loadName;
+            CraneFeedback.report(this, busy);
+            return busy;
+        }
+        pickupId = mob.getUUID();
+        rotorsOff = false;
+        enter(State.TO_PICKUP);
+        CraneFeedback.report(this, "picking up " + mob.getName().getString());
+        return null;
+    }
+
+    /** Sets the delivery point; flies there now if carrying. */
+    public void orderDeliver(Vec3 point) {
+        delivery = point;
+        if (isCarrying()) {
+            rotorsOff = false;
+            afterStow = State.IDLE;
+            enter(State.CARRY);
+            CraneFeedback.report(this, String.format(Locale.ROOT, "delivering %s to %.1f %.1f %.1f", loadName, point.x, point.y, point.z));
+        } else {
+            CraneFeedback.report(this, String.format(Locale.ROOT, "delivery point set to %.1f %.1f %.1f", point.x, point.y, point.z));
+        }
+    }
+
+    /** Flies straight to a point and hovers there (carrying: with the load, no terrain following). */
+    public void orderGoto(Vec3 point) {
+        rotorsOff = false;
+        pickupId = null;
+        if (isCarrying()) {
+            delivery = null;
+            enter(State.CARRY);
+        } else {
+            enter(State.IDLE);
+        }
+        target = point;
+        CraneFeedback.log(this, String.format(Locale.ROOT, "going to %.1f %.1f %.1f", point.x, point.y, point.z));
+    }
+
+    /** Lands at (x, z); a load is set down there first. */
+    public void orderLand(double x, double z) {
+        rotorsOff = false;
+        pickupId = null;
+        if (isCarrying()) {
+            delivery = new Vec3(x, getY(), z);
+            afterStow = State.LAND;
+            enter(State.CARRY);
+            return;
+        }
+        enter(State.LAND);
+        target = new Vec3(x, getY(), z);
+    }
+
+    /** Recall to the owner; a load is set down next to them first. */
+    public void orderReturn(@Nullable UUID player) {
+        if (player != null) {
+            owner = player;
+        }
+        Player p = owner == null ? null : level().getPlayerByUUID(owner);
+        if (p == null || p.distanceTo(this) > RECALL_RANGE) {
+            CraneFeedback.report(this, "recall: owner out of range, hovering");
+            if (!isCarrying()) {
+                holdHere();
+            }
+            return;
+        }
+        rotorsOff = false;
+        pickupId = null;
+        if (isCarrying()) {
+            delivery = returnPoint(p);
+            afterStow = State.RETURN;
+            enter(State.CARRY);
+        } else {
+            enter(State.RETURN);
+        }
+    }
+
+    /** Stops everything; a carried load is set down (at once if it is low, else lowered first). */
+    public void orderStop() {
+        pickupId = null;
+        afterStow = State.IDLE;
+        if (isCarrying()) {
+            if (loadAgl() < OVERLOAD_RELEASE_AGL) {
+                enter(State.RELEASE);
+            } else {
+                delivery = position();
+                enter(State.LOWER_LOAD);
+            }
+        } else {
+            rope.targetLength = SlungLoad.L_MIN;
+            holdHere();
+        }
+    }
+
+    public void orderWinch(double length) {
+        rope.targetLength = Mth.clamp(length, SlungLoad.L_MIN, SlungLoad.L_MAX);
+    }
+
+    /** Test aid: sets the rope angle on the x axis. */
+    public void debugKick(double degrees) {
+        rope.thetaX = Math.toRadians(degrees);
+        rope.omegaX = 0;
+    }
+
+    /** Hover at pos, or park (rotors off) when hover is false. */
+    public void initAt(Vec3 pos, boolean hover) {
+        target = hover ? pos : null;
+        rotorsOff = !hover;
+        home = pos;
+        state = State.IDLE;
+    }
+
+    private void holdHere() {
+        pickupId = null;
+        enter(State.IDLE);
+        if (!rotorsOff) {
+            target = position();
+        }
+    }
+
+    private void enter(State next) {
+        if (next != state) {
+            CraneFeedback.log(this, "state " + state + " -> " + next);
+        }
+        state = next;
+        stateTicks = 0;
+        arriveTicks = 0;
+        controller.vMax = CraneController.V_MAX;
+        controller.vzMax = CraneController.VZ_MAX;
+        switch (next) {
+            case LOWER -> lowerStart = null;
+            case STOW -> {
+                rope.targetLength = SlungLoad.L_MIN;
+                target = new Vec3(getX(), surface(getX(), getZ()) + STOW_AGL, getZ());
+            }
+            case WINCH_IN -> target = position();
+            case IDLE -> {
+                if (target == null && !rotorsOff) {
+                    target = position();
+                }
+            }
+            default -> { }
+        }
+    }
+
+    // ---- state machine ----
+
+    private static boolean isCarryingState(State s) {
+        return s == State.WINCH_IN || s == State.CARRY || s == State.LOWER_LOAD || s == State.OVERLOAD;
+    }
+
+    private void checkLoad() {
+        if (!isCarrying()) {
+            return;
+        }
+        Entity load = getFirstPassenger();
+        if (load == null || !load.isAlive()) {
+            setCarrying(false);
+            rope.mass = 0;
+            phys.mass = 1;
+            CraneFeedback.report(this, "load lost: " + loadName + (load == null ? " let go" : " died"));
+            loadName = "none";
+            delivery = null;
+            if (isCarryingState(state)) {
+                enter(State.STOW);
+            }
+        }
+    }
+
+    private void tickStateMachine(ServerLevel level) {
+        stateTicks++;
+        if (isCarrying() && isCarryingState(state) && state != State.OVERLOAD
+            && satTicks >= OVERLOAD_TICKS && phys.v[1] < OVERLOAD_VY) {
+            CraneFeedback.report(this, "overloaded: thrust saturated and sinking, lowering " + loadName);
+            enter(State.OVERLOAD);
+        }
+        switch (state) {
+            case IDLE, ATTACH -> { }
+            case TO_PICKUP -> tickToPickup(level);
+            case LOWER -> tickLower(level);
+            case WINCH_IN -> {
+                rope.targetLength = SlungLoad.L_CARRY;
+                if (rope.length == SlungLoad.L_CARRY) {
+                    enter(State.CARRY);
+                    target = new Vec3(getX(), surface(getX(), getZ()) + CRUISE_AGL + rope.length, getZ());
+                }
+            }
+            case CARRY -> tickCarry();
+            case LOWER_LOAD -> tickLowerLoad();
+            case RELEASE -> release(null);
+            case STOW -> {
+                if (rope.length == SlungLoad.L_MIN) {
+                    State next = afterStow;
+                    afterStow = State.IDLE;
+                    if (next == State.RETURN) {
+                        orderReturn(null);
+                    } else {
+                        enter(next);
+                    }
+                }
+            }
+            case RETURN -> tickReturn();
+            case LAND -> tickLand();
+            case OVERLOAD -> tickOverload();
+        }
+    }
+
+    private @Nullable Entity pickupEntity(ServerLevel level) {
+        if (pickupId == null) {
+            return null;
+        }
+        Entity e = level.getEntity(pickupId);
+        return e != null && e.isAlive() ? e : null;
+    }
+
+    private void abortPickup(String why) {
+        CraneFeedback.report(this, "pickup aborted: " + why);
+        rope.targetLength = SlungLoad.L_MIN;
+        holdHere();
+    }
+
+    private void tickToPickup(ServerLevel level) {
+        Entity mob = pickupEntity(level);
+        String refused = mob == null ? "target lost" : refusal(mob);
+        if (refused != null) {
+            abortPickup(refused);
+            return;
+        }
+        rope.targetLength = SlungLoad.L_MIN;
+        target = new Vec3(mob.getX(), mob.getBoundingBox().maxY + PICK_CLEARANCE + SlungLoad.L_PICK, mob.getZ());
+        if (arrived(target)) {
+            enter(State.LOWER);
+        } else if (stateTicks > PICKUP_TIMEOUT) {
+            abortPickup("could not reach " + mob.getName().getString());
+        }
+    }
+
+    private void tickLower(ServerLevel level) {
+        Entity mob = pickupEntity(level);
+        String refused = mob == null ? "target lost" : refusal(mob);
+        if (refused != null) {
+            abortPickup(refused);
+            return;
+        }
+        if (lowerStart == null) {
+            lowerStart = mob.position();
+        }
+        if (Math.hypot(mob.getX() - lowerStart.x, mob.getZ() - lowerStart.z) > FOLLOW_RANGE) {
+            abortPickup("target moved away");
+            return;
+        }
+        double holdY = target == null ? getY() : target.y;
+        target = new Vec3(mob.getX(), holdY, mob.getZ());
+        Vec3 hook = hookPosition();
+        double top = mob.getBoundingBox().maxY;
+        double dh = Math.hypot(hook.x - mob.getX(), hook.z - mob.getZ());
+        double gap = hook.y - top;
+        if (dh < HOOK_REACH && gap < HOOK_REACH && gap < SlungLoad.WINCH_RATE) {
+            pendingLoad = mob;
+            enter(State.ATTACH);
+            attach(level);
+            return;
+        }
+        rope.targetLength = Mth.clamp(rope.length + gap, SlungLoad.L_MIN, SlungLoad.L_MAX);
+        if (stateTicks > LOWER_TIMEOUT) {
+            abortPickup("hook did not reach " + mob.getName().getString());
+        }
+    }
+
+    private void attach(ServerLevel level) {
+        Entity mob = pendingLoad != null ? pendingLoad : pickupEntity(level);
+        String refused = mob == null ? "target lost" : refusal(mob);
+        if (refused != null) {
+            pendingLoad = null;
+            abortPickup(refused);
+            return;
+        }
+        pendingLoad = mob;
+        boolean ok = mob.startRiding(this, true, true);
+        pendingLoad = null;
+        if (!ok || mob.getVehicle() != this) {
+            abortPickup("cannot lift " + mob.getName().getString());
+            return;
+        }
+        mob.addTag(LOAD_TAG);
+        attachMass(mob);
+        rope.stopSwing();
+        setCarrying(true);
+        pickupId = null;
+        CraneFeedback.report(this, String.format(Locale.ROOT, "picked up %s (mass %.2f)", loadName, rope.mass));
+        enter(State.WINCH_IN);
+    }
+
+    private void attachMass(Entity load) {
+        rope.mass = massOf(load);
+        phys.mass = 1.0 + rope.mass;
+        loadName = load.getName().getString();
+    }
+
+    private void tickCarry() {
+        if (delivery == null) {
+            if (target == null) {
+                target = position();
+            }
+            return;
+        }
+        double dx = delivery.x - getX();
+        double dz = delivery.z - getZ();
+        double dist = Math.hypot(dx, dz);
+        double cruise = cruiseSurface(dx, dz, dist) + CRUISE_AGL + rope.length;
+        controller.vMax = getY() < cruise - CLIMB_FIRST ? CLIMB_FIRST_SPEED : CraneController.V_MAX;
+        target = new Vec3(delivery.x, cruise, delivery.z);
+        if (dist < ARRIVE_H) {
+            enter(State.LOWER_LOAD);
+        }
+    }
+
+    /** Highest surface under the drone and along the track ahead, in loaded chunks only. */
+    private double cruiseSurface(double dx, double dz, double dist) {
+        double h = surface(getX(), getZ());
+        if (dist < 1.0E-3) {
+            return h;
+        }
+        double ux = dx / dist, uz = dz / dist;
+        double reach = Math.min(LOOKAHEAD, dist);
+        for (double s = 2; s <= reach; s += 2) {
+            for (int side = -1; side <= 1; side++) {
+                int bx = Mth.floor(getX() + ux * s - uz * side);
+                int bz = Mth.floor(getZ() + uz * s + ux * side);
+                if (level().hasChunk(bx >> 4, bz >> 4)) {
+                    h = Math.max(h, level().getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz));
+                }
+            }
+        }
+        if (dist <= LOOKAHEAD && delivery != null) {
+            h = Math.max(h, surface(delivery.x, delivery.z));
+        }
+        return h;
+    }
+
+    public double surface(double x, double z) {
+        int bx = Mth.floor(x), bz = Mth.floor(z);
+        if (!level().hasChunk(bx >> 4, bz >> 4)) {
+            return getY() - CRUISE_AGL;
+        }
+        return level().getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
+    }
+
+    /** Height of the load's box bottom above the surface under it; the hook's height when empty. */
+    public double loadAgl() {
+        Entity load = getFirstPassenger();
+        Vec3 hook = hookPosition();
+        if (load == null) {
+            return hook.y - surface(hook.x, hook.z);
+        }
+        AABB box = load.getBoundingBox();
+        double ground = Math.max(Math.max(surface(box.minX, box.minZ), surface(box.maxX - 1.0E-3, box.minZ)),
+            Math.max(surface(box.minX, box.maxZ - 1.0E-3), surface(box.maxX - 1.0E-3, box.maxZ - 1.0E-3)));
+        return hook.y - load.getBbHeight() - ground;
+    }
+
+    public double agl() {
+        return getY() - surface(getX(), getZ());
+    }
+
+    private void tickLowerLoad() {
+        if (getFirstPassenger() == null) {
+            enter(State.STOW);
+            return;
+        }
+        Vec3 at = delivery == null ? position() : delivery;
+        double agl = loadAgl();
+        controller.vzMax = agl > CLIMB_FIRST ? CraneController.VZ_MAX : FINAL_DESCENT_SPEED;
+        target = new Vec3(at.x, getY() - agl + RELEASE_GAP, at.z);
+        if (agl < RELEASE_BAND) {
+            if (++arriveTicks >= RELEASE_TICKS) {
+                enter(State.RELEASE);
+            }
+        } else {
+            arriveTicks = 0;
+        }
+        if (stateTicks > LOWER_LOAD_TIMEOUT && agl < OVERLOAD_RELEASE_AGL) {
+            enter(State.RELEASE);
+        }
+    }
+
+    private void release(@Nullable String message) {
+        Entity load = getFirstPassenger();
+        String name = loadName;
+        if (load != null) {
+            load.stopRiding();
+        }
+        setCarrying(false);
+        rope.mass = 0;
+        phys.mass = 1;
+        loadName = "none";
+        delivery = null;
+        if (load != null) {
+            CraneFeedback.report(this, message != null ? message + " (" + name + ")"
+                : String.format(Locale.ROOT, "set down %s at %.1f %.1f %.1f", name, load.getX(), load.getY(), load.getZ()));
+        }
+        enter(State.STOW);
+    }
+
+    private Vec3 returnPoint(Player p) {
+        double dx = getX() - p.getX(), dz = getZ() - p.getZ();
+        double d = Math.hypot(dx, dz);
+        if (d < 1.0E-3) {
+            dx = 1;
+            dz = 0;
+            d = 1;
+        }
+        double x = p.getX() + dx / d * RETURN_DISTANCE;
+        double z = p.getZ() + dz / d * RETURN_DISTANCE;
+        return new Vec3(x, surface(x, z), z);
+    }
+
+    private void tickReturn() {
+        Player p = owner == null ? null : level().getPlayerByUUID(owner);
+        if (p == null || p.distanceTo(this) > RECALL_RANGE) {
+            CraneFeedback.report(this, "recall: owner out of range, hovering");
+            holdHere();
+            return;
+        }
+        Vec3 spot = returnPoint(p);
+        target = new Vec3(spot.x, spot.y + RETURN_AGL, spot.z);
+        if (arrived(target)) {
+            enter(State.LAND);
+            target = new Vec3(getX(), getY(), getZ());
+        }
+    }
+
+    private void tickLand() {
+        Vec3 t = target == null ? position() : target;
+        controller.vzMax = LAND_RATE;
+        double ground = surface(t.x, t.z);
+        boolean over = Math.hypot(t.x - getX(), t.z - getZ()) < LAND_ALIGN;
+        target = new Vec3(t.x, over ? ground - 0.5 : Math.max(getY(), ground + LAND_HOLD_AGL), t.z);
+        if (onGround()) {
+            phys.v[0] = phys.v[1] = phys.v[2] = 0;
+            setDeltaMovement(Vec3.ZERO);
+            rotorsOff = true;
+            target = null;
+            CraneFeedback.report(this, String.format(Locale.ROOT, "landed at %.1f %.1f %.1f", getX(), getY(), getZ()));
+            enter(State.IDLE);
+        }
+    }
+
+    private void tickOverload() {
+        if (!isCarrying()) {
+            enter(State.STOW);
+            return;
+        }
+        double agl = loadAgl();
+        target = new Vec3(getX(), getY(), getZ());
+        if (agl < OVERLOAD_RELEASE_AGL) {
+            release("load released: overweight");
+        } else {
+            rope.targetLength = Mth.clamp(rope.length + agl, SlungLoad.L_MIN, SlungLoad.L_MAX);
+        }
+    }
+
+    private boolean arrived(Vec3 t) {
+        boolean near = Math.hypot(t.x - getX(), t.z - getZ()) < ARRIVE_H && Math.abs(t.y - getY()) < ARRIVE_V;
+        arriveTicks = near ? arriveTicks + 1 : 0;
+        return arriveTicks >= ARRIVE_TICKS;
+    }
+
+    /** Whether the crane needs its chunks kept loaded: anything but parked on the ground. */
+    public boolean needsChunks() {
+        return !isRemoved() && (dying || !rotorsOff || state != State.IDLE);
+    }
+
+    // ---- damage and death ----
 
     @Override
     public boolean hurtServer(ServerLevel level, DamageSource source, float amount) {
@@ -270,18 +1108,70 @@ public class QuadcopterEntity extends Entity {
             amount *= 3;
         }
         setTimeSinceHit(20);
-        setHealth((int) (getHealth() - amount));
         damageTimeout = 10;
-        boolean creative = source.getEntity() instanceof Player player && player.getAbilities().instabuild;
+        applyDamage(level, amount, source);
+        return true;
+    }
+
+    private void applyDamage(ServerLevel level, float amount, @Nullable DamageSource source) {
+        setHealth((int) (getHealth() - amount));
+        boolean creative = source != null && source.getEntity() instanceof Player player && player.getAbilities().instabuild;
         if (creative) {
+            CraneFeedback.report(this, "lost: removed by a creative player");
             kill(level);
-        } else if (getHealth() <= 0) {
-            kill(level);
-            if (level.getGameRules().get(GameRules.ENTITY_DROPS)) {
-                dropItem(level);
+        } else if (getHealth() <= 0 && !dying) {
+            if (onGround() && source != null && source.getDirectEntity() instanceof Player) {
+                CraneFeedback.report(this, "lost: broken on the ground");
+                kill(level);
+                if (level.getGameRules().get(GameRules.ENTITY_DROPS)) {
+                    dropItem(level);
+                }
+            } else {
+                dying = true;
+                CraneFeedback.report(this, String.format(Locale.ROOT, "destroyed at %.1f %.1f %.1f (agl %.1f), falling",
+                    getX(), getY(), getZ(), agl()));
             }
         }
-        return true;
+    }
+
+    private void tickDying(ServerLevel level) {
+        dying = true;
+        stateTicks++;
+        Entity load = getFirstPassenger();
+        if (load != null) {
+            releasedLoad = load.getUUID();
+            CraneFeedback.report(this, String.format(Locale.ROOT, "load released: crane destroyed (%s, feet at agl %.1f)", loadName, loadAgl()));
+            load.stopRiding();
+            setCarrying(false);
+            rope.mass = 0;
+            phys.mass = 1;
+            loadName = "none";
+        }
+        phys.thrust = 0;
+        controller.saturated = false;
+        physicsStep();
+        syncOut();
+        if (trace) {
+            CraneFeedback.trace(this, traceTick++);
+        }
+        if (onGround() || horizontalCollision || verticalCollision || stateTicks > FALL_TIMEOUT) {
+            crash(level);
+        }
+    }
+
+    private void crash(ServerLevel level) {
+        Blast blast = new Blast(DEATH_BLAST, false, false);
+        UUID spared = releasedLoad;
+        // the load it let go of on the way down is not hurt by its own crash
+        ExplosionDamageCalculator calculator = new ExplosionDamageCalculator() {
+            @Override
+            public boolean shouldDamageEntity(Explosion explosion, Entity entity) {
+                return !entity.getUUID().equals(spared) && super.shouldDamageEntity(explosion, entity);
+            }
+        };
+        CraneFeedback.report(this, String.format(Locale.ROOT, "lost: crashed at %.1f %.1f %.1f", getX(), getY(), getZ()));
+        level.explode(this, null, calculator, getX(), getY(), getZ(), blast.power(), blast.fire(), blast.interaction());
+        discard();
     }
 
     protected void dropItem(ServerLevel level) {
@@ -293,11 +1183,9 @@ public class QuadcopterEntity extends Entity {
 
     public ItemStack getItemStack() {
         ItemStack stack = SimplePlanesItems.QUADCOPTER_ITEM.get().getDefaultInstance();
-        TagValueOutput output = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, registryAccess());
-        addAdditionalSaveData(output);
-        CompoundTag tag = output.buildResult();
+        CompoundTag tag = new CompoundTag();
+        tag.putString("material", entityData.get(MATERIAL));
         tag.putInt("health", MAX_HEALTH);
-        tag.putBoolean("carrying", false);
         tag.putBoolean("Used", true);
         stack.set(SimplePlanesComponents.ENTITY_TAG.get(), tag);
         return stack;
@@ -306,15 +1194,33 @@ public class QuadcopterEntity extends Entity {
     /** Public bridge for the item, which stores the entity data as a raw tag. */
     public void loadFromItemTag(CompoundTag tag) {
         readAdditionalSaveData(TagValueInput.create(ProblemReporter.DISCARDING, registryAccess(), tag));
+        state = State.IDLE;
+        setCarrying(false);
+        checkLoadAfterLoad = false;
     }
+
+    // ---- persistence ----
 
     @Override
     protected void readAdditionalSaveData(ValueInput input) {
         input.getString("material").ifPresent(this::setMaterial);
         setHealth(input.getIntOr("health", getHealth()));
-        setRopeLength(Mth.clamp(input.getFloatOr("rope_length", getRopeLength()), 1.0f, 12.0f));
-        setCarrying(input.getBooleanOr("carrying", isCarrying()));
-        setHookOffset(new Vector3f(0, -getRopeLength(), 0));
+        setRopeLength(input.getFloatOr("rope_length", getRopeLength()));
+        rope.thetaX = input.getDoubleOr("theta_x", 0);
+        rope.thetaZ = input.getDoubleOr("theta_z", 0);
+        rope.omegaX = rope.omegaZ = 0;
+        setCarrying(input.getBooleanOr("carrying", false));
+        checkLoadAfterLoad = true;
+        state = input.getString("state").map(QuadcopterEntity::parseState).orElse(State.IDLE);
+        afterStow = input.getString("after_stow").map(QuadcopterEntity::parseState).orElse(State.IDLE);
+        target = input.read("target", Vec3.CODEC).orElse(null);
+        delivery = input.read("delivery", Vec3.CODEC).orElse(null);
+        home = input.read("home", Vec3.CODEC).orElse(null);
+        owner = input.read("owner", UUIDUtil.CODEC).orElse(null);
+        pickupId = input.read("pickup", UUIDUtil.CODEC).orElse(null);
+        rotorsOff = input.getBooleanOr("rotors_off", false);
+        loadName = input.getStringOr("load_name", "none");
+        physInit = false;
         Quaternionf q = MathUtil.toQuaternionf(getYRot(), 0, 0);
         setQ(q);
         Q_Client = new Quaternionf(q);
@@ -325,7 +1231,26 @@ public class QuadcopterEntity extends Entity {
     protected void addAdditionalSaveData(ValueOutput output) {
         output.putString("material", entityData.get(MATERIAL));
         output.putInt("health", getHealth());
-        output.putFloat("rope_length", getRopeLength());
+        output.putString("state", state.name());
+        output.putString("after_stow", afterStow.name());
+        output.storeNullable("target", Vec3.CODEC, target);
+        output.storeNullable("delivery", Vec3.CODEC, delivery);
+        output.storeNullable("home", Vec3.CODEC, home);
+        output.storeNullable("owner", UUIDUtil.CODEC, owner);
+        output.storeNullable("pickup", UUIDUtil.CODEC, pickupId);
+        output.putFloat("rope_length", (float) rope.length);
+        output.putDouble("theta_x", rope.thetaX);
+        output.putDouble("theta_z", rope.thetaZ);
         output.putBoolean("carrying", isCarrying());
+        output.putBoolean("rotors_off", rotorsOff);
+        output.putString("load_name", loadName);
+    }
+
+    private static State parseState(String name) {
+        try {
+            return State.valueOf(name);
+        } catch (IllegalArgumentException e) {
+            return State.IDLE;
+        }
     }
 }
