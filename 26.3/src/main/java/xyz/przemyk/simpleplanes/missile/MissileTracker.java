@@ -32,6 +32,10 @@ import java.util.Set;
  * thawed. Radius 3 makes the 3x3 chunks around the centre entity-ticking and 7x7 resident. Each missile holds
  * one ticket on its own chunk and two ahead along its velocity, so the ground in front is loaded before the
  * missile gets there. A tick in which a tracked missile did not run is counted as a stall.
+ *
+ * <p>A silo in a strike launch sequence holds a {@code TicketType.PORTAL} ticket instead (300-tick timeout, same
+ * flags plus persist): vanilla saves it with the chunk tickets, so after a restart the silo's chunk is loaded again,
+ * the block entity ticks and takes the in-memory hold back ({@link LaunchSiloBlockEntity}).
  */
 public final class MissileTracker {
 
@@ -140,7 +144,7 @@ public final class MissileTracker {
 
     public static void holdSilo(ServerLevel level, BlockPos pos) {
         SILO_HOLDS.computeIfAbsent(level.dimension(), k -> new HashSet<>()).add(pos.immutable());
-        ticket(level, pos.getX(), pos.getZ());
+        siloTicket(level, pos);
     }
 
     /** True while a strike launch holds a chunk ticket for the silo at {@code pos}. */
@@ -158,7 +162,7 @@ public final class MissileTracker {
         SiloStructure.flushDeferred(level);
         Set<BlockPos> holds = SILO_HOLDS.get(level.dimension());
         if (holds != null && !holds.isEmpty() && level.getGameTime() % SILO_TICKET_INTERVAL == 0) {
-            for (BlockPos p : holds) ticket(level, p.getX(), p.getZ());
+            for (BlockPos p : holds) siloTicket(level, p);
         }
         if (ACTIVE.isEmpty()) return;
         long now = level.getGameTime();
@@ -191,6 +195,10 @@ public final class MissileTracker {
 
     private static void ticket(ServerLevel level, int blockX, int blockZ) {
         level.getChunkSource().addTicketWithRadius(TicketType.ENDER_PEARL, new ChunkPos(blockX >> 4, blockZ >> 4), TICKET_RADIUS);
+    }
+
+    private static void siloTicket(ServerLevel level, BlockPos pos) {
+        level.getChunkSource().addTicketWithRadius(TicketType.PORTAL, ChunkPos.containing(pos), TICKET_RADIUS);
     }
 
     static String fmt(Vec3 v) {

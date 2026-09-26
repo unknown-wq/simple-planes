@@ -186,6 +186,15 @@ IDLE --launch--> OPENING --hatch fully open, missile created--> LAUNCHING (60 t,
 - **Smoke.** The flame is hidden inside the shaft, so the launch is carried by smoke: `CAMPFIRE_COSY_SMOKE`,
   `LARGE_SMOKE` and `CLOUD` from the mouth, sent with `force` so it is visible from far away.
 - **The client.** It runs the same hatch ramp from the synced phase, so the renderer can interpolate it.
+- **`/tick freeze`.** A frozen game ticks no block entities, so a hatch does not move and a launch accepted
+  while frozen waits for `/tick unfreeze`. The launch command, the `busy` refusal and `status` say so instead of
+  a bare `busy (opening)`. Game time stops too, so a freeze never trips the net below.
+- **Stuck-sequence net.** The longest sequence ends about 230 game ticks after the launch command. A silo still
+  busy `STALE_TICKS` (600) game ticks after it was not ticking, e.g. its chunk was unloaded. The first time
+  anything touches it (its own tick, or `launch`, `load`, `unload`, `status`, a mode change) it is put back to
+  idle with the hatch shut, logged as `[silo] <pos> reset: ...`. Before ignition the launch is aborted and the
+  missile stays loaded; after ignition the sequence is just finished. It never fires at an old target.
+  `/missile silo reset <pos>` does the same on demand.
 
 ### Renderers
 
@@ -718,7 +727,7 @@ strong references, so a missile that has stopped ticking is still found and thaw
 |---|---|
 | each missile | radius 3 on its own chunk, every tick: its 3x3 chunks entity-tick and 7x7 stay resident |
 | ahead of each missile | radius 3 at 10 and at 20 ticks of travel ahead, every tick. The ground ahead is generated and entity-ticking before the missile arrives, and the terrain look-ahead has real heightmaps to read |
-| each silo in a strike launch sequence | radius 3, every 10 ticks, from the launch command until the silo is idle again |
+| each silo in a strike launch sequence | `TicketType.PORTAL`, radius 3, every 10 ticks, from the launch command until the silo is idle again. PORTAL is ENDER_PEARL's flags plus *persist* (300-tick timeout): vanilla saves it with the chunk tickets, so after a restart the silo's chunk is loaded again, the block entity ticks, takes the in-memory hold back and finishes the sequence |
 | an air-defence silo | **none**, in any phase. It acts only while something else keeps its chunk ticking (§1c, "Chunks") |
 
 - **Stalls.** A tick in which a tracked missile did not run is counted as a stall and reported.
@@ -733,7 +742,15 @@ strong references, so a missile that has stopped ticking is still found and thaw
 Every subcommand is under `/missile`. They all need **permission level 2** (`Commands.LEVEL_GAMEMASTERS`) and they
 all run from the server console, since no subcommand needs a player. Output goes to the command source, which on
 the console is the server log. Positions accept `~` and `^`. For a silo, `pos` may be **any part** of it, except
-in `place`, where it is the master.
+in `place`, where it is the master. `launch`, `load`, `unload`, `status` and `reset` also take the block just above
+the silo's top (what `~ ~ ~` is while standing on it).
+
+**How to launch.** `/missile launch <silo> <target>` takes two positions. Pressing Tab on a position fills in the
+block you are looking at, which is right for `<silo>` (look at the silo's top) and almost never right for
+`<target>`: tab-completing the target too gives the silo's own position, which is refused as "target too close".
+Type the target's x y z (F3 shows the coordinates of the looked-at block), for example
+`/missile launch 2925 65 -1311 2843 104 -1373`. The target must be between the tier's minimum and maximum
+horizontal range from the silo (T1 24–1200, T2 32–2500, T3 48–5000, T4 64–10000 blocks).
 
 | Command | Effect | Example |
 |---|---|---|
@@ -742,6 +759,7 @@ in `place`, where it is the master.
 | `/missile silo remove <pos>` | Removes the whole silo and puts back the blocks it displaced. No items drop | `/missile silo remove 0 -21 0` |
 | `/missile silo load <pos>` | Loads a missile of the silo's tier without an item, for operators and tests. Players use the missile items (§1d). Refused if a missile is already loaded or a launch is under way | `/missile silo load 10 -20 20` |
 | `/missile silo unload <pos>` | Removes the loaded missile. No item is given | `/missile silo unload 10 -20 20` |
+| `/missile silo reset <pos>` | **Recovery.** Puts a busy silo back to idle with the hatch shut, whatever its phase. A missile not yet fired stays loaded. Prints what it was doing. The same thing happens on its own to a sequence that has not ticked for 600 game ticks (§1) | `/missile silo reset 0 -20 0` |
 | `/missile silo status <pos>` | Prints the tier, loaded or empty, the phase, the hatch, the mode, the cooldown, the launch count, the last missile id and the target, and flags a damaged structure | `/missile silo status 0 -20 0` |
 | `/missile launch <silo> <target>` | Starts the launch sequence toward the point `target` (x y z; integer x and z are centred on the block). Refused with the reason for anything in §1's check list | `/missile launch 0 -20 0 500 -19 0` |
 | `/missile list` | One telemetry line per missile in flight | `/missile list` |
@@ -1322,8 +1340,10 @@ The same four flights on other bearings, with an earlier build, gave identical t
 - **The item's look.** The item texture is a placeholder and has not been looked at on a client. The upgrade
   messages mix the translated frame with an English reason.
 - **Missiles do not survive a restart.** Flights in progress are discarded at a server stop. A silo in the middle
-  of a launch sequence is saved and finishes the sequence when its chunk next ticks. Its chunk ticket is not
-  re-created at startup.
+  of a strike launch sequence is saved with its persistent chunk ticket and finishes the sequence right after the
+  restart (§3). A silo saved mid-sequence by 5.4.0-beta.2 or earlier has no such ticket; it is reset to idle, the
+  missile kept, as soon as it is next touched (§1, stuck-sequence net). An air-defence silo holds no ticket and
+  is reset the same way if it comes back more than 600 game ticks later.
 - **Terrain following.** It only sees chunks that are already loaded, which the lead tickets normally provide. It
   climbs at most 50°, so a sheer wall taller than the missile can out-climb is hit (by design, see the test). There
   is no lateral avoidance: the missile goes over terrain, never round it.

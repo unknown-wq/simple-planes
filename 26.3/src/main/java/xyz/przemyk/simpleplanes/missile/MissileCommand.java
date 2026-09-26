@@ -71,7 +71,9 @@ public final class MissileCommand {
                 .then(Commands.literal("unload")
                     .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(c -> load(c, false))))
                 .then(Commands.literal("status")
-                    .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(MissileCommand::status))));
+                    .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(MissileCommand::status)))
+                .then(Commands.literal("reset")
+                    .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(MissileCommand::reset))));
 
             root.then(Commands.literal("launch")
                 .then(Commands.argument("silo", BlockPosArgument.blockPos())
@@ -148,16 +150,18 @@ public final class MissileCommand {
 
     private static int remove(CommandContext<CommandSourceStack> c) {
         ServerLevel level = c.getSource().getLevel();
-        BlockPos master = SiloStructure.masterOf(level, BlockPosArgument.getBlockPos(c, "pos"));
-        if (master == null) return fail(c, "No silo there.");
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        BlockPos master = SiloStructure.masterOf(level, pos);
+        if (master == null) return noSilo(c, level, pos);
         int n = SiloStructure.dismantle(level, master);
         return ok(c, "Removed the silo at " + master.toShortString() + " (" + n + " blocks put back as they were).");
     }
 
     private static int upgrade(CommandContext<CommandSourceStack> c) {
         ServerLevel level = c.getSource().getLevel();
-        BlockPos master = SiloStructure.masterOf(level, BlockPosArgument.getBlockPos(c, "pos"));
-        if (master == null) return fail(c, "No silo there.");
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        BlockPos master = SiloStructure.masterOf(level, pos);
+        if (master == null) return noSilo(c, level, pos);
         SiloStructure.Upgrade up = SiloStructure.upgrade(level, master, null, null);
         if (up.problem() != null) return fail(c, "Cannot upgrade the silo at " + master.toShortString() + ": " + up.problem() + ".");
         return ok(c, String.format(Locale.ROOT, "Upgraded the silo at %s to tier %d (%dx%d, %d deep, grew %s), master %s.",
@@ -300,8 +304,9 @@ public final class MissileCommand {
 
     private static int load(CommandContext<CommandSourceStack> c, boolean load) {
         ServerLevel level = c.getSource().getLevel();
-        LaunchSiloBlockEntity be = resolve(level, BlockPosArgument.getBlockPos(c, "pos"));
-        if (be == null) return fail(c, "No silo there.");
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        LaunchSiloBlockEntity be = resolve(level, pos);
+        if (be == null) return noSilo(c, level, pos);
         String problem = load ? be.load() : be.unload();
         if (problem != null) return fail(c, "Silo at " + be.getBlockPos().toShortString() + ": " + problem + ".");
         return ok(c, (load ? "Loaded a tier " : "Unloaded the tier ") + be.tier().tier + " missile " + (load ? "into" : "from")
@@ -310,23 +315,40 @@ public final class MissileCommand {
 
     private static int status(CommandContext<CommandSourceStack> c) {
         ServerLevel level = c.getSource().getLevel();
-        LaunchSiloBlockEntity be = resolve(level, BlockPosArgument.getBlockPos(c, "pos"));
-        if (be == null) return fail(c, "No silo there.");
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        LaunchSiloBlockEntity be = resolve(level, pos);
+        if (be == null) return noSilo(c, level, pos);
+        String recovered = be.recoverIfStale();
+        if (recovered != null) ok(c, "Silo at " + be.getBlockPos().toShortString() + " was stuck: " + recovered + ".");
         boolean intact = SiloStructure.isIntact(level, be.getBlockPos(), be.tier());
         return ok(c, be.describe() + (intact ? "" : ", STRUCTURE DAMAGED"));
     }
 
     private static int launch(CommandContext<CommandSourceStack> c) {
         ServerLevel level = c.getSource().getLevel();
-        LaunchSiloBlockEntity be = resolve(level, BlockPosArgument.getBlockPos(c, "silo"));
-        if (be == null) return fail(c, "No silo there.");
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "silo");
+        LaunchSiloBlockEntity be = resolve(level, pos);
+        if (be == null) return noSilo(c, level, pos);
         Vec3 target = Vec3Argument.getVec3(c, "target");
         String problem = be.launch(level, target);
         if (problem != null) return fail(c, "Silo at " + be.getBlockPos().toShortString() + " cannot launch: " + problem + ".");
         MissileTier tier = be.tier();
         Vec3 mouth = SiloStructure.mouth(be.getBlockPos(), tier);
-        return ok(c, String.format(Locale.ROOT, "Silo at %s: hatch opening, tier %d missile to %s (%.1f blocks).",
+        ok(c, String.format(Locale.ROOT, "Silo at %s: hatch opening, tier %d missile to %s (%.1f blocks).",
             be.getBlockPos().toShortString(), tier.tier, MissileTracker.fmt(target), Math.hypot(target.x - mouth.x, target.z - mouth.z)));
+        if (LaunchSiloBlockEntity.frozen(level))
+            fail(c, "The game is frozen (/tick freeze): the hatch won't move and the missile won't leave until /tick unfreeze.");
+        return 1;
+    }
+
+    /** Op recovery: puts a silo back to idle whatever its phase; a missile not yet fired stays loaded. */
+    private static int reset(CommandContext<CommandSourceStack> c) {
+        ServerLevel level = c.getSource().getLevel();
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        LaunchSiloBlockEntity be = resolve(level, pos);
+        if (be == null) return noSilo(c, level, pos);
+        if (be.phase() == LaunchSiloBlockEntity.Phase.IDLE) return ok(c, "Silo at " + be.getBlockPos().toShortString() + " is already idle: " + be.describe() + ".");
+        return ok(c, "Silo at " + be.getBlockPos().toShortString() + ": " + be.reset(level, "/missile silo reset") + ".");
     }
 
     private static int list(CommandContext<CommandSourceStack> c) {
@@ -442,9 +464,20 @@ public final class MissileCommand {
         return changed;
     }
 
+    /** Any part of the silo, or the block just above its top (where a player standing on it has {@code ~ ~ ~}). */
     private static @Nullable LaunchSiloBlockEntity resolve(ServerLevel level, BlockPos pos) {
         BlockPos master = SiloStructure.masterOf(level, pos);
+        if (master == null && level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()) {
+            BlockPos below = SiloStructure.masterOf(level, pos.below());
+            if (below != null && below.getY() == pos.getY() - 1) master = below;
+        }
         return master == null ? null : silo(level, master);
+    }
+
+    private static int noSilo(CommandContext<CommandSourceStack> c, ServerLevel level, BlockPos pos) {
+        return fail(c, "No silo at " + pos.toShortString() + " (that block is "
+            + BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).getBlock()) + "). Give any block of the silo: look at its top"
+            + " and press Tab, or stand on it and use ~ ~ ~.");
     }
 
     private static @Nullable LaunchSiloBlockEntity silo(ServerLevel level, BlockPos master) {
