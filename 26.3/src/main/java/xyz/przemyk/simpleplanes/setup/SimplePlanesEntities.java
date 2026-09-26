@@ -143,6 +143,26 @@ public class SimplePlanesEntities {
     public static final Supplier<EntityType<MiniHelicopterEntity>> MINI_HELICOPTER = register("mini_helicopter", MiniHelicopterEntity::new, 1.5F, 1.95F);
     public static final Supplier<EntityType<QuadcopterEntity>> QUADCOPTER = register("quadcopter", QuadcopterEntity::new, 1.0F, 0.875F);
 
+    /**
+     * The airliner's nose-to-tail hitboxes ({@link AirlinerPartEntity}): never saved, not summonable. The
+     * client positions them from the airliner itself, so their own updates only need to be occasional.
+     */
+    public static final Supplier<EntityType<AirlinerPartEntity>> AIRLINER_PART;
+
+    static {
+        EntityType<AirlinerPartEntity> part = Registry.register(BuiltInRegistries.ENTITY_TYPE,
+            Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner_part"),
+            EntityType.Builder.<AirlinerPartEntity>of(AirlinerPartEntity::new, MobCategory.MISC)
+                .sized(3.4F, 3.3F)
+                .noSave()
+                .noSummon()
+                .fireImmune()
+                .clientTrackingRange(AIRCRAFT_TRACKING_RANGE)
+                .updateInterval(10)
+                .build(entityKey("airliner_part")));
+        AIRLINER_PART = () -> part;
+    }
+
     public static final Supplier<EntityType<ParachuteEntity>> PARACHUTE =
         register("parachute", ParachuteEntity::new, 1.0F, 1.0F, PARACHUTE_TRACKING_RANGE);
 }
