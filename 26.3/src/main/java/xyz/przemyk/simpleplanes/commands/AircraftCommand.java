@@ -1,5 +1,6 @@
 package xyz.przemyk.simpleplanes.commands;
 
+import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.FloatArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
@@ -9,11 +10,13 @@ import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.context.ParsedCommandNode;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.entity.FakePlayer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.commands.arguments.coordinates.Vec3Argument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -25,6 +28,7 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -38,7 +42,10 @@ import xyz.przemyk.simpleplanes.entities.QuadcopterEntity;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesItems;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesRegistries;
+import xyz.przemyk.simpleplanes.setup.SimplePlanesUpgrades;
 import xyz.przemyk.simpleplanes.upgrades.engines.furnace.FurnaceEngineUpgrade;
+import xyz.przemyk.simpleplanes.upgrades.folding.FoldingUpgrade;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -46,6 +53,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
@@ -71,6 +79,9 @@ public final class AircraftCommand {
     private static final double HOLD_I_BAND = 5.0;
 
     private static final Map<String, Supplier<? extends EntityType<?>>> TYPES = new LinkedHashMap<>();
+
+    /** The fake player of {@code punch} and {@code fold}. */
+    private static final GameProfile TEST_PLAYER = new GameProfile(UUID.fromString("a1a7e5c0-0000-4000-8000-0000000a0101"), "[AircraftTest]");
 
     static {
         TYPES.put("plane", SimplePlanesEntities.PLANE);
@@ -188,6 +199,13 @@ public final class AircraftCommand {
             root.then(Commands.literal("trace").then(Commands.argument("id", IntegerArgumentType.integer(0))
                 .then(Commands.literal("on").executes(c -> trace(c, true)))
                 .then(Commands.literal("off").executes(c -> trace(c, false)))));
+
+            root.then(Commands.literal("punch").then(Commands.argument("id", IntegerArgumentType.integer(0))
+                .executes(c -> punch(c, false))
+                .then(Commands.literal("creative").executes(c -> punch(c, true)))));
+
+            root.then(Commands.literal("fold").then(Commands.argument("id", IntegerArgumentType.integer(0))
+                .executes(AircraftCommand::fold)));
 
             root.then(Commands.literal("kill").executes(AircraftCommand::kill));
             FighterCommand.register(root);
@@ -397,6 +415,69 @@ public final class AircraftCommand {
         control.traceTick = 0;
         report(context.getSource(), "Aircraft #" + entity.getId() + " trace " + (on ? "on" : "off"));
         return 1;
+    }
+
+    /**
+     * One melee hit by a fake player (survival, or creative) standing 1.5 b south of the aircraft, through
+     * vanilla {@code Player#attack}: the same damage source a real left click makes.
+     */
+    private static int punch(CommandContext<CommandSourceStack> context, boolean creative) {
+        Entity target = entity(context);
+        if (target == null) {
+            return 0;
+        }
+        ServerLevel level = (ServerLevel) target.level();
+        FakePlayer player = FakePlayer.get(level, TEST_PLAYER);
+        player.setGameMode(creative ? GameType.CREATIVE : GameType.SURVIVAL);
+        Vec3 centre = target.getBoundingBox().getCenter();
+        player.snapTo(centre.x, target.getY(), target.getBoundingBox().minZ - 1.5, 180.0F, 0.0F);
+        player.lookAt(EntityAnchorArgument.Anchor.EYES, centre);
+        player.attack(target);
+        report(context.getSource(), String.format(Locale.ROOT, "Aircraft #%d punched (%s): health %d, %s",
+            target.getId(), creative ? "creative" : "survival", health(target), target.isRemoved() ? "removed" : "alive"));
+        return 1;
+    }
+
+    /** Fits a folding upgrade and runs the dismount hook for a survival fake player; reports what it got back. */
+    private static int fold(CommandContext<CommandSourceStack> context) {
+        PlaneEntity plane = plane(context);
+        if (plane == null) {
+            return 0;
+        }
+        ServerLevel level = (ServerLevel) plane.level();
+        if (!plane.upgrades.containsKey(SimplePlanesRegistries.UPGRADE_TYPE.getKey(SimplePlanesUpgrades.FOLDING.get()))) {
+            plane.addUpgradeUsingWrench(SimplePlanesItems.FOLDING.get().getDefaultInstance(), new FoldingUpgrade(plane));
+        }
+        FakePlayer player = FakePlayer.get(level, TEST_PLAYER);
+        player.setGameMode(GameType.SURVIVAL);
+        player.getInventory().clearContent();
+        player.snapTo(plane.getX(), plane.getY(), plane.getZ(), 0.0F, 0.0F);
+        // Fabric's FakePlayer refuses startRiding, so this calls the hook LivingEntity#dismountVehicle runs
+        // once the last rider is off.
+        plane.getDismountLocationForPassenger(player);
+        int items = 0;
+        String got = "nothing";
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            ItemStack stack = player.getInventory().getItem(i);
+            if (!stack.isEmpty()) {
+                items += stack.getCount();
+                got = String.valueOf(stack.getItem());
+            }
+        }
+        player.getInventory().clearContent();
+        report(context.getSource(), String.format(Locale.ROOT, "Aircraft #%d folded: %s, player got %d item(s): %s",
+            plane.getId(), plane.isRemoved() ? "removed" : "still there", items, got));
+        return items;
+    }
+
+    private static int health(Entity entity) {
+        if (entity instanceof PlaneEntity plane) {
+            return plane.getHealth();
+        }
+        if (entity instanceof QuadcopterEntity quad) {
+            return quad.getHealth();
+        }
+        return -1;
     }
 
     private static int kill(CommandContext<CommandSourceStack> context) {

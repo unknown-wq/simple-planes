@@ -925,6 +925,8 @@ the synched `Q`. Each boots, summons, ticks and renders (on a client) before the
 | `status [id]` | one line per test aircraft: `#id type pos= vel= spd= vs= hdg= pitch= roll= thr= og=` |
 | `trace <id> on|off` | per-tick line `trace #id t= pos= spd= vs= hdg= pitch= roll= thr= og= agl=` to the log (planes) |
 | `kill` | removes every `aircraft-test`-tagged entity in loaded chunks |
+| `punch <id> [creative]` | one melee hit on the aircraft by a fake player (survival, or creative) through vanilla `Player#attack`; prints health and whether it was removed (§8.9) |
+| `fold <id>` | fits a folding upgrade and runs the dismount hook for a survival fake player; prints what the player got back (§8.9) |
 
 Planes with nobody aboard fly the server path (`transformPosPhysics`, no `RotationPacket`), which is the
 same path the autopilot exercises and the one every number in this design was computed for. Rider-side
@@ -936,6 +938,25 @@ All new per-tick traces are gated on a `Boolean.getBoolean` system property read
 final (`simpleplanes.aircraft.trace`, `simpleplanes.crane.trace`), print through the mod's logger at
 `INFO` with the `trace ` prefix, and are formatted with `String.format(Locale.ROOT, ...)` so
 `grep "trace #7" console.log` per aircraft works as it does for the autopilot.
+
+### 8.9 When an aircraft gives its item back
+
+Every airframe (`PlaneEntity` and its subclasses, `QuadcopterEntity`) drops its item only when a
+player breaks it by hand. The test is `PlaneEntity.isPlayerBreak(DamageSource)`: the damage type is in
+`#minecraft:is_player_attack` (`player_attack`, `spear`, `mace_smash`) and the direct and the causing
+entity are the same `Player`. The hit that takes health from above 0 to 0 or below must be that hit;
+the aircraft is then removed at once, on the ground or in reach in the air, and drops its item if the
+`entity_drops` game rule is on. The item carries the full save data, upgrades and their contents
+included, as before.
+
+Anything else is destruction and drops nothing: `crash()` (impacts, a strike flight hitting its target,
+falling at 0 HP), explosions (TNT, missiles, air defence, a player's own TNT or fireball), projectiles
+(arrows and tridents, the player's too), shooter fire, mobs, fire, lava, `/damage` without a player
+attacker, `/kill` and the void. What the aircraft carried is lost with it.
+
+A creative player's hit removes the aircraft without a drop, as before. The folding upgrade's return
+to the inventory on dismount is a deliberate pickup and is unchanged. The parachute is not an aircraft
+and still packs back into its item on landing. Test record: `design/NO-DROP.md`.
 
 ---
 
