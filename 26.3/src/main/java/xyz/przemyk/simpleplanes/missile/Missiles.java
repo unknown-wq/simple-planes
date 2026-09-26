@@ -11,6 +11,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Rarity;
 import net.minecraft.world.level.gamerules.GameRule;
 import net.minecraft.world.level.gamerules.GameRuleCategory;
 import net.minecraft.world.level.block.Block;
@@ -23,8 +24,8 @@ import xyz.przemyk.simpleplanes.SimplePlanesMod;
 
 /**
  * Registration for the missile feature: one entity type, the silo's two blocks, its block entity and its item, the
- * {@code missile_explosions} game rule, the {@code /missile} command and the tracker that keeps missiles' chunks
- * loaded. {@link #init()} is the single call from the mod initialiser.
+ * four missile items, the {@code missile_explosions} game rule, the {@code /missile} command and the tracker that
+ * keeps missiles' chunks loaded. {@link #init()} is the single call from the mod initialiser.
  */
 public final class Missiles {
 
@@ -50,6 +51,11 @@ public final class Missiles {
         new LaunchSiloItem(LAUNCH_SILO, new Item.Properties().useBlockDescriptionPrefix()
             .setId(ResourceKey.create(Registries.ITEM, id("launch_silo")))));
 
+    public static final MissileItem MISSILE_T1 = registerMissile(MissileTier.T1, Rarity.COMMON);
+    public static final MissileItem MISSILE_T2 = registerMissile(MissileTier.T2, Rarity.COMMON);
+    public static final MissileItem MISSILE_T3 = registerMissile(MissileTier.T3, Rarity.UNCOMMON);
+    public static final MissileItem MISSILE_T4 = registerMissile(MissileTier.T4, Rarity.RARE);
+
     /** {@code /gamerule simpleplanes:missile_explosions false} makes every missile harmless again (phase 1 behaviour). */
     public static final GameRule<Boolean> EXPLOSIONS = GameRuleBuilder.forBoolean(true)
         .category(GameRuleCategory.MISC)
@@ -59,7 +65,25 @@ public final class Missiles {
         MissileTracker.init();
         MissileCommand.register();
         CreativeModeTabEvents.modifyOutputEvent(ResourceKey.create(Registries.CREATIVE_MODE_TAB, id("planes_tab")))
-            .register(output -> output.accept(LAUNCH_SILO_ITEM));
+            .register(output -> {
+                output.accept(LAUNCH_SILO_ITEM);
+                for (MissileTier tier : MissileTier.values()) output.accept(missileItem(tier));
+            });
+    }
+
+    public static MissileItem missileItem(MissileTier tier) {
+        return switch (tier) {
+            case T1 -> MISSILE_T1;
+            case T2 -> MISSILE_T2;
+            case T3 -> MISSILE_T3;
+            case T4 -> MISSILE_T4;
+        };
+    }
+
+    private static MissileItem registerMissile(MissileTier tier, Rarity rarity) {
+        String name = "missile_t" + tier.tier;
+        return Registry.register(BuiltInRegistries.ITEM, id(name), new MissileItem(tier, new Item.Properties()
+            .stacksTo(16).rarity(rarity).setId(ResourceKey.create(Registries.ITEM, id(name)))));
     }
 
     private static <T extends Block> T registerBlock(String name, java.util.function.Function<BlockBehaviour.Properties, T> factory) {

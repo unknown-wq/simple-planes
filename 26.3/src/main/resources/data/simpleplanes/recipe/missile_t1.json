@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    " R ",
+    " G ",
+    "iFi"
+  ],
+  "key": {
+    "R": "#c:dusts/redstone",
+    "G": "#c:gunpowders",
+    "i": "#c:ingots/iron",
+    "F": "minecraft:firework_rocket"
+  },
+  "result": {
+    "id": "simpleplanes:missile_t1"
+  }
+}
