@@ -14,6 +14,7 @@ import xyz.przemyk.simpleplanes.client.gui.StorageScreen;
 import xyz.przemyk.simpleplanes.client.missile.MissilesClient;
 import xyz.przemyk.simpleplanes.client.render.AirfieldOverlayRenderer;
 import xyz.przemyk.simpleplanes.client.render.ToolPreview;
+import xyz.przemyk.simpleplanes.api.map.AviationMap;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesContainers;
 
@@ -55,6 +56,7 @@ public class SimplePlanesClient implements ClientModInitializer {
         });
 
         SimplePlanesNetworking.registerClient();
+        AviationMap.init();
 
         // TODO(port-26.2): DISABLED — item colour providers (PlaneItemColors) were removed in 26.x;
         // plane item tints are model-JSON driven now. See PORT-STATUS "Disabled content".
