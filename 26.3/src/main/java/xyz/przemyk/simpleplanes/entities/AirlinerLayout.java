@@ -13,24 +13,25 @@ public final class AirlinerLayout {
     public static final int PILOT = 0;
     public static final int FIRST_OFFICER = 1;
     public static final int FIRST_CABIN_SEAT = 2;
-    /** Feet point height of a cabin seat, blocks: hips on the cushion 4 px above the floor; eye 2.18 (2.26 in game). */
+    /** Feet point height of a cabin seat before the {@link #lift()}, blocks: hips on the cushion 4 px above the floor. */
     public static final float CABIN_Y = 0.5625F;
-    /** Feet point height of a crew seat, blocks: 2 px higher; eye 2.31 (2.38 in game), in the lower windscreen's panes. */
+    /** Feet point height of a crew seat before the {@link #lift()}, blocks: 2 px higher, eye in the lower windscreen. */
     public static final float CREW_Y = 0.6875F;
-    /** Hull box, blocks: belly and crown (the same for every size) and the nose tip. */
+    /** Hull box, blocks: belly (the same for every size), crown before the {@link #lift()}, and the nose tip. */
     public static final float HULL_Y0 = 0.8125F, HULL_Y1 = 3.1875F, HULL_NOSE = 6.0625F;
     /** Most seats of any size: the entity defines this many synched seat slots. */
     public static final int MAX_SEATS = 22;
 
-    /** Mini airliner: 58 px wide, 2 + 20 seats, two by two either side of the aisle. */
-    public static final AirlinerLayout WIDE = new AirlinerLayout(new int[]{11, -11}, -66,
+    /** Mini airliner: 58 px wide, 2 + 20 seats, two by two either side of the aisle; cabin 16 px above the base. */
+    public static final AirlinerLayout WIDE = new AirlinerLayout(16, new int[]{11, -11}, -66,
         new int[]{-46, -28, -10, 8, 26}, new int[]{21, 9, -9, -21}, 3.25F,
         1.8125F, 5.625F, new float[]{4.5F, 1.5F, -1.5F, -4.5F});
-    /** Regional airliner: 40 px wide, 2 + 12 seats, one either side of the aisle. */
-    public static final AirlinerLayout REGIONAL = new AirlinerLayout(new int[]{9, -9}, -66,
+    /** Regional airliner: 40 px wide, 2 + 12 seats, one either side of the aisle; cabin 8 px above the base. */
+    public static final AirlinerLayout REGIONAL = new AirlinerLayout(8, new int[]{9, -9}, -66,
         new int[]{-50, -33, -16, 1, 18, 35}, new int[]{12, -12}, 3.3125F,
         1.25F, 5.875F, new float[]{4.75F, 2.25F, -2.25F, -4.75F});
 
+    private final int lift;
     private final int[] cockpitX;
     private final int cockpitRowZ;
     private final int[] rowZ;
@@ -40,8 +41,9 @@ public final class AirlinerLayout {
     private final float hullTail;
     private final float[] partStations;
 
-    private AirlinerLayout(int[] cockpitX, int cockpitRowZ, int[] rowZ, int[] abreastX, float cockpitZ,
+    private AirlinerLayout(int lift, int[] cockpitX, int cockpitRowZ, int[] rowZ, int[] abreastX, float cockpitZ,
                            float hullHalfWidth, float hullTail, float[] partStations) {
+        this.lift = lift;
         this.cockpitX = cockpitX;
         this.cockpitRowZ = cockpitRowZ;
         this.rowZ = rowZ;
@@ -50,6 +52,24 @@ public final class AirlinerLayout {
         this.hullHalfWidth = hullHalfWidth;
         this.hullTail = hullTail;
         this.partStations = partStations;
+    }
+
+    /**
+     * Model px by which the cabin, everything above it and the seats sit above the base cross-section; the keel,
+     * wings, engines and gear do not move, the lower lobe grows by this much.
+     */
+    public int lift() {
+        return lift;
+    }
+
+    /** Feet point height of a cabin seat, blocks. */
+    public float cabinY() {
+        return CABIN_Y + lift / 16.0F;
+    }
+
+    /** Top of the hull box (the crown), blocks. */
+    public float hullTop() {
+        return HULL_Y1 + lift / 16.0F;
     }
 
     public int count() {
@@ -100,8 +120,8 @@ public final class AirlinerLayout {
     }
 
     /** Entity-space y of the feet point, blocks. */
-    public static float y(int seat) {
-        return isCockpit(seat) ? CREW_Y : CABIN_Y;
+    public float y(int seat) {
+        return (isCockpit(seat) ? CREW_Y : CABIN_Y) + lift / 16.0F;
     }
 
     /** Entity-space x of the feet point, blocks. */

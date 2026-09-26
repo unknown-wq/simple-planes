@@ -63,10 +63,12 @@ public final class PlanesModelLayers {
     public static final ModelLayerLocation AIRLINER_SKIN_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "skin");
     public static final ModelLayerLocation AIRLINER_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "metal");
     public static final ModelLayerLocation AIRLINER_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "propeller");
+    public static final ModelLayerLocation AIRLINER_GLASS_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airliner"), "glass");
     public static final ModelLayerLocation REGIONAL_AIRLINER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "main");
     public static final ModelLayerLocation REGIONAL_AIRLINER_SKIN_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "skin");
     public static final ModelLayerLocation REGIONAL_AIRLINER_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "metal");
     public static final ModelLayerLocation REGIONAL_AIRLINER_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "propeller");
+    public static final ModelLayerLocation REGIONAL_AIRLINER_GLASS_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "regional_airliner"), "glass");
     public static final ModelLayerLocation AIRSHIP_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airship"), "main");
     public static final ModelLayerLocation AIRSHIP_METAL_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airship"), "metal");
     public static final ModelLayerLocation AIRSHIP_PROPELLER_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "airship"), "propeller");
@@ -134,9 +136,10 @@ public final class PlanesModelLayers {
         ModelLayerRegistry.registerModelLayer(FIGHTER_METAL_LAYER, FighterMetalModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(FIGHTER_PROPELLER_LAYER, FighterExhaustModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(FIGHTER_GLASS_LAYER, FighterGlassModel::createBodyLayer);
-        registerAirlinerLayers(AirlinerShape.WIDE, AIRLINER_LAYER, AIRLINER_SKIN_LAYER, AIRLINER_METAL_LAYER, AIRLINER_PROPELLER_LAYER);
+        registerAirlinerLayers(AirlinerShape.WIDE, AIRLINER_LAYER, AIRLINER_SKIN_LAYER, AIRLINER_METAL_LAYER, AIRLINER_PROPELLER_LAYER,
+                AIRLINER_GLASS_LAYER);
         registerAirlinerLayers(AirlinerShape.REGIONAL, REGIONAL_AIRLINER_LAYER, REGIONAL_AIRLINER_SKIN_LAYER,
-                REGIONAL_AIRLINER_METAL_LAYER, REGIONAL_AIRLINER_PROPELLER_LAYER);
+                REGIONAL_AIRLINER_METAL_LAYER, REGIONAL_AIRLINER_PROPELLER_LAYER, REGIONAL_AIRLINER_GLASS_LAYER);
         ModelLayerRegistry.registerModelLayer(AIRSHIP_LAYER, AirshipModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(AIRSHIP_METAL_LAYER, AirshipMetalModel::createBodyLayer);
         ModelLayerRegistry.registerModelLayer(AIRSHIP_PROPELLER_LAYER, AirshipPropellerModel::createBodyLayer);
@@ -231,9 +234,10 @@ public final class PlanesModelLayers {
                 SimplePlanesMod.texture("fighter_metal.png")));
 
         registerAirliner(SimplePlanesEntities.AIRLINER.get(), AirlinerShape.WIDE,
-                AIRLINER_LAYER, AIRLINER_SKIN_LAYER, AIRLINER_METAL_LAYER, AIRLINER_PROPELLER_LAYER);
+                AIRLINER_LAYER, AIRLINER_SKIN_LAYER, AIRLINER_METAL_LAYER, AIRLINER_PROPELLER_LAYER, AIRLINER_GLASS_LAYER);
         registerAirliner(SimplePlanesEntities.REGIONAL_AIRLINER.get(), AirlinerShape.REGIONAL,
-                REGIONAL_AIRLINER_LAYER, REGIONAL_AIRLINER_SKIN_LAYER, REGIONAL_AIRLINER_METAL_LAYER, REGIONAL_AIRLINER_PROPELLER_LAYER);
+                REGIONAL_AIRLINER_LAYER, REGIONAL_AIRLINER_SKIN_LAYER, REGIONAL_AIRLINER_METAL_LAYER, REGIONAL_AIRLINER_PROPELLER_LAYER,
+                REGIONAL_AIRLINER_GLASS_LAYER);
         EntityRendererRegistry.register(SimplePlanesEntities.AIRLINER_PART.get(), NoopRenderer::new);
         EntityRendererRegistry.register(SimplePlanesEntities.REGIONAL_AIRLINER_PART.get(), NoopRenderer::new);
 
@@ -287,22 +291,25 @@ public final class PlanesModelLayers {
                 context -> new ParachuteRenderer(context, new ParachuteModel(context.bakeLayer(PARACHUTE_LAYER))));
     }
 
-    /** The four layers of one airliner size: wooden body, metal skin, metal parts, fans. */
+    /** The five layers of one airliner size: wooden body, metal skin, metal parts, fans, window glass. */
     private static void registerAirlinerLayers(AirlinerShape shape, ModelLayerLocation body, ModelLayerLocation skin,
-                                               ModelLayerLocation metal, ModelLayerLocation fans) {
+                                               ModelLayerLocation metal, ModelLayerLocation fans, ModelLayerLocation glass) {
         ModelLayerRegistry.registerModelLayer(body, () -> AirlinerModel.createBodyLayer(shape));
         ModelLayerRegistry.registerModelLayer(skin, () -> AirlinerSkinModel.createBodyLayer(shape));
         ModelLayerRegistry.registerModelLayer(metal, () -> AirlinerMetalModel.createBodyLayer(shape));
         ModelLayerRegistry.registerModelLayer(fans, () -> AirlinerFanModel.createBodyLayer(shape));
+        ModelLayerRegistry.registerModelLayer(glass, () -> AirlinerGlassModel.createBodyLayer(shape));
     }
 
     private static void registerAirliner(EntityType<? extends AirlinerEntity> type, AirlinerShape shape, ModelLayerLocation body,
-                                         ModelLayerLocation skin, ModelLayerLocation metal, ModelLayerLocation fans) {
+                                         ModelLayerLocation skin, ModelLayerLocation metal, ModelLayerLocation fans,
+                                         ModelLayerLocation glass) {
         EntityRendererRegistry.<AirlinerEntity>register(type, context -> new AirlinerRenderer(context, shape,
                 new AirlinerModel(context.bakeLayer(body)),
                 new AirlinerSkinModel(context.bakeLayer(skin)),
                 new AirlinerMetalModel(context.bakeLayer(metal), shape),
                 new AirlinerFanModel(context.bakeLayer(fans)),
+                new AirlinerGlassModel(context.bakeLayer(glass), shape),
                 1.0F));
     }
 }

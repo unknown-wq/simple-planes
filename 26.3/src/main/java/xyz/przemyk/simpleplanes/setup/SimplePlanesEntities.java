@@ -139,9 +139,9 @@ public class SimplePlanesEntities {
     public static final Supplier<EntityType<CargoPlaneEntity>> CARGO_PLANE = register("cargo_plane", CargoPlaneEntity::new, 3F, 2.3F);
     public static final Supplier<EntityType<HelicopterEntity>> HELICOPTER = register("helicopter", HelicopterEntity::new, 2.5F, 2.2F);
     public static final Supplier<EntityType<FighterEntity>> FIGHTER = register("fighter", FighterEntity::new, 3.0F, 2.0F);
-    public static final Supplier<EntityType<AirlinerEntity>> AIRLINER = register("airliner", AirlinerEntity::new, 3.0F, 2.6F);
+    public static final Supplier<EntityType<AirlinerEntity>> AIRLINER = register("airliner", AirlinerEntity::new, 3.0F, 3.6F);
     public static final Supplier<EntityType<RegionalAirlinerEntity>> REGIONAL_AIRLINER =
-        register("regional_airliner", RegionalAirlinerEntity::new, 2.2F, 2.6F);
+        register("regional_airliner", RegionalAirlinerEntity::new, 2.2F, 3.1F);
     public static final Supplier<EntityType<AirshipEntity>> AIRSHIP = register("airship", AirshipEntity::new, 3.0F, 2.5F);
     public static final Supplier<EntityType<MiniHelicopterEntity>> MINI_HELICOPTER = register("mini_helicopter", MiniHelicopterEntity::new, 1.5F, 1.95F);
     public static final Supplier<EntityType<QuadcopterEntity>> QUADCOPTER = register("quadcopter", QuadcopterEntity::new, 1.0F, 0.875F);
@@ -154,15 +154,16 @@ public class SimplePlanesEntities {
     /**
      * The airliners' nose-to-tail hitboxes ({@link AirlinerPartEntity}), one type per size: never saved, not
      * summonable. The client positions them from the airliner itself, so their own updates only need to be occasional.
+     * Height: the crown ({@code AirlinerLayout#hullTop}) plus about 0.1 block.
      */
-    public static final Supplier<EntityType<AirlinerPartEntity>> AIRLINER_PART = registerPart("airliner_part", 3.4F);
-    public static final Supplier<EntityType<AirlinerPartEntity>> REGIONAL_AIRLINER_PART = registerPart("regional_airliner_part", 2.6F);
+    public static final Supplier<EntityType<AirlinerPartEntity>> AIRLINER_PART = registerPart("airliner_part", 3.4F, 4.3F);
+    public static final Supplier<EntityType<AirlinerPartEntity>> REGIONAL_AIRLINER_PART = registerPart("regional_airliner_part", 2.6F, 3.8F);
 
-    private static Supplier<EntityType<AirlinerPartEntity>> registerPart(String name, float width) {
+    private static Supplier<EntityType<AirlinerPartEntity>> registerPart(String name, float width, float height) {
         EntityType<AirlinerPartEntity> part = Registry.register(BuiltInRegistries.ENTITY_TYPE,
             Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, name),
             EntityType.Builder.<AirlinerPartEntity>of(AirlinerPartEntity::new, MobCategory.MISC)
-                .sized(width, 3.3F)
+                .sized(width, height)
                 .noSave()
                 .noSummon()
                 .fireImmune()

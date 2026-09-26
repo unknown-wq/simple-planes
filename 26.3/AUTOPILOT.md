@@ -791,6 +791,15 @@ Worst case past the aim point over thirteen arrivals: **6.4 blocks**. The roll-o
 **1.1–1.3 blocks every single time** — the brakes are not the variable, the float is, which is why
 the reserve is sized on the float and not on the braking distance.
 
+**Airliners are the exception.** Both airliners brake gently on the ground (`AirlinerEntity.GROUND_BRAKES`,
+`design/DESIGN.md` section 4.6): touchdown 8–9 blocks past the aim point, then a roll-out of **27.6–28.5
+blocks** (regional 21), so 37 blocks (regional 30) past the aim point instead of 6.4. Measured: 68 blocks down
+a 183-block runway and 54 down a 79-block one (regional 66 and 49), and every landing taxied in. The reserve
+is not changed for them; an airliner simply needs a longer runway: `0.2 L + 37 <= L` gives L >= 47 blocks
+for the landing, and the take-off (airborne at 52 blocks, regional 39) makes it about **60 blocks** (regional
+45). Shorter strips pass the generic length check, but by this arithmetic (not flown) the airliner would
+run off their far end.
+
 **The whole chain now shares one datum**, which it did not before, and that disagreement is exactly
 what produced "lands 1 block down the runway" on one field and a go-around on another:
 

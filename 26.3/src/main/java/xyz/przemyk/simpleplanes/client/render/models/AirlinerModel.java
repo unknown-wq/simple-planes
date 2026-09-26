@@ -15,9 +15,9 @@ import static java.util.Map.entry;
  * of the plane's material, tiled 1 texel per pixel like {@link PlaneModel}. {@link AirlinerSkinModel} is the
  * same airframe with a painted metal skin.
  *
- * <p>Rendered with {@link RenderTypes#entityCutoutCull}: every rider's eye is inside the fuselage, and only a
- * back-face-culled render type lets them see out through the walls. The default {@code entityCutout} of
- * {@code EntityModel} does not cull in 26.2. See AIRLINER-MODEL.md.
+ * <p>Rendered with {@link RenderTypes#entityCutoutCull}: every rider's eye is inside the fuselage, and the outer
+ * boxes must not be seen from there; the cabin liner faces inwards instead. The default {@code entityCutout} of
+ * {@code EntityModel} does not cull. See AIRLINER-MODEL.md.
  */
 public class AirlinerModel extends EntityModel<PlaneRenderState> {
 
@@ -33,6 +33,10 @@ public class AirlinerModel extends EntityModel<PlaneRenderState> {
             entry("pillar_6", new int[]{13, 2}), entry("pillar_7", new int[]{1, 10}), entry("pillar_8", new int[]{3, 10}),
             entry("pillar_9", new int[]{5, 10}), entry("pillar_10", new int[]{7, 10}), entry("pillar_11", new int[]{9, 10}),
             entry("pillar_12", new int[]{11, 10}), entry("pillar_13", new int[]{13, 10}),
+            entry("liner_floor", new int[]{0, 0}), entry("liner_ceiling", new int[]{4, 4}),
+            entry("liner_wall_low", new int[]{2, 6}), entry("liner_wall_high", new int[]{6, 2}),
+            entry("liner_front_low", new int[]{8, 8}), entry("liner_front_top", new int[]{10, 4}),
+            entry("liner_front_side", new int[]{12, 12}),
             entry("nose_1", new int[]{2, 2}), entry("nose_2", new int[]{6, 6}), entry("nose_3", new int[]{10, 10}),
             entry("nose_4", new int[]{14, 14}), entry("nose_5", new int[]{4, 12}), entry("nose_6", new int[]{12, 4}), entry("nose_7", new int[]{0, 14}),
             entry("tail_1", new int[]{4, 4}), entry("tail_2", new int[]{8, 2}), entry("tail_3", new int[]{12, 6}),

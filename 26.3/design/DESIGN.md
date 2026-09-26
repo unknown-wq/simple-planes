@@ -342,6 +342,87 @@ and 1500 ticks; `launch 1.25`, `hold`, throttle 5, 300 ticks, then `set yaw 1`),
 The regional needs 26 % less runway and turns 25 % faster; the mini airliner's numbers are unchanged to the
 digit by the second size.
 
+### 4.5 Taller fuselage
+
+Both airliners are taller by a lift `L` (`AirlinerLayout.lift()`): **16 px (1 block) on the mini airliner, 8 px
+on the regional**. The keel, the wings, the engines, the gear and the belly fairing stay where they were; the
+lower lobe grows by `L` and the cabin, the window band, the cockpit, the crown and the fin move up by `L`.
+Seats, rider positions, the hull box used for click boarding and the passengers' riding offset follow
+(`AirlinerLayout.y(seat)`, `cabinY()`, `hullTop()`). The entity box is `sized(3.0, 3.6)` (regional
+`sized(2.2, 3.1)`) and the hitbox entities `sized(3.4, 4.3)` (regional `sized(2.6, 3.8)`), the crown plus
+about 0.1 block. The keel end is unchanged, so the tail-strike angles (14.5 and 13.4 deg) and the 12 deg ground
+pitch clamp stay. Take-off, cruise and turn are measured unchanged (`flighttest.sh`): rotation at 33.8 b
+(90 t), airborne at 52.1 b (118 t) at 0.71 b/t; regional 23.5 b (72 t) and 38.4 b (97 t) at 0.66 b/t; level
+speed 1.250 b/t; turn 53.0 / 73.7 / 94.7 deg (regional 65.2 / 90.8 / 116.8). Model details are in
+AIRLINER-MODEL.md.
+
+### 4.6 Braking and roll-out
+
+**Before.** `PlaneEntity.tickMotion` multiplies the whole drag polynomial by `brakesMul = 5` whenever the
+throttle is 0, in the air and on the ground, for every plane. With the airliner's ground drag
+(`dragMul 0.0003 x 5`, `drag 0.0005 + 0.007`) that stopped it from touchdown speed 0.55 b/t in 3.4 b and
+14 ticks (0.8 g), and from taxi speed 0.20 in 0.4 b. The autopilot's roll-out took 2.6 to 2.8 b.
+
+**Change.** A hook `PlaneEntity.brakeMultiplier(onGround)` returns 5 (every plane as before);
+`AirlinerEntity` returns `GROUND_BRAKES = 0.6` on the ground and 5 in the air, so approaches, descents and
+the autopilot's speed schedule are unchanged. The regional has the same brakes on a lighter aircraft:
+`0.6 / 0.8125 = 0.74` (m as in 4.4). The autopilot's roll-out holds pitch 0 against the flare attitude,
+so its elevator reads nose-down, and `tickOnGround` turns a nose-down input on the ground into a reverse push
+(`-groundPush`) that stopped even the new roll-out in about 12 b. `AirlinerEntity.tickOnGround` scales that
+push by `brakeMultiplier(true) / 5` above `WHEEL_BRAKE_TAXI_SPEED = 0.2` b/t; below it the full push remains,
+so taxiing, reversing and stopping at a stand behave as before.
+
+| measured on the server | before (beta.5), both sizes | mini airliner | regional |
+|---|---|---|---|
+| from 0.55 b/t, throttle 0, level ground (`brake.sh`) | 3.43 b, 14 t | **30.5 b, 108 t** (30.6 b to a standstill, 116 t) | **24.7 b, 88 t** (24.8 b, 95 t) |
+| from 0.20 b/t (taxi) | 0.42 b, 6 t | 4.1 b, 36 t | 3.3 b, 30 t |
+| mean deceleration from 0.55 b/t | 0.8 g | 0.21 g (11 m/s to 0 in 5.4 s, 1 b = 1 m) | 0.25 g |
+| autopilot roll-out, 183 b runway, touchdown to below 0.04 b/t | 2.7 b / 2.6 b | **27.6 b, 101 t**; touchdown 0.550 b/t 41 b past the threshold, stopped 68 b down (37 %) | **21.1 b, 79 t**; touchdown 0.542, 45 b in, stopped 66 b down (36 %) |
+| autopilot roll-out, 79 b runway | 2.8 b | **28.5 b, 102 t**; touchdown 0.554, 25 b in, 54 b down (68 %), 25 b left | **20.9 b, 79 t**; touchdown 0.540, 27 b in, 49 b down (61 %) |
+
+Both sizes taxied in to the stand after every landing (stopping 5 to 6 blocks short of it, as before the
+change).
+
+**Runway needed.** The autopilot aims its touchdown at `touchdownAimOffset(L) = clamp(0.2 L, 6, 40)`, never
+closer than `LANDING_STOP_RESERVE = 12` b to the far end; the airliner touches down 8 to 9 b past the aim
+point and then rolls 28.5 b (regional 21 b). A landing therefore needs `0.2 L + 9 + 28.5 <= L`, **L >= 47 b**
+(regional `0.2 L + 9 + 21 <= L`, L >= 38 b). The take-off needs more: airborne at 52 b (regional 39 b), so
+an airliner runway should be **at least 60 b** (regional 45 b). The airfield browser's generic check
+(`TAKEOFF_LENGTH_NEEDED`, the 18 b minimum) is written for the light planes and does not know this; the
+test runways used here are 79 and 183 b.
+
+### 4.7 Landing gear
+
+The gear retracts after take-off and extends for landing, on both sizes, for the autopilot and for a player
+alike (no key). It is visual only: physics, collisions, hitboxes and ground contact do not change.
+
+- **State.** A synched boolean `AirlinerEntity.GEAR_DOWN`, decided on the server in `tickGear()` every tick,
+  saved as `GearDown` (not kept in the item). The client moves `gear` from 0 (up) to 1 (down) by
+  `1 / GEAR_TRAVEL_TICKS` per tick (30 ticks, 1.5 s) with `Mth.approach`, and `gearDown(partialTicks)`
+  interpolates it per frame. An airliner the client has just received (spawned, loaded, entered tracking range)
+  shows the synced state until its first client tick and snaps to it, with no travel, for its first 5.
+- **Rule** (heights are above `MOTION_BLOCKING`, `vy` the climb in b/t over the last tick, speed from the
+  position change, so a player-flown airliner, moved by packets on the server, reads the same):
+  - on the ground or on water: **down**, at once;
+  - retract, when down: not in the autopilot's arrival, and AGL > **25** b, or AGL > **4** b and climbing
+    (`vy > 0.02`);
+  - extend, when up: in the autopilot's arrival (`FINAL`, `FLARE`, `ROLLOUT`, `TAXI_IN`; `FINAL` starts 150 b
+    before the threshold), or below 25 b AGL and descending (`vy < -0.02`), or below 25 b AGL, not climbing
+    (`vy <= 0`) and either below **8** b or slower than **0.85** b/t;
+  - after a change the rule holds the new state for `GEAR_HOLD_TICKS` = 60 ticks in the air (a level-off
+    right after the retraction does not bring the gear back down).
+- **Measured.** Take-off (`geartakeoff.sh`): the mini airliner lifts off at 42.5 b and 0.64 b/t, retracts
+  26 ticks later at 4.2 b AGL climbing 0.27 b/t; the regional lifts off at 32.0 b, retracts 23 ticks later at
+  4.2 b AGL. Autopilot arrival: extends at the `FINAL` handover, 150 b before the threshold, about 30 b above
+  the runway and 16 s before touchdown. A descent flown by `aircraft hold` from 30 b AGL: extends at 21 b AGL
+  sinking 0.025 b/t.
+- **Model.** `AirlinerMetalModel`'s `nose_gear`, `main_gear_left` and `main_gear_right` are parts pivoted at
+  the top of each strut. With `t` the smoothstep of `1 - state.airlinerGear`: the nose leg folds forward
+  (`xRot = -t pi/2`) and rises 4 px, the main legs fold inward (`zRot = +-t pi/2`) and rise 3 px, into the
+  lower lobe and the wing root. Three part poses per frame; no cubes were added.
+- **Test aid.** `/airliner gear <id> auto|down|up` holds the gear regardless of the rule (not saved);
+  `airliner status` and `aircraft trace` print `gear=down|up`.
+
 ---
 
 ## 5. Airship
