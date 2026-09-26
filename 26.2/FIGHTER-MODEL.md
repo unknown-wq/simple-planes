@@ -112,15 +112,25 @@ player model, which `PlayerRenderer` scales by 15/16:
 - The eye is at feet + 1.62 = entity y **1.6825**, which is inside the lowest canopy tier (`canopy_main`,
   entity y 1.375 to 1.6875).
 
-The canopy is opaque tinted glass, so the pilot cannot be seen from outside. The pilot can still see out:
-all three layers use the default `EntityModel` render type, which in 26.2 is `RenderTypes::entityCutout`
-and culls back faces, so from an eye inside `canopy_main` every face of the canopy is a back face.
+The canopy is opaque tinted glass, so the pilot cannot be seen from outside. The pilot can still see out
+because `FighterMetalModel` is constructed with **`RenderTypes::entityCutoutCull`**, which culls back faces:
+from an eye inside `canopy_main` every face of the canopy is a back face.
+
+The default `EntityModel(ModelPart)` render type is `RenderTypes::entityCutout`, and in 26.2 that does
+**not** cull: `RenderPipelines.ENTITY_CUTOUT` (`pipeline/entity_cutout`) is built with `withCull(false)`
+and lights back faces separately (`PER_FACE_LIGHTING`). The culling variant is
+`RenderPipelines.ENTITY_CUTOUT_CULL` (`pipeline/entity_cutout_cull`), reached through
+`RenderTypes.entityCutoutCull`. With the default the pilot would see the inside of the canopy all round
+(an earlier version of this file said the default culls; it does not). The other two layers keep the
+default: the pilot's eye is inside none of their boxes, and the open cockpit's walls are meant to be seen
+from inside anyway. No cube in any fighter layer has zero thickness, so nothing needs to stay two-sided.
 
 If the seat ends up a little higher and the eye moves up into `canopy_mid`, the only canopy face pointing
 at it is the top of `canopy_main`. The part of that face lying under `canopy_mid` is cut out
 (alpha 0) in the texture; the same is done for the top of `canopy_mid` under `canopy_top`. What is left is
-a 1 to 2 px ledge outline. Do not change these models to a no-cull render type, or the canopy will cover
-the pilot's view.
+a 1 to 2 px ledge outline. Keep `FighterMetalModel` on `entityCutoutCull`; on a no-cull render type the
+canopy covers the pilot's view. The constructor call also lives in `tools/model-preview/gen/FighterMetalModel.java.tmpl`,
+so `gen.py` keeps it when it rewrites the Java file.
 
 ## Exhaust and the throttle animation
 
@@ -165,6 +175,9 @@ needs its own submit with an emissive render type, for example `RenderTypes.eyes
   turbine face, and the flame.
 - The only transparent texels are canopy faces that cannot be seen from outside: the bottom faces, the
   rear face of the windscreen foot, and the covered parts of the tier tops described under Seat.
+- Render types: `FighterMetalModel` uses `RenderTypes::entityCutoutCull` (see Seat); `FighterModel` and
+  `FighterExhaustModel` use the `EntityModel` default, `entityCutout`, which is alpha-cutout and two-sided in
+  26.2.
 - The existing `plane_metal.png` could not be reused. It has no alpha channel, and it has no glass, flame or
   turbine regions.
 

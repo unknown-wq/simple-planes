@@ -4,22 +4,25 @@ import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.model.geom.PartPose;
 import net.minecraft.client.model.geom.builders.*;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
 import xyz.przemyk.simpleplanes.client.render.PlaneRenderState;
 
 /**
  * Fighter jet, metal layer: nose cone and pitot probe, bubble canopy, instrument panel, side air intakes,
  * landing gear and the wingtip missiles. Uses {@code textures/plane_upgrades/fighter_metal.png} (128x128).
  *
- * <p>The canopy is opaque tinted glass. The pilot's eye sits inside {@code canopy_main}, and the default
- * {@code entityCutout} render type culls back faces, so the canopy does not block the first-person view;
- * the parts of the lower tiers' top faces that lie under the next tier are cut out of the texture so this
+ * <p>The canopy is opaque tinted glass. The pilot's eye sits inside {@code canopy_main}, and this layer is
+ * rendered with {@link RenderTypes#entityCutoutCull}, which culls back faces, so the canopy does not block the
+ * first-person view. The default {@code entityCutout} of {@code EntityModel} does NOT cull in 26.2
+ * ({@code pipeline/entity_cutout} is built with {@code withCull(false)}) and would show the canopy from inside.
+ * The parts of the lower tiers' top faces that lie under the next tier are cut out of the texture so this
  * still holds if the seat ends up slightly higher. See FIGHTER-MODEL.md.
  */
 public class FighterMetalModel extends EntityModel<PlaneRenderState> {
     private final ModelPart Metal;
 
     public FighterMetalModel(ModelPart root) {
-        super(root);
+        super(root, RenderTypes::entityCutoutCull);
         this.Metal = root.getChild("Metal");
     }
 
