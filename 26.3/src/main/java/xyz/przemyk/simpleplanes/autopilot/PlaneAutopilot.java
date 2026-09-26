@@ -93,6 +93,8 @@ public class PlaneAutopilot {
     private final TerrainScanner scanner = new TerrainScanner();
     /** Decides between climbing over the terrain ahead and going round it. See {@link RoutePlanner}. */
     private final RoutePlanner router = new RoutePlanner();
+    /** Defensive manoeuvring against air-defence missiles (fighters only). See {@link MissileEvasion}. */
+    private final MissileEvasion evasion = new MissileEvasion();
     /** How the arrival is being flown and why; null until the aircraft starts down. */
     private @Nullable ArrivalPlan arrival;
     /** Tick the committed arrival is next re-checked on; see {@link #commitArrival}. */
@@ -544,6 +546,19 @@ public class PlaneAutopilot {
 
         if (!isActive()) {
             return;
+        }
+
+        // evasion: under missile attack a fighter flies the defensive manoeuvre over the mode's command. A pitch
+        // override set here means the committed strike dive (or a landing phase, which never defends): not interrupted.
+        MissileEvasion.Command evade = evasion.tick(plane, mode, cmdPitchOverride != null, owner);
+        if (evade != null) {
+            cmdHeading = evade.heading();
+            cmdTargetAltitude += evade.climb();
+            cmdBankLimit = evade.bankLimit();
+            cmdSpeed = AutopilotConfig.STRIKE_SPEED;
+            cmdMaxThrottle = maxThrottle(plane);
+            cmdMinThrottle = cmdMaxThrottle;
+            cmdTerrainFollow = true;
         }
 
         if (checkGrounded(plane)) {
@@ -2710,6 +2725,7 @@ public class PlaneAutopilot {
         // Last, and always present: what the path planner decided and why. Without it a status line
         // shows an aircraft turning or circling with no way to tell a plan from a malfunction.
         builder.append(" plan[").append(planPhrase()).append(']');
+        builder.append(evasion.statusFragment());
         return builder.toString();
     }
 

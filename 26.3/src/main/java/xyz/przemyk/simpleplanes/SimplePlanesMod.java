@@ -9,6 +9,7 @@ import xyz.przemyk.simpleplanes.api.BlastGuardCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotCommand;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotComponents;
 import xyz.przemyk.simpleplanes.autopilot.AutopilotRegistry;
+import xyz.przemyk.simpleplanes.autopilot.MissileWarning;
 import xyz.przemyk.simpleplanes.autopilot.TowerWatch;
 import xyz.przemyk.simpleplanes.combat.GunshipCommand;
 import xyz.przemyk.simpleplanes.combat.GunshipRegistry;
@@ -91,6 +92,8 @@ public class SimplePlanesMod implements ModInitializer {
         CraneCommand.register();
         Missiles.init();
         AirDefence.init();
+        // missile warning on the action bar for players aboard an aircraft an AD missile is chasing.
+        MissileWarning.init();
         // aviation map: silo index, snapshot and launch payloads for a world map mod, /aviation.
         AviationService.init();
 

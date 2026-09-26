@@ -1122,6 +1122,66 @@ sleep 4                                            # taxiing, so it holds airfie
 ./cmd.sh "autopilot tower"                         # -> airfield-1  36/18  FREE  no traffic
 ```
 
+### Recipe: a fighter against a silo (missile evasion)
+
+See `AUTOPILOT.md` §3b and `design/FIGHTER-EVASION.md`. One silo per run, on a fresh spot each time, so
+no run inherits another's missile or reload. Surface y=−19 on the standard superflat rig.
+
+```sh
+# a T3 silo in air-defence mode (silos only engage hostile aircraft)
+./cmd.sh "forceload add 24000 0"
+./cmd.sh "missile silo place 24000 -20 0 3 true"
+./cmd.sh "airdefence mode 24000 -20 0 air_defence"
+
+# route across it: from 475 blocks out (detection 225 + 250) to 700 beyond, and back to an improvised landing
+./cmd.sh "autopilot route 24000 -19 475 24000 -19 -700 type fighter hostile"
+for i in $(seq 1 40); do ./cmd.sh "autopilot status"; sleep 0.5; done
+grep -E "\[evasion\]|\[missile\]|\[airdefence\]|Plane #" console.log
+# -> [airdefence] silo 24000, -20, 0 T3 engaging #1 at 218.9 blocks
+# -> [evasion] #1 break missile #34 T3 range=28 closing=5.20 tti=0.3s left=836 clock=12
+# -> [missile] #34 T3 INTERCEPTED ...          (head on: usually lost at the default reaction)
+# status while defending:  ... plan[direct] evading(drag, missile #2, tti=2.2s, 9 o'clock) hostile
+
+# a strike on the silo itself: the dive starts before a T1-T3 launch is seen, so no evasion; T4 drags on the run-in
+./cmd.sh "autopilot strike 24000 -19 0 800 0 1 false false type fighter hostile"
+
+# clean up between runs
+./cmd.sh "autopilot stop <id>"
+./cmd.sh "missile abort all"
+./cmd.sh "missile silo remove 24000 -20 0"
+./cmd.sh "forceload remove 24000 0"
+```
+
+Run the silo in real time, not under `tick sprint`: the missile, the silo's scan and the chunk tickets all fall
+behind, and a missile report that never arrives looks like a survival.
+
+**Things to vary.**
+
+- The geometry. A lateral offset of the route from the silo decides most outcomes; head-on passes are the hard
+  case.
+- `type large` or `type cargo` as the control: no `[evasion]` line may appear.
+- The JVM properties, via `MC_JVM_OPTS` on `start.sh`:
+  - `-Dsimpleplanes.evasion=off` for the no-evasion baseline on the same jar;
+  - `=drag`, `=beam` or `=break` to force one manoeuvre;
+  - `-Dsimpleplanes.evasion.reaction=10` for the reaction delay (default 30 ticks);
+  - `-Dsimpleplanes.evasion.bank=25` for the bank limit (default 60).
+
+```sh
+./stop.sh
+MC_JVM_OPTS="-Xmx1536M -Dsimpleplanes.evasion.reaction=10" ./start.sh
+```
+
+**Reading the outcome.** The survival verdict is the missile's report line: `INTERCEPTED` against
+`OUT_OF_RANGE`, `LOST` and the rest. The fighter's evasion is judged from the `[evasion]` lines and the
+`evading(...)` status fragment.
+
+The route should end in `landed at field-…`. A strike should end in `hit the target`. `went down … short of the
+target` after an intercept is the missile, not terrain.
+
+The campaign in the design doc ran four tier lanes 12 000 blocks apart at once: 10 runs per tier, bearings
+36° apart, lateral offset 0, 0.3 and 0.6 of the detection radius. That is at the limit of what one server
+keeps up with on a loaded container. A lane whose report line never came was discarded, not counted.
+
 ### The one thing this rig cannot see
 
 An autopilot plane has **no rider**, so on the server `isClientAuthoritative()` is false and
