@@ -555,6 +555,76 @@ smoothly *backwards* away from the runway at 0.13 b/t, facing the right way the 
 
 ---
 
+## 3b. Missile evasion (fighters)
+
+An autopilot **fighter** that an air-defence missile is claimed on flies a defensive manoeuvre and then carries
+on with whatever it was doing. The full measurements and the reasoning are in `design/FIGHTER-EVASION.md`.
+
+**Why only a drag works.** Guidance is lead pursuit on the aircraft's true position every tick, and close in the
+missile may turn 40 deg/t. There is no seeker to break lock on, so the fighter can only make the missile fly out
+its motor path. T1–T3 top out at 2.0 / 2.5 / 3.0 b/t against the fighter's 3.16 at full power with its booster,
+so turning tail works against them. T4 (4.0 b/t, 1400 blocks of motor) always arrives.
+
+**How it is wired.** `PlaneAutopilot.tick()` calls `MissileEvasion.tick()` once the mode has set its command, and
+before terrain following and the control laws. While a threat is live it overrides the mode's command:
+
+- the heading;
+- the bank limit, 60°. The yaw and pitch rates act in the body frame, so bank is turn rate: about 3.5 deg/t
+  against 2.9 at 25°;
+- in a break, a climb;
+- full power.
+
+Terrain following stays on. The mode's own state (route legs, strike target, hold centre) is never touched, so
+when the threat ends the mode simply flies on. The strike's committed dive is never interrupted.
+
+`MissileThreat.inbound(plane)` is the warner: AD missiles out of the tube whose `Engagements` claim is on this
+aircraft, within 400 blocks, with range, closing speed, time to impact and motor path left.
+
+**Manoeuvres.**
+
+- `drag`: put the missile at six o'clock at full power. This is the default.
+- `break`: turn across the line of sight with a 30-block climb. It is flown when the time to impact is under 25
+  ticks and the missile has the motor to get there. No measured run was saved by it.
+- `beam`: flown only when forced, for comparison.
+
+It stops when every claimed missile is gone (`clear`) or can no longer reach the aircraft
+(`out of reach`, from motor path left against the head-on meeting distance). It also stops when the aircraft
+leaves a defending mode (`stood down`). The defending modes are `CLIMB`, `CRUISE`, `STRIKE` before the dive,
+`DESCENT`, `HOLD` and `GO_AROUND`.
+
+**The knob.** `REACTION_TICKS`, 30 by default, is how long a missile has been seen before the fighter reacts.
+Measured on routes across a silo:
+
+| | T1 | T2 | T3 | T4 |
+|---|---|---|---|---|
+| survived before | 10/10 | 3/10 | 0/10 | 0/10 |
+| survived with reaction 10 | 9/9 | 9/9 | 9/9 | 0/9 |
+| survived with reaction 30 (default) | – | 7/9 | 2/9 | 0/8 |
+
+**Reading it.** `/autopilot status` shows `evading(drag, missile #44, tti=2.1s, 11 o'clock)` after `plan[...]`.
+The log has one line per change of manoeuvre, and one on the end:
+
+```
+[evasion] #1 drag missile #2 T2 range=72 closing=1.64 tti=2.2s left=543 clock=9
+[evasion] #1 resume (out of reach) after missile #2
+```
+
+**What does not evade.**
+
+- Every aircraft type other than `FIGHTER`;
+- anything on the ground, on approach, final or flare;
+- the strike dive;
+- player-flown aircraft. A player aboard an aircraft a missile is claimed on gets the `MissileWarning` action-bar
+  line and beep instead: tier, clock position, range and time to impact.
+
+**System properties** for tests:
+
+- `simpleplanes.evasion=off|drag|beam|break`;
+- `simpleplanes.evasion.reaction=<ticks>`;
+- `simpleplanes.evasion.bank=<deg>`.
+
+---
+
 ## 4. Landing like an aircraft, not like a dart
 
 The approach geometry is deliberately self-consistent: an 8° glide slope, intercepted 300 blocks out

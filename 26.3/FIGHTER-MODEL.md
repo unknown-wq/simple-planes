@@ -288,6 +288,24 @@ glass face and nothing z-fights.
 - **Head yaw.** The headrest sits 0.25 px behind the head; turning the head far to the side can clip it into
   the headrest.
 
+## Flight limits the autopilot relies on
+
+Not part of the render contract, but it is what missile evasion (`design/FIGHTER-EVASION.md`) is sized
+against. If the airframe's handling changes, re-measure these and the evasion results with them.
+
+| | value |
+|---|---|
+| rates (`FighterEntity`) | yaw 3.5, pitch 7.0, roll 8.0 deg/t, body frame |
+| route cruise | 2.6 b/t |
+| full power, booster fitted (throttle 10, `setMaxSpeed(3.0)`) | 3.16–3.17 b/t level |
+| world turn rate at the autopilot's 25° bank | about 2.9 deg/t |
+| world turn rate at 60° bank (evasion) | about 3.5 deg/t average, 5.5 peak |
+
+Because yaw and pitch act in the body frame, bank is what turns the aircraft faster. The flight path follows
+the nose with `yawToMotion` 0.2 and `pitchToMotion` 0.3, so the track lags the heading by a few ticks.
+3.16 b/t is above T1–T3 missile top speed (2.0 / 2.5 / 3.0) and below T4 (4.0). That one comparison decides
+which missiles a fighter can outrun.
+
 ## Reference images
 
 `docs/fighter/`:
