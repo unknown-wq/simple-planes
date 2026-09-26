@@ -17,8 +17,8 @@ for b/s. Accelerations are b/t².
 | aircraft | class | family | headline numbers |
 |---|---|---|---|
 | Fighter | `FighterEntity extends PlaneEntity` | fixed-wing | cruise 2.30 b/t (46 b/s) at throttle 5, 3.1x the starter plane; take-off 0.45 b/t after a 12-block run; realised turn 58 deg/s, pitch 7 deg/tick, roll 8 deg/tick |
-| Mini airliner | `AirlinerEntity extends PlaneEntity` | fixed-wing | 22 seats (2 crew, 20 passengers, boarded by where you click; AIRLINER-MODEL.md); cruise 1.25 b/t (25 b/s); take-off 0.60 b/t, rotation at 34 blocks, airborne at 51 blocks; realised turn 10 deg/s; ground pitch clamped at 12 deg (tail strike at 14.5 deg); metal skin by material tag, 6 logos rolled on placement |
-| Regional airliner | `RegionalAirlinerEntity extends AirlinerEntity` | fixed-wing | the mini airliner's narrow size (§4.4): 14 seats (2 crew, 12 passengers one either side of the aisle), 2.5 b wide; cruise 1.25 b/t; take-off 0.54 b/t, rotation at 23.5 blocks, airborne at 38 blocks; realised turn 12 deg/s; tail strike at 13.4 deg, same 12 deg clamp |
+| Mini airliner | `AirlinerEntity extends PlaneEntity` | fixed-wing | 22 seats (captain for a player, first officer, 20 passengers, boarded by where you click; villagers fill all but the captain's; AIRLINER-MODEL.md); cruise 1.25 b/t (25 b/s); take-off 0.60 b/t, rotation at 34 blocks, airborne at 51 blocks; realised turn 10 deg/s; ground pitch clamped at 12 deg (tail strike at 14.5 deg); metal skin by material tag, 6 logos rolled on placement |
+| Regional airliner | `RegionalAirlinerEntity extends AirlinerEntity` | fixed-wing | the mini airliner's narrow size (§4.4): 14 seats (captain, first officer, 12 passengers one either side of the aisle; villagers fill all but the captain's), 2.5 b wide; cruise 1.25 b/t; take-off 0.54 b/t, rotation at 23.5 blocks, airborne at 38 blocks; realised turn 12 deg/s; tail strike at 13.4 deg, same 12 deg clamp |
 | Airship | `AirshipEntity extends PlaneEntity` (all six flight hooks overridden, like the helicopter) | plane family, own physics | 7 seats; buoyancy + ballast trim, fly-by-wire altitude hold (captures with 0.08 b overshoot); cruise 0.81 b/t (16 b/s); 12 deg/s turn, radius 77 b; static climb/sink limit 0.2 b/t |
 | Quadcopter crane | `QuadcopterEntity extends Entity` (new family) | multirotor, server-flown | thrust-to-weight 3.0; position controller settles a 20-block move in 4.4 s empty, 5.8 s with a cow; rope 1..12 b, winch 0.15 b/t; load limit 1.55 drone masses (cow yes, horse no); carried mob is a passenger placed at the rope end, rope drawn with vanilla's leash renderer |
 | Mini helicopter | `MiniHelicopterEntity extends HelicopterEntity` | rotorcraft (existing model, smaller numbers) | one seat; hover at notch 2 (helicopter: 3), climb to +0.40 b/t at notch 5 (helicopter +0.24), level top speed 0.75 b/t (helicopter 1.11), pedal 90 deg/s, full cyclic in 8.6 ticks; thrust fades above y 100, absolute ceiling y 160; standard or medical livery by material tag |
@@ -259,8 +259,9 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
 - A seat belongs to its rider: one synched int per seat holds the rider's entity id, assigned in
   `addPassenger`, cleared in `removePassenger`, saved as a `Seats` list of `{UUID, Seat}`. A player boards the
   seat nearest to where he clicked, the captain's when he clicks the cockpit or the nose; anyone else takes
-  the front-most free cabin seat and never a crew seat. The controlling passenger is the player in the
-  captain's seat, or nobody.
+  the front-most free cabin seat, then the first officer's, and never the captain's. The controlling
+  passenger is the player in the captain's seat, or nobody; a villager in the first officer's seat never
+  controls.
 - The nose and tail are clickable through four `AirlinerPartEntity` hitboxes (`sized(3.4, 3.3)`, never saved)
   that follow the airliner; its own bounding box stays `sized(3.0, 2.6)`. Details, the options weighed and the
   test command `airliner click` are in AIRLINER-MODEL.md.
@@ -268,7 +269,14 @@ intended. Below `takeOffSpeed` the elevator is disabled by `tickOnGround` as on 
   5.4.0-beta.2 jar and on the cabin jar (`aircraft takeoff`; `hold`, throttle 5 and 1500 ticks; `launch 1.25`,
   `hold`, throttle 5, 300 ticks, then `set yaw 1`), both give: rotation at 33.8 b (90 t), airborne at 52.1 b
   (118 t) at 0.71 b/t; level speed 1.250 b/t at throttle 5; heading 53.0, 73.7, 94.7 deg at ticks 100, 140
-  and 180 of the turn (0.52 deg/t). With 20 villagers aboard: airborne at 51.4 b (117 t) at 0.71 b/t.
+  and 180 of the turn (0.52 deg/t). With 20 villagers aboard: airborne at 51.4 b (117 t) at 0.71 b/t; with
+  21 (the first officer's seat too) the same.
+- Seat rules, checked on the server with two real clients (`Tester`, `Tester2`) on both sizes: villagers
+  fill the cabin, then the first officer's seat, and are refused when only the captain's is left; a player
+  clicking the nose boards the captain's seat and controls; a second player clicking the cockpit boards the
+  first officer's seat when it is free (and is refused when a villager holds it and the cabin is full), and
+  does not control; with the captain gone nobody controls, and a villager offered the aircraft takes a
+  cabin seat, never the captain's. A villager's first officer seat survives a server restart.
 - Metal skin: `metalSkin = material block is in the new block tag simpleplanes:airliner_metal_skin`
   (`iron_block`, `copper_block`, `waxed_copper_block`, `gold_block`, `netherite_block`; the same blocks
   are added to `simpleplanes:plane_materials` so the workbench builds one). The renderer draws
@@ -327,7 +335,7 @@ and 1500 ticks; `launch 1.25`, `hold`, throttle 5, 300 ticks, then `set yaw 1`),
 | test | regional airliner | mini airliner (re-run) |
 |---|---|---|
 | take-off, empty (regional 5 runs, mini 3) | rotation at 23.5 b (72 t) every run, airborne at 38.4 b (97 t) or 39.0 b (98 t) at 0.66 b/t | rotation at 33.8 b (90 t), airborne at 52.1 b (118 t) at 0.71 b/t every run, as before |
-| take-off, full (12 villagers boarded with `airliner board`) | rotation at 23.5 b (72 t), airborne at 39.0 b (98 t) at 0.66 b/t, within the empty spread; riders stay in their seats | 20 villagers: 51.4 b (117 t), measured with the cabin |
+| take-off, full (villagers boarded with `airliner board`, the first officer's seat included; `fullload.sh`) | 13 villagers (15 offered, 2 refused): rotation at 23.5 b (72 t), airborne at 39.1 b (98 t) at 0.66 b/t, within the empty runs' 97-98 t; riders stay in their seats | 21 villagers (23 offered, 2 refused): rotation at 33.8 b (90 t), airborne at 51.4 b (117 t) at 0.71 b/t, as with 20 |
 | level speed, throttle 5, after 1500 t | 1.250 b/t, pitch -3.7 | 1.250 b/t, pitch -3.3, as before |
 | turn, heading at ticks 100 / 140 / 180 | 65.2 / 90.8 / 116.8 deg: **0.65 deg/t (13 deg/s)** | 53.0 / 73.7 / 94.7: 0.52 deg/t, as before |
 

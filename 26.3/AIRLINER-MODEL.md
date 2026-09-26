@@ -172,7 +172,7 @@ boards the player into:
   regional 3.3125, `AirlinerLayout.cockpitZ()`) and the seat is free;
 - otherwise the free seat nearest to the point (distance in x and z), so a click on a window boards the seat
   next to it and a click on the tail a seat in the last row. With the captain's seat taken, a cockpit click
-  boards the first officer's seat.
+  boards the first officer's seat if it is free.
 
 The clicked point comes from the player's eye ray traced to the fuselage's box on the server (half width
 1.8125, regional 1.25; belly 0.8125 to crown 3.1875; nose tip +6.0625 to tail -5.625, regional -5.875); the hit
@@ -202,8 +202,8 @@ brackets):
 
 | seat | role | x | y | z |
 |---|---|---|---|---|
-| 0 | captain, the pilot | +0.6875 (11) | 0.6875 | +3.75 (-66) |
-| 1 | first officer | -0.6875 (-11) | 0.6875 | +3.75 (-66) |
+| 0 | captain, the pilot; players only | +0.6875 (11) | 0.6875 | +3.75 (-66) |
+| 1 | first officer; anyone, villagers once the cabin is full | -0.6875 (-11) | 0.6875 | +3.75 (-66) |
 | 2-5 | row 1, A B C D | +1.3125, +0.5625, -0.5625, -1.3125 (21, 9, -9, -21) | 0.5625 | +2.5 (-46) |
 | 6-9 | row 2 | as row 1 | 0.5625 | +1.375 (-28) |
 | 10-13 | row 3 | as row 1 | 0.5625 | +0.25 (-10) |
@@ -216,8 +216,8 @@ Regional airliner: fourteen seats, `AirlinerLayout.REGIONAL`:
 
 | seat | role | x | y | z |
 |---|---|---|---|---|
-| 0 | captain, the pilot | +0.5625 (9) | 0.6875 | +3.75 (-66) |
-| 1 | first officer | -0.5625 (-9) | 0.6875 | +3.75 (-66) |
+| 0 | captain, the pilot; players only | +0.5625 (9) | 0.6875 | +3.75 (-66) |
+| 1 | first officer; anyone, villagers once the cabin is full | -0.5625 (-9) | 0.6875 | +3.75 (-66) |
 | 2-3 | row 1, A B | +0.75, -0.75 (12, -12) | 0.5625 | +2.75 (-50) |
 | 4-5 | row 2 | as row 1 | 0.5625 | +1.6875 (-33) |
 | 6-7 | row 3 | as row 1 | 0.5625 | +0.625 (-16) |
@@ -251,10 +251,12 @@ the left window seat, B the right. The entity defines 22 synched seat slots for 
   `seatOf(rider)` on both sides, so server and client always agree, and nobody moves when someone else leaves;
 - a player takes the seat chosen by his click; without a click (`/ride`, a reconnect) the captain's seat if it
   is free, else the front-most free cabin seat, else the first officer's. Anything that is not a player
-  takes the front-most free cabin seat and never a crew seat, so 20 villagers (12 in the regional) fill
-  the cabin and the cockpit stays free;
-- `getControllingPassenger()` is the player in the captain's seat, or nobody. A player in any other seat is a
-  passenger: his client is not authoritative and his keys do not fly the aircraft. The autopilot rule is
+  (a villager, another mob) may take any seat but the captain's: the front-most free cabin seat, and the
+  first officer's once the cabin is full, so it stays free for a player as long as possible. 21 villagers
+  (13 in the regional) fill the aircraft and the captain's seat stays free for the pilot;
+- `getControllingPassenger()` is the player in the captain's seat, or nobody. A villager in the first
+  officer's seat never controls, nor does anyone while the captain's seat is empty. A player in any other seat
+  is a passenger: his client is not authoritative and his keys do not fly the aircraft. The autopilot rule is
   unchanged (nobody controls while the flight director flies);
 - the world save keeps the seats as a `Seats` list of `{UUID, Seat}`; a rider who comes back (a chunk
   reload, a server restart, a player reconnecting with the airliner as his vehicle) gets his seat back. The
@@ -391,7 +393,7 @@ regional_airliner`).
 | syntax | effect | example |
 |---|---|---|
 | `airliner status` | one line per airliner of either size in loaded chunks: `#id <type> logo= item-logo= skin= riders=<n>/<seats> seats=[<seat>@<x>/<z>,...] pilot=<name\|none> parts=<n> pos= spd= pitch= og= thr= health=`. `<type>` is `airliner` or `regional_airliner`; `seats` lists each rider's seat and where his feet are in the airliner's frame (blocks, +x left, +z towards the nose); `pilot` is the controlling passenger; `parts` the hitbox entities found around it (4) | `airliner status` |
-| `airliner board <id>` | mounts every villager within 8 b that is not riding, nearest first, through the normal `startRiding`; prints the seat each one got (`seat 2 (row 1A)`) or that it was refused | `airliner board 48` |
+| `airliner board <id>` | mounts every villager within 8 b that is not riding, nearest first, through the normal `startRiding`; prints the seat each one got (`seat 2 (row 1A)`, `seat 1 (first officer)` once the cabin is full) or that it was refused (only the captain's seat left, or none) | `airliner board 48` |
 | `airliner click <id> <x> <y> <z>` | added with the cabin. A dry run: prints the seat a player clicking the airliner-frame point (x, y, z) would board, e.g. `boards seat 0 (captain)` | `airliner click 48 0 2 5.8` |
 | `airliner click <id> <x> <y> <z> <player>` | added with the cabin. Runs the airliner's own `interact` for an online player with that point as the hit location, as a real click does (the eye ray is used only if it lands within 2 blocks of the point), and prints the result, the seat and whether the player now controls the airliner | `airliner click 48 1.8 2.2 0.3 Tester` |
 | `airliner logo <id> <0..5>` | sets the synched logo | `airliner logo 48 4` |

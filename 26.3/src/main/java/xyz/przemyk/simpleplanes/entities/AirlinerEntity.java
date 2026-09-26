@@ -294,9 +294,13 @@ public class AirlinerEntity extends PlaneEntity {
         return occupant(seat) == null;
     }
 
-    /** Players may take any seat; anyone else only the cabin. */
+    /** Players may take any seat; anyone else any seat but the captain's. */
     private static boolean mayTake(Entity passenger, int seat) {
-        return passenger instanceof Player || !AirlinerLayout.isCockpit(seat);
+        return mayTake(passenger instanceof Player, seat);
+    }
+
+    private static boolean mayTake(boolean player, int seat) {
+        return player || seat != AirlinerLayout.PILOT;
     }
 
     /**
@@ -310,7 +314,7 @@ public class AirlinerEntity extends PlaneEntity {
         int best = -1;
         float bestDistance = Float.MAX_VALUE;
         for (int seat = 0; seat < layout.count(); seat++) {
-            if (!(player || !AirlinerLayout.isCockpit(seat)) || !isSeatFree(seat)) {
+            if (!mayTake(player, seat) || !isSeatFree(seat)) {
                 continue;
             }
             float dx = x - layout.x(seat);
@@ -324,7 +328,10 @@ public class AirlinerEntity extends PlaneEntity {
         return best;
     }
 
-    /** Without a click: a player takes the captain's seat if it is free, anyone else the front-most free cabin seat. */
+    /**
+     * Without a click: a player takes the captain's seat if it is free; then everyone the front-most free cabin
+     * seat, and the first officer's last, so it stays free for a player as long as the cabin has room.
+     */
     private int defaultSeat(Entity passenger) {
         if (passenger instanceof Player && isSeatFree(AirlinerLayout.PILOT)) {
             return AirlinerLayout.PILOT;
@@ -334,7 +341,7 @@ public class AirlinerEntity extends PlaneEntity {
                 return seat;
             }
         }
-        return passenger instanceof Player && isSeatFree(AirlinerLayout.FIRST_OFFICER) ? AirlinerLayout.FIRST_OFFICER : -1;
+        return isSeatFree(AirlinerLayout.FIRST_OFFICER) ? AirlinerLayout.FIRST_OFFICER : -1;
     }
 
     @Override
