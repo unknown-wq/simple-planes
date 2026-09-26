@@ -52,7 +52,7 @@ public final class SiloStructure {
 
     private record Stash(ResourceKey<Level> dimension, BlockPos master, Map<BlockPos, BlockState> record) {}
 
-    private record PendingDrop(ResourceKey<Level> dimension, BlockPos broken, BlockPos master, int tier) {}
+    private record PendingDrop(ResourceKey<Level> dimension, BlockPos broken, BlockPos master, int tier, @Nullable MissileTier loaded) {}
 
     private record Deferred(ResourceKey<Level> dimension, BlockPos pos, BlockState state) {}
 
@@ -321,18 +321,21 @@ public final class SiloStructure {
         }
     }
 
-    /** A player is about to break a silo part: remember the silo's tier for the drop. */
+    /** A player is about to break a silo part: remember the silo's tier and loaded missile for the drop. */
     static void noteBreak(ServerLevel level, BlockPos pos) {
         BlockPos master = masterOf(level, pos);
+        MissileTier loaded = master != null && level.getBlockEntity(master) instanceof LaunchSiloBlockEntity be && be.isLoaded()
+            ? be.tier() : null;
         pendingDrop = master == null ? null
-            : new PendingDrop(level.dimension(), pos.immutable(), master, level.getBlockState(master).getValue(LaunchSiloBlock.TIER));
+            : new PendingDrop(level.dimension(), pos.immutable(), master, level.getBlockState(master).getValue(LaunchSiloBlock.TIER), loaded);
     }
 
-    /** A player broke a silo part in survival: one silo item per tier comes back, at the silo mouth. */
+    /** A player broke a silo part in survival: one silo item per tier, and the loaded missile, come back at the silo mouth. */
     static void dropItems(ServerLevel level, BlockPos pos) {
         PendingDrop drop = pendingDrop;
         pendingDrop = null;
         if (drop == null || drop.dimension() != level.dimension() || !drop.broken().equals(pos)) return;
         Block.popResource(level, drop.master().above(), new ItemStack(Missiles.LAUNCH_SILO_ITEM, drop.tier()));
+        if (drop.loaded() != null) Block.popResource(level, drop.master().above(), new ItemStack(Missiles.missileItem(drop.loaded())));
     }
 }

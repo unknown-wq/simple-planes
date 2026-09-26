@@ -58,6 +58,6 @@ public class PlaneRenderState extends EntityRenderState {
 
     public boolean medicalLivery;
 
-    /** Model-space point the mini helicopter's glass is submitted from (translucent sort order). */
+    /** Model-space point the canopy glass (mini helicopter, fighter) is submitted from (translucent sort order). */
     public final org.joml.Vector3f glassSortOrigin = new org.joml.Vector3f();
 }

@@ -19,6 +19,7 @@ import xyz.przemyk.simpleplanes.crane.CraneCommand;
 import xyz.przemyk.simpleplanes.misc.CommonEventHandler;
 import xyz.przemyk.simpleplanes.missile.Missiles;
 import xyz.przemyk.simpleplanes.airdefence.AirDefence;
+import xyz.przemyk.simpleplanes.aviation.AviationService;
 import xyz.przemyk.simpleplanes.network.SimplePlanesNetworking;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesBlocks;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesComponents;
@@ -90,6 +91,8 @@ public class SimplePlanesMod implements ModInitializer {
         CraneCommand.register();
         Missiles.init();
         AirDefence.init();
+        // aviation map: silo index, snapshot and launch payloads for a world map mod, /aviation.
+        AviationService.init();
 
         registerUpgradeItems();
     }

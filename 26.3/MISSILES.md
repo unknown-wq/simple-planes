@@ -16,7 +16,7 @@ silo with its fins folded, deploys them clear of the tube, turns toward the targ
 **Phase 3 (this build)** adds **air defence** (§1c):
 
 - A silo switches between **strike** and **air defence** with a right-click, empty-handed or with any item except
-  the silo item.
+  the silo item and the missile items.
 - Aircraft (every `PlaneEntity`) get a **friendly/hostile allegiance**, chosen when they are spawned. It can be set
   from `/summon`, the plane item, the autopilot, the shuttle dispatcher and the gunship command.
 - An AD silo with a loaded missile launches at the **nearest hostile aircraft** within its tier's detection
@@ -24,8 +24,16 @@ silo with its fins folded, deploys them clear of the tube, turns toward the targ
   same `Blast#detonate` path as everything else.
 - A missile that runs out of range ends **harmless**. AD silos hold **no chunk tickets**.
 
-Loading and launching strike missiles are still commands. Intercepting missiles (as opposed to aircraft) is not
-implemented (see [Not done, planned next](#not-done-planned-next)).
+**Missile items (this build)** (§1d):
+
+- Four items, `simpleplanes:missile_t1` to `missile_t4`, one per tier, crafted from vanilla ingredients.
+- **Loading.** Use one on any part of a silo of the same tier, in strike or air-defence mode. One item is used up
+  (none in creative).
+- **Unloading.** Sneak and right-click the silo with both hands empty: the missile comes back into the hand.
+- **Breaking** a loaded silo in survival drops the missile with the silo items.
+
+`/missile silo load` stays for operators and tests. Launching strike missiles is still a command. Intercepting
+missiles (as opposed to aircraft) is not implemented (see [Not done, planned next](#not-done-planned-next)).
 
 The render models and their contract are in [`MISSILES-MODEL.md`](MISSILES-MODEL.md).
 
@@ -41,12 +49,13 @@ Everything lives in its own packages. Each package is registered with one line f
 
 | Where | What |
 |---|---|
-| `missile/Missiles` | Registration of the entity type, the two silo blocks, the block entity, the silo item, the `missile_explosions` game rule and the creative tab entry, plus `init()`. Called once from `SimplePlanesMod.onInitialize` |
+| `missile/Missiles` | Registration of the entity type, the two silo blocks, the block entity, the silo item, the four missile items, the `missile_explosions` game rule and the creative tab entries, plus `init()`. Called once from `SimplePlanesMod.onInitialize` |
 | `missile/MissileTier` | Per-tier geometry, flight parameters and warhead (`warhead`, a `Blast`), and the shared constants |
 | `missile/MissileEntity` | The missile |
 | `missile/LaunchSiloBlock`, `LaunchSiloCasingBlock` | The master block and the dependent blocks of the multiblock |
 | `missile/SiloStructure` | Multiblock geometry: placement checks, placement, upgrade, integrity check, dismantling and restoring the ground, break drops |
 | `missile/LaunchSiloItem` | The silo item: place a tier 1 silo, or upgrade the silo it is used on |
+| `missile/MissileItem` | The missile items: load the silo of the same tier they are used on, and the sneak-unload (§1d) |
 | `missile/LaunchSiloBlockEntity` | Silo state and the launch sequence |
 | `missile/MissileTracker` | Chunk tickets, stall accounting, flight reports, telemetry |
 | `missile/MissileFx` | Particles and sounds, and nothing else |
@@ -128,10 +137,11 @@ blocks.
   break (drops, statistics, Fabric's break events). Anything else placed there in the meantime, such as the stone
   of a `/setblock`, is kept. When the master itself is the part removed, its block entity is already gone, so it
   hands its record over in `preRemoveSideEffects`. A silo placed by the phase 1 build has no record; its
-  positions are filled with dirt, so no shaft is left open either way. A missile that is still loaded is lost.
-- **Break drops.** A player breaking any part in survival gets back one silo item per tier (1 to 4), dropped at
-  the silo mouth. A creative player, `/setblock`, `/missile silo remove` and other non-player removals drop
-  nothing. The `block_drops` game rule applies.
+  positions are filled with dirt, so no shaft is left open either way.
+- **Break drops.** A player breaking any part in survival gets back one silo item per tier (1 to 4) and, if a
+  missile is loaded, that missile's item, dropped at the silo mouth. A creative player, `/setblock`,
+  `/missile silo remove` and other non-player removals drop nothing, and a missile still loaded then is lost. The
+  `block_drops` game rule applies.
 - **Collision and opacity.** All silo blocks are full, opaque cubes with an invisible render shape. The block
   entity renderer draws the whole tube. The blocks are opaque on purpose: while they were not, skylight reached
   the dirt under a tier 1 or tier 2 shaft and grass spread onto it. See "Results" below.
@@ -176,6 +186,15 @@ IDLE --launch--> OPENING --hatch fully open, missile created--> LAUNCHING (60 t,
 - **Smoke.** The flame is hidden inside the shaft, so the launch is carried by smoke: `CAMPFIRE_COSY_SMOKE`,
   `LARGE_SMOKE` and `CLOUD` from the mouth, sent with `force` so it is visible from far away.
 - **The client.** It runs the same hatch ramp from the synced phase, so the renderer can interpolate it.
+- **`/tick freeze`.** A frozen game ticks no block entities, so a hatch does not move and a launch accepted
+  while frozen waits for `/tick unfreeze`. The launch command, the `busy` refusal and `status` say so instead of
+  a bare `busy (opening)`. Game time stops too, so a freeze never trips the net below.
+- **Stuck-sequence net.** The longest sequence ends about 230 game ticks after the launch command. A silo still
+  busy `STALE_TICKS` (600) game ticks after it was not ticking, e.g. its chunk was unloaded. The first time
+  anything touches it (its own tick, or `launch`, `load`, `unload`, `status`, a mode change) it is put back to
+  idle with the hatch shut, logged as `[silo] <pos> reset: ...`. Before ignition the launch is aborted and the
+  missile stays loaded; after ignition the sequence is just finished. It never fires at an old target.
+  `/missile silo reset <pos>` does the same on demand.
 
 ### Renderers
 
@@ -278,7 +297,7 @@ as items either, so a silo cannot be used to mine or to duplicate anything.
 
 **Refused while the silo is in use:**
 
-- a missile loaded ("a missile is loaded; unload it first", `/missile silo unload`);
+- a missile loaded ("a missile is loaded; unload it first": sneak and right-click it empty-handed, §1d);
 - any phase other than idle: opening, launching, closing or cooldown;
 - a damaged structure;
 - tier 4 already.
@@ -382,8 +401,11 @@ vanilla calls before the item's own `useOn`:
 | Hand | Result |
 |---|---|
 | the **silo item** (`simpleplanes:launch_silo`) | `useItemOn` returns `PASS`, so vanilla goes on to `LaunchSiloItem#useOn`: the **upgrade**, unchanged |
+| a **missile item** (`simpleplanes:missile_t1` to `t4`) | `PASS` as well, so vanilla goes on to `MissileItem#useOn`: **load** (§1d). It never toggles |
+| an empty main hand with a **missile item in the off hand** | `PASS`, so the off hand is tried next and loads |
+| **sneaking with both hands empty** | **unload** the missile into the main hand (§1d) |
 | **anything else**, including an empty hand | **toggle** strike ↔ air defence. The action bar says the new mode (for AD, with the detection radius), and a lever click sounds |
-| anything, **sneaking with an item** | vanilla skips the block, so the held item is used as usual (a plane item places a plane) |
+| anything, **sneaking with an item** | vanilla skips the block, so the held item is used as usual (a plane item places a plane, a missile item loads) |
 
 - **Refusals.** The toggle is refused while the hatch is opening or a missile is leaving (`OPENING` / `LAUNCHING`),
   with the reason on the action bar. It needs `Player#mayBuild`, so adventure mode cannot toggle.
@@ -564,6 +586,81 @@ the natural integration points are:
 
 ---
 
+### 1d. Missile items
+
+One item per tier: `simpleplanes:missile_t1` to `missile_t4` ("Tier 1 Missile" ... "Tier 4 Missile"), in the planes
+creative tab right after the silo item. They stack to **16**: a stack is a useful reserve of reloads for an AD
+silo, which fires one missile per load, without making a chest of tier 4 warheads a single slot. Tier 3 is
+uncommon (yellow name) and tier 4 rare (aqua name). The item class is `MissileItem`; it holds its `MissileTier`.
+Four items rather than one item with a tier component, because each tier then has its own id, name, icon, recipe
+and stack, and none of them needs a component.
+
+**Tooltip:** the silo it fits ("Fits a tier 3 launch silo (2x2)"), the warhead ("Warhead: blast power 8 (TNT is 4),
+incendiary"), the range ("Range: 48 to 5000 blocks") and how to use it. The figures are read from `MissileTier`.
+
+**Loading.** Use the item on **any part of a silo** (the top face in practice). The silo blocks pass it through
+(§1c), so vanilla calls `MissileItem#useOn`; sneaking with it reaches the same method. It works in both modes: an
+AD silo fires its one missile and needs a new one after every shot, and loading is allowed again as soon as the
+hatch has closed, cooldown included. The action bar says "Tier 2 missile loaded (strike)" or, in AD mode, "Tier 1
+missile loaded: air defence armed (100 blocks)". One item is used up; a creative player keeps it. The load is
+logged: `[missile] silo <pos> T<n> loaded by <player>`.
+
+Refusals, in this order, in red on the action bar; nothing is used up:
+
+| Case | Message |
+|---|---|
+| a damaged structure | "The silo structure is damaged" |
+| hatch opening, missile leaving, hatch closing | "The silo is busy (opening); wait for the hatch to close" |
+| wrong tier | "Wrong missile: this silo takes a tier 3 missile, not tier 2" |
+| already loaded | "This silo is already loaded" |
+
+Loading also needs `Player#mayUseItemAt` (not in adventure mode, not on protected ground), like the silo item.
+
+**Unloading.** Sneak and right-click any part of the silo **with both hands empty**. The missile goes into the main
+hand ("Tier 1 missile unloaded"). Refused with "This silo has no missile loaded" or the busy message. Chosen
+because:
+
+- upgrading is refused while a missile is loaded, so a survival player needs a way to take it out that does not
+  mean breaking the silo;
+- sneaking with empty hands is the one right-click that reaches the block and that no other silo action uses
+  (sneaking with an item goes to the item);
+- it hands the item back directly, as taking an item out of a frame does.
+
+Before this build a sneaking empty-handed click toggled the mode like any other empty-handed click; that is now the
+unload. A plain empty-handed click still toggles.
+
+**Breaking** a loaded silo in survival drops the missile item with the silo items (§1).
+
+**Recipes** (shaped, one missile each). The missile stands upright in the grid: guidance on top, warhead in the
+middle, motor and fins at the bottom. Iron is `#c:ingots/iron`, redstone `#c:dusts/redstone`, gunpowder
+`#c:gunpowders` and netherite `#c:ingots/netherite`; the rest are vanilla items.
+
+```
+Tier 1          Tier 2          Tier 3          Tier 4
+  R               R             i C i           T N T
+  G             i T i           T B T           T M T
+i F i           i F i           i F i           i F i
+
+R redstone dust    G gunpowder       T TNT            C redstone comparator
+i iron ingot       F firework rocket B fire charge    N netherite ingot
+M a tier 3 missile
+```
+
+| Tier | Warhead | Ingredients | Rationale |
+|---|---|---|---|
+| 1 | 2.0 | 2 iron, 1 redstone, 1 gunpowder, 1 rocket | Half a TNT of blast: a pinch of gunpowder. Cheaper than one silo item (3 iron, 1 redstone, 4 smooth stone), as ammunition should be next to its launcher |
+| 2 | 4.0 (TNT) | 4 iron, 1 redstone, 1 TNT, 1 rocket | Exactly TNT, so one TNT. About one and a half silo items |
+| 3 | 8.0, fire | 4 iron, 1 comparator, 2 TNT, 1 fire charge, 1 rocket | Twice the power: two TNT. The fire charge is the incendiary, and it and the comparator's quartz need the Nether |
+| 4 | 16.0, fire | a tier 3 missile, 4 TNT, 1 netherite ingot, 2 iron, 1 rocket | The two-stage missile is a tier 3 on a booster: 6 TNT in all, and a netherite ingot. Far more than the whole tier 4 silo (4 silo items), on purpose: it is the `Blast.MAX_POWER` warhead with a 10,000-block range |
+
+Every tier has a firework rocket as its motor (any rocket; its flight duration is ignored). No recipe needs
+anything a survival player cannot make.
+
+**Model.** `item/generated` with an original 16x16 texture per tier, in the style of the silo item: an upright
+missile with the markings of the 3D model, a dark seeker tip, the yellow warhead ring and **N red bands for tier N**.
+Tier 1 is short and thin, tier 2 longer with canards, tiers 3 and 4 twice as wide, and tier 4 has the gunmetal
+booster under a hazard-striped interstage. They have not been looked at on a client.
+
 ## 2. Flight profile and parameters
 
 The profile is **climb, cruise, dive.**
@@ -630,7 +727,7 @@ strong references, so a missile that has stopped ticking is still found and thaw
 |---|---|
 | each missile | radius 3 on its own chunk, every tick: its 3x3 chunks entity-tick and 7x7 stay resident |
 | ahead of each missile | radius 3 at 10 and at 20 ticks of travel ahead, every tick. The ground ahead is generated and entity-ticking before the missile arrives, and the terrain look-ahead has real heightmaps to read |
-| each silo in a strike launch sequence | radius 3, every 10 ticks, from the launch command until the silo is idle again |
+| each silo in a strike launch sequence | `TicketType.PORTAL`, radius 3, every 10 ticks, from the launch command until the silo is idle again. PORTAL is ENDER_PEARL's flags plus *persist* (300-tick timeout): vanilla saves it with the chunk tickets, so after a restart the silo's chunk is loaded again, the block entity ticks, takes the in-memory hold back and finishes the sequence |
 | an air-defence silo | **none**, in any phase. It acts only while something else keeps its chunk ticking (§1c, "Chunks") |
 
 - **Stalls.** A tick in which a tracked missile did not run is counted as a stall and reported.
@@ -645,15 +742,24 @@ strong references, so a missile that has stopped ticking is still found and thaw
 Every subcommand is under `/missile`. They all need **permission level 2** (`Commands.LEVEL_GAMEMASTERS`) and they
 all run from the server console, since no subcommand needs a player. Output goes to the command source, which on
 the console is the server log. Positions accept `~` and `^`. For a silo, `pos` may be **any part** of it, except
-in `place`, where it is the master.
+in `place`, where it is the master. `launch`, `load`, `unload`, `status` and `reset` also take the block just above
+the silo's top (what `~ ~ ~` is while standing on it).
+
+**How to launch.** `/missile launch <silo> <target>` takes two positions. Pressing Tab on a position fills in the
+block you are looking at, which is right for `<silo>` (look at the silo's top) and almost never right for
+`<target>`: tab-completing the target too gives the silo's own position, which is refused as "target too close".
+Type the target's x y z (F3 shows the coordinates of the looked-at block), for example
+`/missile launch 2925 65 -1311 2843 104 -1373`. The target must be between the tier's minimum and maximum
+horizontal range from the silo (T1 24–1200, T2 32–2500, T3 48–5000, T4 64–10000 blocks).
 
 | Command | Effect | Example |
 |---|---|---|
 | `/missile silo place <pos> <tier> [loaded]` | Builds a silo of tier 1–4 with its master (the top layer, minimum X/Z corner) at `pos`. The shaft goes `tier` blocks down from there. Placement is checked as described in §1. `loaded` defaults to false | `/missile silo place 0 -20 0 1 true` |
 | `/missile silo upgrade <pos>` | Raises the silo one tier with the item's rules (§1a), preferring south-east for 2 → 3. Refused with the reason | `/missile silo upgrade 0 -20 0` |
 | `/missile silo remove <pos>` | Removes the whole silo and puts back the blocks it displaced. No items drop | `/missile silo remove 0 -21 0` |
-| `/missile silo load <pos>` | Loads a missile of the silo's tier. Refused if a missile is already loaded or a launch is under way | `/missile silo load 10 -20 20` |
-| `/missile silo unload <pos>` | Removes the loaded missile | `/missile silo unload 10 -20 20` |
+| `/missile silo load <pos>` | Loads a missile of the silo's tier without an item, for operators and tests. Players use the missile items (§1d). Refused if a missile is already loaded or a launch is under way | `/missile silo load 10 -20 20` |
+| `/missile silo unload <pos>` | Removes the loaded missile. No item is given | `/missile silo unload 10 -20 20` |
+| `/missile silo reset <pos>` | **Recovery.** Puts a busy silo back to idle with the hatch shut, whatever its phase. A missile not yet fired stays loaded. Prints what it was doing. The same thing happens on its own to a sequence that has not ticked for 600 game ticks (§1) | `/missile silo reset 0 -20 0` |
 | `/missile silo status <pos>` | Prints the tier, loaded or empty, the phase, the hatch, the mode, the cooldown, the launch count, the last missile id and the target, and flags a damaged structure | `/missile silo status 0 -20 0` |
 | `/missile launch <silo> <target>` | Starts the launch sequence toward the point `target` (x y z; integer x and z are centred on the block). Refused with the reason for anything in §1's check list | `/missile launch 0 -20 0 500 -19 0` |
 | `/missile list` | One telemetry line per missile in flight | `/missile list` |
@@ -663,9 +769,9 @@ in `place`, where it is the master.
 | `/missile hash <from> <to> [census]` | FNV-1a 64-bit hash of every block state in the box, plus the block and non-air counts (max 16,777,216 blocks). `census` also lists every block state with its count. The ids are runtime block-state ids, so compare hashes within one server session. Loads or generates chunks as it reads them | `/missile hash -3 -30 -3 4 10 4 census` |
 | `/missile hash <from> <to> snapshot` / `... diff` | **Test.** `snapshot` remembers every block state in the box (one snapshot at a time, same size limit). `diff`, on exactly the same box, counts the blocks that changed since and lists the transitions (`dirt -> air`, `air -> fire`, ...) | `/missile hash 170 -40 -28 228 0 28 diff` |
 | `/missile tickets <true\|false>` | **Test switch.** Turns the missiles' chunk tickets off or on. It resets to on at every server start | `/missile tickets false` |
-| `/missile item use <pos> <face> <yaw> [count]` | **Test.** A survival fake player (Fabric `FakePlayer`) holding `count` (default 1) silo items and facing `yaw` (vanilla yaw: 0 = south, -90 = east; pitch 45 down) uses them on `face` (`up`, `north`, ...) of `pos`, through the vanilla `ServerPlayerGameMode#useItemOn` path. Prints accepted or refused, the items left, the action-bar message and the silo's status | `/missile item use 0 -20 0 up -45` |
-| `/missile item break <pos>` | **Test.** The same fake player breaks the block at `pos` in survival, through `ServerPlayerGameMode#destroyBlock`. Prints what was there, what is there now, and the silo items and other items dropped | `/missile item break 0 -22 0` |
-| `/missile item recipe` | **Test.** Looks the recipe up from its ingredients, as a crafting table does, and prints the recipe id and its result | `/missile item recipe` |
+| `/missile item use <pos> <face> <yaw> [count] [item] [flags]` | **Test.** A survival fake player (Fabric `FakePlayer`) holding `count` (default 1) of `item` (default the silo item; `minecraft:air` is an empty hand) and facing `yaw` (vanilla yaw: 0 = south, -90 = east; pitch 45 down) uses them on `face` (`up`, `north`, ...) of `pos`, through the vanilla `ServerPlayerGameMode#useItemOn` path, main hand first and then off hand, as a client does. `flags`, comma-separated: `sneak`, `creative`, `offhand` (the items go in the off hand). Prints accepted, refused or passed, the items left, the main hand, the action-bar message and the silo's status | `/missile item use 0 -20 0 up -45`, `/missile item use 0 -20 0 up 0 4 simpleplanes:missile_t1`, `/missile item use 0 -20 0 up 0 1 minecraft:air sneak` |
+| `/missile item break <pos> [creative]` | **Test.** The same fake player breaks the block at `pos` in survival (or creative), through `ServerPlayerGameMode#destroyBlock`. Prints what was there, what is there now, and the silo items, missile items and other items dropped | `/missile item break 0 -22 0` |
+| `/missile item recipe [all]` | **Test.** Looks the silo recipe (with `all`, also the four missile recipes) up from its ingredients, as a crafting table does, and prints each recipe id and its result | `/missile item recipe all` |
 | `/missile guard add <from> <to> [suppress]` | **Test.** Registers (on first use) a `BlastGuard` that stands in for a claim mod. A blast whose damage radius (2 x power) reaches the box loses its block damage and fire, or with `suppress` is cancelled outright. It applies to aircraft and missiles alike. Zones are forgotten at a restart; the guard stays registered until then | `/missile guard add 230 -64 230 270 319 270` |
 | `/missile guard clear` / `/missile guard list` | **Test.** Removes or lists the zones | `/missile guard clear` |
 
@@ -913,7 +1019,7 @@ A third server of our own, `/home/user/sp-missiles-3-server` (outside the reposi
 
 ## 6. Results
 
-§6b is phase 3 (air defence). §6a is phase 2, measured on the code of commit `7db6dbe`. The subsections after it are phase 1, measured on
+§6c is the missile items. §6b is phase 3 (air defence). §6a is phase 2, measured on the code of commit `7db6dbe`. The subsections after it are phase 1, measured on
 commit `66a7c9c`, before warheads existed. Phase 2 does not touch the flight code. The phase 1 "nothing changed"
 results describe what the harmless mode still does, and §6a confirms it. Times are game ticks at 20 TPS.
 
@@ -1110,6 +1216,33 @@ this rests on the code, and on the mobs above as the nearest stand-in.
 A downgraded blast still hurts entities, which is what a downgrade guard means. The aircraft is hurt through
 vanilla explosion damage on `PlaneEntity#hurtServer`, which does not exempt explosions.
 
+### 6c. Missile items
+
+Measured on this build, headless server, flat world, `missile_explosions false`, all through
+`/missile item use` and `/missile item break` (vanilla `useItemOn` / `destroyBlock` with a `FakePlayer`).
+
+| Check | Result |
+|---|---|
+| Load T1–T4 into silos of the same tier (T2 on a side face of a casing, T3 on a casing top, T4 on a casing side) | accepted, 4 → 3 items, silo `loaded`, "Tier N missile loaded (strike)" |
+| T2 missile on a T1 silo, T3 on a T4, T4 on a T1 | refused, nothing used: "Wrong missile: this silo takes a tier 1 missile, not tier 4" |
+| Missile on a loaded silo | refused: "This silo is already loaded" |
+| During a strike launch: opening, then launching | refused: "The silo is busy (opening)" / "(launching)"; accepted during the cooldown that follows |
+| A casing's offset changed with `/setblock` (damaged structure) | refused: "The silo structure is damaged" |
+| Sneaking with a missile | loads (the item's own `useOn`) |
+| Missile in the off hand, main hand empty | loads; the mode did not toggle |
+| Creative | loads, 2 of 2 items left |
+| Missile on plain ground | passed, nothing happened |
+| Sneak, empty hands, loaded silo / empty silo | unloaded into the main hand / "This silo has no missile loaded" |
+| Silo item on a loaded silo | refused: "a missile is loaded; unload it first"; after the sneak-unload it upgraded T1 → T2 |
+| Empty hand and a stick, not sneaking | toggled strike ↔ air defence, as before |
+| Strike launch from an item-loaded T2, twice (reloaded during the cooldown) | `ARRIVED`, miss 0.00, both times |
+| AD: T1 loaded by item, hostile plane parked 57 blocks away; reloaded by item after each shot | engaged after each reload, three launches; action bar "air defence armed (100 blocks)" |
+| Survival break of a loaded T1 (master), T3 (casing), T4 (bottom casing) | 1 / 3 / 4 silo items plus 1 `missile_t1` / `missile_t3` / `missile_t4` |
+| Survival break of an empty T2; creative break of a loaded T4 | 2 silo items, no missile; nothing at all |
+| Silo item on grass → T1 → load → unload → upgrade to T2 → load → break | every step as above; the 9 x 15 x 9 box around it had **0 blocks changed** afterwards |
+| `/missile item recipe all`, also after a restart | all five recipes matched, each giving 1 item |
+| `/missile silo load` / `unload` | unchanged |
+
 ### Arrival (40 flights, flat world)
 
 **All 40 arrived. The miss distance was 0.00 blocks in every flight**, against a target of 1.5 or better. The
@@ -1191,21 +1324,26 @@ The same four flights on other bearings, with an earlier build, gave identical t
 
 ## 7. Known limitations
 
-- **Loading and launching are commands only.** There is no missile item and no launch interface (see below).
+- **Launching is a command only.** There is no launch interface (see below). Loading has the missile items.
 - **Removing a silo** puts back what it displaced. A silo built by the phase 1 build has no record, and its
-  shaft is filled with dirt. A missile loaded in a broken silo is lost.
+  shaft is filled with dirt. A missile loaded in a silo that is removed by anything but a survival player's break
+  (creative, `/setblock`, `/missile silo remove`, an explosion) is lost.
 - **Upgrading needs natural ground.** A silo surrounded by built blocks cannot go from 2 to 3 until one corner is
   clear. That is by design: it never digs a player's blocks.
 - **Tier 4 cost.** One tick of 30–70 ms per detonation on this machine, the same as a strike aircraft with the
   same warhead (§6a). Many simultaneous tier 4 impacts add up.
 - **Fire.** Tier 3 and 4 fires are vanilla fire. In a forest they spread as any fire does, subject to the
   `fire_spread_radius_around_player` and related game rules.
-- **Translations.** The phase 2 messages and the tooltip are in `en_us.json` only.
+- **Translations.** The phase 2 messages and the tooltip, and the missile item names, tooltips and messages, are
+  in `en_us.json` only.
+- **Missile item icons** have not been looked at on a client.
 - **The item's look.** The item texture is a placeholder and has not been looked at on a client. The upgrade
   messages mix the translated frame with an English reason.
 - **Missiles do not survive a restart.** Flights in progress are discarded at a server stop. A silo in the middle
-  of a launch sequence is saved and finishes the sequence when its chunk next ticks. Its chunk ticket is not
-  re-created at startup.
+  of a strike launch sequence is saved with its persistent chunk ticket and finishes the sequence right after the
+  restart (§3). A silo saved mid-sequence by 5.4.0-beta.2 or earlier has no such ticket; it is reset to idle, the
+  missile kept, as soon as it is next touched (§1, stuck-sequence net). An air-defence silo holds no ticket and
+  is reset the same way if it comes back more than 600 game ticks later.
 - **Terrain following.** It only sees chunks that are already loaded, which the lead tickets normally provide. It
   climbs at most 50°, so a sheer wall taller than the missile can out-climb is hit (by design, see the test). There
   is no lateral avoidance: the missile goes over terrain, never round it.
@@ -1217,7 +1355,7 @@ The same four flights on other bearings, with an earlier build, gave identical t
 - **Client check.** The client was checked with llvmpipe under Xvfb at low tick rates. Lighting at night and in
   deep shafts was not examined.
 - **Air defence** (§1c):
-  - **One shot per load.** An AD silo fires its one missile and must be reloaded (`/missile silo load`). There is
+  - **One shot per load.** An AD silo fires its one missile and must be reloaded with a missile item. There is
     no magazine and no automatic reload.
   - **No ticket, by design.** A silo far from players and away from the aircraft's own chunk bubble does not see
     it (§6b, "Chunks"). A hostile aircraft without an autopilot carries no tickets, so it only wakes silos where
@@ -1235,12 +1373,249 @@ The same four flights on other bearings, with an earlier build, gave identical t
   - **Translations.** The toggle messages and the "Hostile" tooltip line use `translatableWithFallback` with
     English fallbacks. No lang file entries were added.
 
+## 8. Launching from the map
+
+A world map can show the silos, launch from them, and load or unload them. Simple Planes does not draw a map of
+its own. It answers map mods over five play payloads and offers a small client API,
+`xyz.przemyk.simpleplanes.api.map.AviationMap`.
+The first user is the world map in the minecolonies-fabric repository (`worldmap/26.3`, aviation tab). The same
+snapshot also carries airfields, helipads, shuttles and flights (see `AUTOPILOT.md` §9a).
+
+The code is in `aviation/` (server side) and `api/map/` (client API and records). The silo, missile and
+launch code is not touched. The map's paths end in the same calls as the commands:
+
+- a launch ends in `LaunchSiloBlockEntity#launch`, as `/missile launch` does;
+- a load or unload ends in `LaunchSiloBlockEntity#load` / `#unload`, as `/missile silo load|unload` do.
+
+### 8a. Who may launch, load and unload, and from where
+
+**Operators only.** Launch, load and unload requests all need permission level 2
+(`Commands.LEVEL_GAMEMASTERS`), which is the same as `/missile launch` and `/missile silo load`. The server checks
+this on every request. Players without the permission still get the full snapshot, so they can see airfields,
+routes and silos. The snapshot's `launchPermitted` flag tells the map to disable its Launch, Load and Unload
+buttons. The flag is a hint for the UI only. The client's own permission level is never trusted.
+
+The server handles a request (`AviationService.handleLaunch`) in this order and stops at the first failure:
+
+| # | Check | Refusal text (after "Launch refused: ") |
+|---|---|---|
+| 1 | Operator permission | `operator permission is required to launch (the same as /missile launch)` |
+| 2 | Rate limit: one silo request (launch, load or unload share it) per player per 1000 ms, wall clock. A refused request counts too. | `too many silo requests; wait a second` |
+| 3 | Target inside the world border | `the target is outside the world border` |
+| 4 | Silo position in world bounds and within `NEAR_RADIUS + 8` of the player (coarse check) | `too far away (N blocks; you must be within 24)` |
+| 5 | Silo chunk loaded (`level.isLoaded`) | `the silo's chunk is not loaded` |
+| 6 | A silo is there (`SiloStructure.masterOf` plus the block entity). If not, the index entry is re-checked and dropped. | `there is no silo at x, y, z` |
+| 7 | Player within `NEAR_RADIUS` (24) of the silo mouth, measured in 3D from the feet | `too far away (…)` |
+| 8 | `LaunchSiloBlockEntity#launch`: strike mode, idle, loaded, intact, hatch clear, min and max range, height | `silo at … cannot launch: <the silo's own reason>` |
+
+The request names a silo position and a target column and carries nothing else. Tier, mode, loaded state and
+range are read from the world, never from the client. A refusal goes to the player's action bar in red and
+back to the map as a `LaunchResult`. It is also logged as
+`[aviation] launch request by <player> for silo <pos> refused: <reason>`. A success goes to the action bar in
+green (`Launch: tier N missile from … to … (N blocks)`) and is logged as `[aviation] <player> launched silo …`.
+
+Check 3 is the one addition beyond what `/missile launch` checks.
+
+**Load and unload** (`AviationService.handleService`, payload `aviation_silo`) run the same checks 1, 2 and 4 to 7.
+There is no target, so there is no border check. Then:
+
+1. **Load only:** the structure must be intact (`SiloStructure.isIntact`). The refusal is
+   `the silo structure is damaged`. The command does not check this. A load into a silo that is already loaded
+   says `already loaded` first.
+2. **Both:** `LaunchSiloBlockEntity#load` or `#unload`. This loads a missile of the silo's own tier, with no item
+   needed. An unloaded missile is gone, as with the command.
+
+Refusals read `Load refused: silo at … cannot be loaded: <reason>` (for example `already loaded`,
+`busy (opening)`, `the silo structure is damaged`), and `Unload refused: … not loaded`.
+
+Both work on strike and air-defence silos alike; mode is not checked. A loaded air-defence silo then fires on its
+own, as always (§1c). The map path does not depend on missile items (branch `claude/missile-item-26.3`).
+Successes read `Loaded a tier N missile into the silo at …` / `Unloaded the tier N missile from the silo at …`
+(green action bar) and are logged as `[aviation] <player> loaded silo … (strike|air defence) from the map`.
+
+**Why the player must be near (24 blocks).** Twenty-four blocks means standing at the silo with it in view. It
+is also always inside the minimum simulation distance (2 chunks = 32 blocks). So the silo's chunk is
+block-ticking, and its hatch sequence runs without any ticket of its own. Without this rule, an operator
+could fire any silo in the world from the map.
+
+### 8b. Target height
+
+The map names a column (`x`, `z`) and optionally a height `y`. The server decides the height
+(`AviationService.targetY`) as follows:
+
+1. **The target column's chunk is loaded on the server:** `MOTION_BLOCKING` height, which is the first free block
+   above the surface, water or leaves included. The client value is ignored.
+2. **The chunk is not loaded and the client sent a height:** that height, clamped to the level's build range.
+   The map sends the surface it recorded plus one.
+3. **The chunk is not loaded and the client sent `AviationMap.SURFACE` (`Integer.MIN_VALUE`):** the generator's
+   `WORLD_SURFACE_WG` estimate. It reads noise only, so it loads and generates nothing. It does not see
+   player-built blocks.
+
+After this, the missile's own terminal guidance takes over, and it dives on whatever is actually there (§1).
+
+### 8c. Payloads
+
+Protocol `2`. Version 1 had no load or unload, no action on the reply, and no service or air-defence fields.
+All five payloads are registered in `PayloadTypeRegistry` by the common initializer, so a dedicated server has
+them. Both sides check `canSend` before sending. A vanilla client, or a client without Simple Planes, is never
+sent anything.
+
+The server also remembers the protocol each player's last snapshot request carried. It sends snapshots and
+replies only to a client that asked with the server's own version. A client of another version gets no
+clientbound bytes it would fail to decode, and the server logs this once:
+`[aviation] <player> asked with map protocol N, this server speaks 2; not answering`.
+
+| Id | Direction | Content |
+|---|---|---|
+| `simpleplanes:aviation_request` | C → S | `protocol` (var int). Asks for a snapshot. At most one per player every 500 ms, wall clock; extra requests are dropped silently. |
+| `simpleplanes:aviation_snapshot` | S → C | `AviationSnapshot`: dimension, game time, near radius, `launchPermitted`, snapshot radius, airfields, helipads, routes (shuttles), flights, silos |
+| `simpleplanes:aviation_launch` | C → S | silo `BlockPos`, target `x` (var int), `y` (int, may be `SURFACE`), `z` (var int) |
+| `simpleplanes:aviation_silo` | C → S | silo `BlockPos`, action (var int: `SiloAction` ordinal, `LOAD` = 1 or `UNLOAD` = 2; `LAUNCH` is refused) |
+| `simpleplanes:aviation_launch_result` | S → C | `LaunchResult`: silo, accepted, message (`Component`), target x/y/z, action (`SiloAction` ordinal). It answers every silo request and is followed by a fresh snapshot, so the map shows the hatch opening or the new load without waiting for its next poll. |
+
+**Snapshot limits.** The lists cover a 12000-block horizontal radius around the player: the tier 4 range plus a
+margin. Each list is sorted by distance and capped at 128 airfields, 128 helipads, 128 routes, 64 flights and
+256 silos. Strings are capped at 256 characters. The decoder enforces the same caps.
+
+**Silo fields.** Each silo record carries:
+
+- position, tier, strike or air-defence mode, loaded, and phase;
+- whether its chunk is loaded;
+- the mouth x/z, and the tier's minimum and maximum range;
+- the player's distance to it;
+- `usable`, and a `status` text giving the first reason it cannot launch;
+- `serviceable`, and a `serviceStatus` text giving the reason it cannot be loaded or unloaded (too far, chunk not
+  loaded), or `ready`;
+- `detectionRadius` and `engagementRange`, the tier's air-defence values, taken from `InterceptorSpec`:
+
+  | Tier | `detectionRadius` (`range × 0.25`) | `engagementRange` (`InterceptorSpec.range`) |
+  |---|---|---|
+  | 1 | 100 | 400 |
+  | 2 | 150 | 600 |
+  | 3 | 225 | 900 |
+  | 4 | 350 | 1400 |
+
+  Detection is a 3D radius around the silo mouth; a map draws it as a horizontal circle. The engagement range is
+  the interceptor's motor path, so it is an upper bound on how far from the silo an intercept can happen, not a
+  sharp edge. Both are sent for every silo, in either mode, so a map never hard-codes them.
+
+`usable` answers "would the server accept a launch from here right now", leaving out permission and the target.
+It gives the same answer as checks 4 to 8. `serviceable` answers the same for a load or unload, leaving out
+permission and the silo's own state (loaded, busy, damaged). It is true for air-defence silos too.
+
+### 8d. Client API
+
+`AviationMap` has `API_VERSION = 2`. Version 2 added load and unload, `SiloAction`, the action on `LaunchResult`,
+and the service and air-defence fields on `AviationSnapshot.Silo`. All methods are called on the client thread.
+
+A map built against version 2 should read `API_VERSION` reflectively, because a `static final int` is inlined at
+compile time, and refuse to start against an older Simple Planes. The world map does this.
+
+| Method | |
+|---|---|
+| `isAvailable()` | The server speaks the protocol (`ClientPlayNetworking.canSend`). |
+| `canService()` | The server also takes load and unload requests. |
+| `requestSnapshot()` / `requestLaunch(silo, x, y, z)` | Send a request. Both return false when nothing could be sent. |
+| `requestLoad(silo)` / `requestUnload(silo)` | Send a load or unload request (§8a). Both return false when nothing could be sent. |
+| `latest()` / `lastResult()` | The last snapshot, and the last answer to any silo request, on this connection, or null. Both are cleared on disconnect. `LaunchResult.action()` says which request was answered. |
+| `addListener` / `removeListener` | `Listener.onSnapshot`, `Listener.onLaunchResult` |
+| `SURFACE` | "Let the server find the surface" (§8b). |
+
+A map should reach this API only through a class it loads by name after `FabricLoader.isModLoaded("simpleplanes")`,
+so that it runs without Simple Planes. The world map does this in `AviationBridge`.
+
+### 8e. The silo index
+
+The server cannot list silos in unloaded chunks from the world. So it keeps a per-dimension `SavedData`,
+`simpleplanes:silos` (for the overworld, `<world>/dimensions/minecraft/overworld/data/simpleplanes/silos.dat`).
+It holds the master position, tier, mode, loaded state and the game time of the last sighting.
+
+The index uses Fabric events only. There are no hooks in the silo classes.
+
+- `BLOCK_ENTITY_LOAD`: a silo that is placed, upgraded or loaded from disk is added or updated.
+- `CHUNK_UNLOAD`: the silo's last state is written, and the map shows it greyed until the chunk loads again.
+- A sweep every 20 ticks re-reads every indexed silo whose chunk is loaded. It drops entries whose block entity is
+  gone, for example after `/setblock` or an explosion.
+- `CHUNK_LOAD`: indexed silos in that chunk are re-checked. This heals entries whose region was deleted or
+  regenerated.
+- A launch, load or unload request for a silo that is gone re-checks that entry too. A successful load or unload
+  updates the entry at once. Server stop runs a final sweep.
+
+Events are queued and handled in the level tick, never mid-chunk-promotion. A dropped entry is logged as
+`[aviation] silo index: <pos> is gone, entry dropped (<why>)`.
+
+### 8f. Commands
+
+`/aviation`, permission level 2. It is for inspection and headless tests.
+
+| Command | |
+|---|---|
+| `/aviation index` | Lists the index for the current dimension. |
+| `/aviation index sweep` | Runs a sweep now and reports how many entries were dropped. |
+| `/aviation snapshot [<at> [op\|nonop]]` | Prints what a snapshot would hold, for the executor or for a test player at `<at>`. |
+| `/aviation test launch <at> <silo> <tx> <tz> [op\|nonop [y]]` | Runs the real launch handler for a test player standing at `<at>`, and prints the answer. |
+| `/aviation test load\|unload <at> <silo> [op\|nonop]` | The same for the load and unload handler. |
+| `/aviation test resetlimits` | Clears the rate limits. |
+
+The test player is a `FakePlayer`. It is an operator or not as asked, and it captures the action-bar message.
+The map's network reply is skipped for it.
+
+### 8g. Tests
+
+Run on the dedicated test server with this jar, through `/aviation test launch`, then on a real client under Xvfb
+with the world map. Silos used, all by the spawn unless noted:
+
+- T1 at (0, −20, 0) and T4 at (10, −20, 20), loaded;
+- T2 at (30, −20, 0) and T3 at (10, −20, 0), empty;
+- T3 at (30, −20, 20), in air-defence mode;
+- T2 at (−20, −20, 10), strike mode for the launch tests and switched to air defence for the map screenshots;
+- T1 at (2000, −20, 0), in a chunk that is not loaded.
+
+| Case | Result |
+|---|---|
+| Non-operator, standing at a loaded T1 | refused: operator permission is required |
+| Operator 200 blocks away | refused: too far away (200 blocks; you must be within 24) |
+| Air-defence silo | refused: the silo is in air-defence mode |
+| Empty silo | refused: no missile loaded |
+| T1, target 2000 blocks away | refused: target is … blocks away, beyond the tier 1 range of 1200 |
+| T1, target 10 blocks away | refused: target is … blocks away, inside the tier 1 minimum range of 24 |
+| Silo in an unloaded chunk | refused: the silo's chunk is not loaded |
+| T3 at −600, −300 (target chunk not loaded, `SURFACE`) | accepted, y = −19 from the generator. It arrived in 15.0 s, 727 blocks flown, miss 0.00. |
+| A second request straight after | refused: too many launch requests (the wording before load and unload shared the limit) |
+| The same silo after 1.1 s | refused: busy (launching) |
+| T1 at 300, 0 and T4 at 3000, 21 (client y = −19) | both arrived, miss 0.00. T4 took 41.5 s. |
+| Launch from the map UI on a real client (T4, 249, 150) | accepted, arrived, miss 0.00 |
+| Map UI, silo emptied on the server just before Launch | refused by the server: no missile loaded. Shown in the panel and the action bar. |
+| Index across a restart | kept |
+| Silo replaced with `/setblock … air` or `strict` | entry dropped by the next sweep |
+| Region file of a silo deleted, chunk loaded again | entry dropped (`chunk loaded without it`) |
+| Client without Simple Planes, dedicated server without the map | both run. Nothing is sent to a client that cannot receive it. |
+
+Load and unload (protocol 2), through `/aviation test load|unload`, then from the map on a real client:
+
+| Case | Result |
+|---|---|
+| Operator loads an empty strike T3 (10, −20, 0) | accepted: `Loaded a tier 3 missile into the silo at 10, -20, 0` |
+| Operator unloads it again | accepted |
+| Operator unloads, then loads, the air-defence T3 (30, −20, 20) | both accepted |
+| Non-operator loads the strike T3 / loads or unloads the air-defence T3 | refused: operator permission is required to load or unload |
+| Operator 200 blocks away | refused: too far away (200 blocks; you must be within 24) |
+| Silo at (2000, −20, 0), chunk not loaded | refused: the silo's chunk is not loaded |
+| Load into the loaded T4 | refused: `silo at 10, -20, 20 cannot be loaded: already loaded` |
+| Unload from an empty silo | refused: `… cannot be unloaded: not loaded` |
+| Unload, then load, 150 ms apart | the second is refused: too many silo requests; wait a second. The same applies to a launch straight after. |
+| Unload during a launch sequence (hatch opening) | refused: `busy (opening)` |
+| Map UI: select the empty T2 (30, −20, 0), press Load | accepted; the silo turned green and its status read "ready" |
+| Map UI: select the air-defence T3, press Unload, then Load | both accepted |
+| Map UI as a non-operator | Load and Unload disabled, with the operator-permission tooltip |
+
+The damaged-structure refusal was not reached in a test. Removing any casing block dismantles the whole silo
+(`SiloStructure.onPartRemoved`), so a damaged silo that is still a silo is hard to produce.
+
 ## Not done, planned next
 
-**Missile items and a launch interface.** These were suggested but left out on purpose: the request was the
-silo item only. A natural next step:
+**A launch interface.** Missile items are done (§1d). A natural next step:
 
-- a missile item per tier, loaded by using it on a silo of that tier, replacing `/missile silo load`;
 - a launch terminal block or a targeting item that sets coordinates and fires, replacing `/missile launch`.
 
 **Air defence against aircraft** is done (§1c). **Intercepting missiles** is not:
@@ -1259,6 +1634,6 @@ What is missing is a missile allegiance or owner, and a roster of missiles to ch
 
 **Other air-defence follow-ups:**
 
-- a missile item or magazine for automatic reloading;
+- a magazine for automatic reloading;
 - a client-side cue for hostile aircraft;
 - allegiance on the strike tool and route wand.

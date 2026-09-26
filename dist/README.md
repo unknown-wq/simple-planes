@@ -1,9 +1,10 @@
 # dist
 
-## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.2.jar`
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.4.jar`
 
 A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
-has been flown by a player in a client yet, only on a headless dedicated server.
+has had a full play-through yet; most of it was tested on a headless dedicated server, and the fighter
+glass, the airliner cabin and the world-map tab also in a real client.
 
 | | |
 |---|---|
@@ -11,7 +12,7 @@ has been flown by a player in a client yet, only on a headless dedicated server.
 | Loader | Fabric, loader ≥ 0.19.5 |
 | Java | 25 |
 | Requires | Fabric API 0.160.5+26.3 or newer |
-| sha256 | `92fb4e87afa3a2b17b8dd70f16410556009d36c6eb5e075fea4230a5e2195e08` |
+| sha256 | `418ac48e1a09a21a594a028933724d62502ee685d35c8d7e1bf8a51a33993836` |
 
 What it adds on top of 5.3.14:
 
@@ -25,12 +26,27 @@ What it adds on top of 5.3.14:
 - Air defence: right-click a silo to switch it to air defence. It launches at the nearest hostile
   aircraft in range and chases it. Aircraft are friendly unless spawned hostile
   (`{allegiance:"hostile"}`, or `hostile` on the autopilot and gunship commands).
-- Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`, `/airdefence`.
+- Missile items T1–T4: use one on a silo of the same tier to load it; sneak with empty hands to unload.
+  A loaded silo broken in survival drops its missile.
+- Silos no longer stay "busy" after a restart mid-launch; `/missile silo reset` for anything else, and
+  clearer refusals (frozen game, target too close or too far).
+- Inventory icons for the new aircraft, the crane remote and the silo.
+- Transparent cockpit glass on the fighter.
+- Mini airliner widened by 2 blocks with a 22-seat cabin (2 + 2), click the nose to fly, the fuselage
+  to board the nearest free seat.
+- Plane Strike Tool: choose the aircraft (plane, large, cargo, fighter, airliner, random) with a plane
+  item in the other hand or `/autopilot tool type <aircraft>`.
+- World-map support: with the world map installed, an aviation tab shows airfields, routes and silos,
+  and operators can launch, load and unload a nearby silo; hover or toggle to see strike ranges and
+  air-defence detection and reach. Map API 2: needs World Map 0.1.7 or newer for the tab.
+- Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`, `/airdefence`, `/aviation`.
 
 Design and test reports are in `../26.3/design/` and `../26.3/MISSILES.md`. Checked here: a clean
 build, a headless server boot with no errors, every new aircraft spawning and the fighter's take-off
-matching its measured numbers (beta.1), and on this jar a boot with no errors, the fighter and
-airliner spawning, a tier 1 missile arriving on target and detonating, and the silo recipe resolving.
+matching its measured numbers (beta.1); on this jar a boot with no errors, the fighter and airliner
+(with its seat hitboxes) spawning, a tier 1 missile arriving on target with a miss of 0.00, a fighter
+strike from the strike command hitting 3 blocks off, and the silo and all four missile recipes resolving. On
+beta.4 also: an operator load through the map request path, then a tier 1 launch arriving with a miss of 0.00.
 
 ## Stable builds
 

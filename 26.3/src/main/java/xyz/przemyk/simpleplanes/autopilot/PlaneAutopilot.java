@@ -1098,7 +1098,9 @@ public class PlaneAutopilot {
         double heightToLose = Math.max(position.y - target.y, 0.0);
         double diveEntry = Mth.clamp(
             heightToLose / Math.tan(Math.toRadians(AutopilotConfig.STRIKE_DIVE_ANGLE)),
-            AutopilotConfig.STRIKE_MIN_DIVE_DISTANCE, AutopilotConfig.STRIKE_MAX_DIVE_DISTANCE);
+            AutopilotConfig.STRIKE_MIN_DIVE_DISTANCE, AutopilotConfig.STRIKE_MAX_DIVE_DISTANCE)
+            + strikePushOverLead(Math.max(plane.getDeltaMovement().length(), AutopilotSpawner.STRIKE_LAUNCH_SPEED),
+                plane.autopilotRotationSpeedMultiplier());
 
         if (distance > diveEntry) {
             // Run-in: hold height above the ground, not above the target. A target in a valley is
@@ -1151,6 +1153,22 @@ public class PlaneAutopilot {
             plane.crash(16);
             stop(plane);
         }
+    }
+
+    /**
+     * How much earlier than the starter plane this airframe has to start its dive, at this speed.
+     *
+     * <p>Pushing over onto a dive of angle {@code a} along an arc of radius {@code R} reaches the
+     * dive line {@code R * tan(a / 2)} further out than a sharp corner would. The dive point above
+     * is tuned on the starter plane, so only the difference to its arc is added: zero for it and for
+     * anything more agile. The radius is {@link AutopilotMath#turnRadius} — the nose's measured
+     * push-over rate in the dive is the yaw rate, not the nominal pitch rate — times
+     * {@link AutopilotConfig#STRIKE_PUSH_OVER_LAG} for the flight path trailing the nose.
+     */
+    static double strikePushOverLead(double speed, double rotationMultiplier) {
+        double extra = AutopilotMath.turnRadius(speed, rotationMultiplier) - AutopilotMath.turnRadius(speed, 1.0);
+        return Math.max(extra, 0.0) * AutopilotConfig.STRIKE_PUSH_OVER_LAG
+            * Math.tan(Math.toRadians(AutopilotConfig.STRIKE_DIVE_ANGLE / 2.0));
     }
 
     private void beginLanding(PlaneEntity plane) {

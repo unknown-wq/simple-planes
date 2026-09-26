@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "TNT",
+    "TMT",
+    "iFi"
+  ],
+  "key": {
+    "T": "minecraft:tnt",
+    "N": "#c:ingots/netherite",
+    "M": "simpleplanes:missile_t3",
+    "i": "#c:ingots/iron",
+    "F": "minecraft:firework_rocket"
+  },
+  "result": {
+    "id": "simpleplanes:missile_t4"
+  }
+}
