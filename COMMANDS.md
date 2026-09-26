@@ -41,7 +41,7 @@ needed where that is called out separately.
 ## Strike
 
 ```
-/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire]
+/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire] [type <aircraft>]
 ```
 
 Spawns an aircraft off to one side of the target and flies it straight in at full throttle.
@@ -54,6 +54,7 @@ Spawns an aircraft off to one side of the target and flies it straight in at ful
 | `blast` | 0…16 | 4 | 4 is ordinary TNT, 6 a charged creeper, 16 the ceiling |
 | `blocks` | true/false | true | `false` — damages entities but leaves the build alone |
 | `fire` | true/false | false | `true` — leaves fires burning |
+| `type <aircraft>` | see below | `plane` | which aircraft flies it. May follow any of the arguments above |
 
 ```mcfunction
 # 400 blocks of run-in, approaching from the northeast,
@@ -66,6 +67,24 @@ Spawns an aircraft off to one side of the target and flies it straight in at ful
 # incendiary, no demolition
 /autopilot strike 100 70 200 400 0 8 false true
 ```
+
+### Which aircraft
+
+`plane` (the starter plane), `large`, `cargo`, `fighter`, `airliner`, or `random` (one of
+`plane`, `large` and `cargo`). The message says which aircraft was actually built.
+
+```mcfunction
+# a fighter from the east, default warhead
+/autopilot strike 100 70 200 400 90 type fighter
+```
+
+The quadcopter is peaceful and is never sent. Helicopters, the mini helicopters and the
+airship cannot fly an attack run, and are refused with the reason.
+
+The large, cargo and airliner planes need room to push over into the dive. A shorter
+`distance` is raised to their minimum — large 200, airliner 234, cargo 318 — and the
+message says so. The cargo plane's final is long and shallow: if something stands in
+front of the target, pin a `bearing` over open ground.
 
 ### How bearing works
 
@@ -215,14 +234,17 @@ Gunship #425 did not land: ditched in water at 66401, -61, 66401 - floating, not
 * **right-click a block** — launch a strike into that block;
 * **right-click the air** — show the current settings;
 * **sneak + right-click the air** — cycle the distance (100 → 200 → 400 → 800), and the
-  blast strength on every wraparound.
+  blast strength on every wraparound;
+* **a plane in the other hand** — that plane flies the strike instead, with its wood.
+  It is used up (except in creative), like an arrow from a bow.
 
 The gesture only cycles those two numbers. The full set of settings, including "don't
-break blocks", "start fires" and a pinned bearing, is written onto the tool **in hand**
-with:
+break blocks", "start fires", a pinned bearing and the aircraft, is written onto the tool
+**in hand** with:
 
 ```
-/autopilot tool <distance> [bearing] [blast] [blocks] [fire]
+/autopilot tool <distance> [bearing] [blast] [blocks] [fire] [type <aircraft>]
+/autopilot tool type <aircraft>
 ```
 
 The same arguments in the same order as `strike`, minus the target — the target is
@@ -234,11 +256,16 @@ whatever block you right-click.
 
 # clear the pinned bearing: -1 means "approach from wherever the player stands", as usual
 /autopilot tool 400 -1
+
+# send a cargo plane, keeping every other setting
+/autopilot tool type cargo
 ```
 
 Arguments left off keep their current value — a second call can change one setting
 without restating the rest. Settings live on the item itself, so they survive logging
-out, a chest, and death.
+out, a chest, and death. A tool that never had an aircraft set sends the starter plane.
+The aircraft types are the ones `strike` takes (see "Which aircraft" above); the tooltip
+and the right-click-the-air line show the current one.
 
 ---
 

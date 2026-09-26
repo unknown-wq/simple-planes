@@ -18,6 +18,7 @@ import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -25,6 +26,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.airdefence.Allegiance;
 import xyz.przemyk.simpleplanes.airdefence.AllegianceOption;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
@@ -32,6 +34,7 @@ import xyz.przemyk.simpleplanes.items.PlaneStrikeToolItem;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * {@code /autopilot} — drives the whole feature so the flight model can be exercised on a headless
@@ -43,8 +46,9 @@ import java.util.List;
  * attack run comes in from.
  *
  * <pre>
- * /autopilot strike &lt;target&gt; [distance] [bearing] [blast] [blocks] [fire]
- * /autopilot tool &lt;distance&gt; [bearing] [blast] [blocks] [fire]
+ * /autopilot strike &lt;target&gt; [distance] [bearing] [blast] [blocks] [fire] [type &lt;aircraft&gt;]
+ * /autopilot tool &lt;distance&gt; [bearing] [blast] [blocks] [fire] [type &lt;aircraft&gt;]
+ * /autopilot tool type &lt;aircraft&gt;
  * /autopilot route &lt;from&gt; &lt;to&gt; [speed]
  * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed] [delay &lt;seconds&gt;]
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt; [speed]
@@ -100,20 +104,29 @@ public final class AutopilotCommand {
             // Every level executes the same method: the optional arguments are read back by name
             // from the parsed context, so the tree stays flat instead of gaining a lambda per
             // combination. See optionalInt/optionalFloat/optionalBool below.
+            //
+            // type <aircraft> is the keyword branch route/flight/inbound already use, offered after
+            // every argument so it never shifts a positional one.
             root.then(Commands.literal("strike")
                 .then(Commands.argument("target", BlockPosArgument.blockPos())
                     .executes(AutopilotCommand::strike)
+                    .then(strikeTypeArgument(AutopilotCommand::strike))
                     .then(Commands.argument("distance", IntegerArgumentType.integer(20, 4000))
                         .executes(AutopilotCommand::strike)
+                        .then(strikeTypeArgument(AutopilotCommand::strike))
                         .then(Commands.argument("bearing", IntegerArgumentType.integer(0, 359))
                             .executes(AutopilotCommand::strike)
+                            .then(strikeTypeArgument(AutopilotCommand::strike))
                             .then(Commands.argument("blast",
                                     FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_POWER))
                                 .executes(AutopilotCommand::strike)
+                                .then(strikeTypeArgument(AutopilotCommand::strike))
                                 .then(Commands.argument("blocks", BoolArgumentType.bool())
                                     .executes(AutopilotCommand::strike)
+                                    .then(strikeTypeArgument(AutopilotCommand::strike))
                                     .then(Commands.argument("fire", BoolArgumentType.bool())
-                                        .executes(AutopilotCommand::strike))))))));
+                                        .executes(AutopilotCommand::strike)
+                                        .then(strikeTypeArgument(AutopilotCommand::strike)))))))));
 
             // tool <distance> [bearing] [blast] [blocks] [fire]
             //
@@ -121,18 +134,30 @@ public final class AutopilotCommand {
             // tool strike is whatever block gets right-clicked. Written onto the strike tool in
             // hand, so a setting that the item's one spare gesture cannot reach is still reachable,
             // and a strike worked out at the console can be carried into the world and repeated.
+            //
+            // tool type <aircraft> changes the airframe alone; the trailing form sets it together
+            // with the rest, exactly as on strike.
             root.then(Commands.literal("tool")
+                .then(strikeTypeArgument(AutopilotCommand::tool))
                 .then(Commands.argument("distance", IntegerArgumentType.integer(20, 4000))
                     .executes(AutopilotCommand::tool)
+                    .then(strikeTypeArgument(AutopilotCommand::tool))
                     .then(Commands.argument("bearing", IntegerArgumentType.integer(-1, 359))
                         .executes(AutopilotCommand::tool)
+                        .then(strikeTypeArgument(AutopilotCommand::tool))
                         .then(Commands.argument("blast",
                                 FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_POWER))
                             .executes(AutopilotCommand::tool)
+                            .then(strikeTypeArgument(AutopilotCommand::tool))
                             .then(Commands.argument("blocks", BoolArgumentType.bool())
                                 .executes(AutopilotCommand::tool)
+                                .then(strikeTypeArgument(AutopilotCommand::tool))
                                 .then(Commands.argument("fire", BoolArgumentType.bool())
-                                    .executes(AutopilotCommand::tool)))))));
+                                    .executes(AutopilotCommand::tool)
+                                    .then(strikeTypeArgument(AutopilotCommand::tool))))))));
+
+            // Test tooling: the strike tool driven by a fake player. See StrikeToolTest.
+            root.then(StrikeToolTest.node(registry));
 
             root.then(Commands.literal("route")
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
@@ -443,6 +468,43 @@ public final class AutopilotCommand {
                 .executes(action));
     }
 
+    /**
+     * {@code type <aircraft>} on {@code strike} and {@code tool}: the runway commands' keyword, but
+     * suggesting only {@link AircraftType#strikeTypes()}.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> strikeTypeArgument(
+            com.mojang.brigadier.Command<CommandSourceStack> action) {
+        return Commands.literal("type")
+            .then(Commands.argument("aircraft", StringArgumentType.word())
+                .suggests((context, builder) -> SharedSuggestionProvider.suggest(
+                    AircraftType.strikeTypes().stream().map(AircraftType::getSerializedName), builder))
+                .executes(action));
+    }
+
+    /**
+     * The strike airframe asked for, {@code fallback} when none was, or null once the caller has been
+     * told why the one asked for was refused. Strict rather than {@link AircraftType#byName}: a
+     * refused or mistyped name must not quietly launch a starter plane.
+     */
+    private static @Nullable AircraftType strikeType(CommandContext<CommandSourceStack> context,
+                                                     AircraftType fallback) {
+        if (!has(context, "aircraft")) {
+            return fallback;
+        }
+        String name = StringArgumentType.getString(context, "aircraft");
+        AircraftType type = AircraftType.byNameOrNull(name);
+        if (type != null && type.canStrike()) {
+            return type;
+        }
+        Identifier id = Identifier.tryBuild(SimplePlanesMod.MODID, name.toLowerCase(Locale.ROOT));
+        boolean aircraft = type != null || name.equalsIgnoreCase("crane")
+            || (id != null && BuiltInRegistries.ENTITY_TYPE.containsKey(id));
+        context.getSource().sendFailure(Component.literal(aircraft
+            ? PlaneStrikeToolItem.strikeRefusal(name)
+            : "Unknown aircraft type: " + name + ". Strike aircraft: " + PlaneStrikeToolItem.strikeTypeList() + "."));
+        return null;
+    }
+
     private static AircraftType aircraftType(CommandContext<CommandSourceStack> context) {
         return has(context, "aircraft")
             ? AircraftType.byName(StringArgumentType.getString(context, "aircraft"))
@@ -505,6 +567,10 @@ public final class AutopilotCommand {
             ? (double) IntegerArgumentType.getInteger(context, "bearing")
             : null;
         Blast blast = blastFrom(context);
+        AircraftType type = strikeType(context, AircraftType.PLANE);
+        if (type == null) {
+            return 0;
+        }
         // getBlockPos, not getLoadedBlockPos. The target of an attack run is by definition hundreds
         // of blocks away and therefore outside anyone's simulation distance, so demanding a loaded
         // position rejected exactly the flights this command exists to fly ("That position is not
@@ -523,7 +589,7 @@ public final class AutopilotCommand {
         }
 
         PlaneEntity plane = AutopilotSpawner.launchStrike(level, target, distance, bearing,
-            source.getPlayer(), blast);
+            source.getPlayer(), blast, type);
         if (plane == null) {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
@@ -531,7 +597,7 @@ public final class AutopilotCommand {
         AllegianceOption.apply(context, plane);
         source.sendSuccess(() -> Component.literal(
             AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
-                + " Warhead: " + blast.describe() + "."), true);
+                + " Warhead: " + blast.describe() + ". " + AutopilotSpawner.describeAirframe(plane)), true);
         return 1;
     }
 
@@ -560,16 +626,27 @@ public final class AutopilotCommand {
             return 0;
         }
 
+        AircraftType type = strikeType(context, PlaneStrikeToolItem.getType(stack));
+        if (type == null) {
+            return 0;
+        }
+        if (has(context, "aircraft")) {
+            stack.set(AutopilotComponents.STRIKE_TYPE, type);
+        }
+
         Blast current = PlaneStrikeToolItem.getBlast(stack);
         Blast blast = new Blast(
             optionalFloat(context, "blast", current.power()),
             optionalBool(context, "blocks", current.breaksBlocks()),
             optionalBool(context, "fire", current.fire()));
 
-        stack.set(AutopilotComponents.STRIKE_DISTANCE, IntegerArgumentType.getInteger(context, "distance"));
-        stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
-        stack.set(AutopilotComponents.STRIKE_BLOCKS, blast.breaksBlocks());
-        stack.set(AutopilotComponents.STRIKE_FIRE, blast.fire());
+        // Absent only in "tool type <aircraft>", which touches nothing but the airframe.
+        if (has(context, "distance")) {
+            stack.set(AutopilotComponents.STRIKE_DISTANCE, IntegerArgumentType.getInteger(context, "distance"));
+            stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
+            stack.set(AutopilotComponents.STRIKE_BLOCKS, blast.breaksBlocks());
+            stack.set(AutopilotComponents.STRIKE_FIRE, blast.fire());
+        }
 
         Integer bearing = PlaneStrikeToolItem.getBearing(stack);
         if (has(context, "bearing")) {
@@ -589,7 +666,7 @@ public final class AutopilotCommand {
             + PlaneStrikeToolItem.getDistance(configured) + " blocks out, bearing "
             + (reportedBearing == null
                 ? "from wherever you stand" : String.format("%03d", reportedBearing))
-            + ", warhead " + blast.describe() + "."), false);
+            + ", warhead " + blast.describe() + ", aircraft " + type.getSerializedName() + "."), false);
         return 1;
     }
 

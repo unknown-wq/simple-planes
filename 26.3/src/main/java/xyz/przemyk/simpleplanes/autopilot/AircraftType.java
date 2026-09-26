@@ -9,6 +9,7 @@ import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
 
+import java.util.List;
 import java.util.function.Supplier;
 
 /**
@@ -90,6 +91,13 @@ public enum AircraftType implements StringRepresentable {
     /** Fixed-wing types that {@link #of} recognises but {@link #RANDOM} never draws. */
     private static final AircraftType[] TESTABLE = {FIGHTER, AIRLINER};
 
+    /**
+     * Airframes an attack run may be flown by, in the order they are suggested. Every one was flown
+     * into a target on the rig; see {@code AUTOPILOT.md}, "Choosing the aircraft". The rotorcraft is
+     * not here: {@code tickStrike} is a fixed-wing control law and a helicopter ignores its outputs.
+     */
+    private static final AircraftType[] STRIKE = {PLANE, LARGE, CARGO, FIGHTER, AIRLINER, RANDOM};
+
     public static final Codec<AircraftType> CODEC = StringRepresentable.fromEnum(AircraftType::values);
 
     private final String name;
@@ -133,6 +141,35 @@ public enum AircraftType implements StringRepresentable {
         };
     }
 
+    /**
+     * Exact, case-insensitive lookup, or null. {@link #byName} falls back to the starter plane, which
+     * is right for a saved plan and wrong for a command: a mistyped or refused name there has to say
+     * so rather than quietly launch something else.
+     */
+    public static @Nullable AircraftType byNameOrNull(String name) {
+        for (AircraftType type : values()) {
+            if (type.name.equalsIgnoreCase(name)) {
+                return type;
+            }
+        }
+        return null;
+    }
+
+    /** True for the airframes a strike may be flown by. */
+    public boolean canStrike() {
+        for (AircraftType candidate : STRIKE) {
+            if (candidate == this) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The strike airframes, for tab completion and refusal messages. */
+    public static List<AircraftType> strikeTypes() {
+        return List.of(STRIKE);
+    }
+
     /** True for the airframes {@link #RANDOM} draws from. */
     public boolean drawnByRandom() {
         for (AircraftType candidate : FLYABLE) {
@@ -158,7 +195,11 @@ public enum AircraftType implements StringRepresentable {
      * {@code null} rather than being guessed at.
      */
     public static @Nullable AircraftType of(PlaneEntity plane) {
-        EntityType<?> type = plane.getType();
+        return of(plane.getType());
+    }
+
+    /** {@link #of(PlaneEntity)} for an entity type, e.g. the one a plane item places. */
+    public static @Nullable AircraftType of(EntityType<?> type) {
         // Matched on the EntityType and never on the class. HelicopterEntity used to extend
         // LargePlaneEntity and now extends LargeAirframeEntity beside it, so any instanceof written
         // against either would have been silently wrong on one side of that change. An EntityType

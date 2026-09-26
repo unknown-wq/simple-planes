@@ -124,4 +124,14 @@ public class AutopilotComponents {
             .persistent(Codec.INT)
             .networkSynchronized(ByteBufCodecs.VAR_INT)
             .build());
+
+    /**
+     * Airframe the strike tool sends, by its {@code /autopilot} name. Absent means the starter
+     * plane, which is what every tool made before this component existed has always sent.
+     */
+    public static final DataComponentType<AircraftType> STRIKE_TYPE = register("autopilot_strike_type",
+        DataComponentType.<AircraftType>builder()
+            .persistent(AircraftType.CODEC)
+            .networkSynchronized(ByteBufCodecs.STRING_UTF8.map(AircraftType::byName, AircraftType::getSerializedName))
+            .build());
 }

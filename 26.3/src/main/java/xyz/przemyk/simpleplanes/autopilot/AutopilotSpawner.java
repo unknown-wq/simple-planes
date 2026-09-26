@@ -1,6 +1,7 @@
 package xyz.przemyk.simpleplanes.autopilot;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.util.Mth;
@@ -70,8 +71,25 @@ public final class AutopilotSpawner {
     public static @Nullable PlaneEntity launchStrike(Level level, BlockPos target, int distance,
                                                      double approachBearing, @Nullable Player owner,
                                                      Blast blast) {
+        return launchStrike(level, target, distance, approachBearing, owner, blast, AircraftType.PLANE);
+    }
+
+    /**
+     * {@link #launchStrike} flown by a chosen airframe. The caller checks
+     * {@link AircraftType#canStrike()}; {@link AircraftType#RANDOM} is drawn here, when the aircraft
+     * is built.
+     */
+    public static @Nullable PlaneEntity launchStrike(Level level, BlockPos target, int distance,
+                                                     double approachBearing, @Nullable Player owner,
+                                                     Blast blast, AircraftType type) {
         Vec3 targetVec = new Vec3(target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5);
-        Vec3 spawn = AutopilotMath.pointAlong(targetVec, approachBearing, distance);
+        // Built first so the airframe can be asked how much room it needs; placed below.
+        PlaneEntity plane = create(level, targetVec.x, targetVec.y, targetVec.z, 0.0, type);
+        if (plane == null) {
+            return null;
+        }
+        Vec3 spawn = AutopilotMath.pointAlong(targetVec, approachBearing,
+            Math.max(distance, minimumStrikeDistance(plane)));
 
         double terrain = TerrainScanner.surfaceHeight(level, spawn.x, spawn.z);
         if (terrain == TerrainScanner.UNKNOWN_HEIGHT) {
@@ -85,10 +103,7 @@ public final class AutopilotSpawner {
             level.getMaxY() - 8);
 
         double heading = AutopilotMath.headingTo(spawn, targetVec);
-        PlaneEntity plane = create(level, spawn.x, altitude, spawn.z, heading);
-        if (plane == null) {
-            return null;
-        }
+        orient(plane, spawn.x, altitude, spawn.z, heading);
 
         // A strike aircraft is launched, not taxied. Fit a booster (which raises the throttle
         // ceiling from 5 to 10), open the throttle fully and give it its cruise speed at t=0,
@@ -106,6 +121,21 @@ public final class AutopilotSpawner {
         // Powered by the autopilot, and never persisted: a strike aircraft is a one-shot weapon.
         autopilot.start(plane, FlightPlan.strike(target, blast), true, false, owner);
         return plane;
+    }
+
+    /**
+     * Closest a strike by this airframe is launched: its dive point from the run-in height, plus
+     * {@code PlaneAutopilot#strikePushOverLead} at full speed. Zero for the starter plane and anything
+     * as agile, which pitch over fast enough to dive from anywhere the tool puts them; a cargo plane
+     * asked for 100 blocks would still be pushing over as it passed the target.
+     */
+    public static int minimumStrikeDistance(PlaneEntity plane) {
+        double lead = PlaneAutopilot.strikePushOverLead(STRIKE_MAX_SPEED, plane.autopilotRotationSpeedMultiplier());
+        if (lead <= 0.0) {
+            return 0;
+        }
+        return (int) Math.ceil(AutopilotConfig.STRIKE_RUN_IN_AGL
+            / Math.tan(Math.toRadians(AutopilotConfig.STRIKE_DIVE_ANGLE)) + lead);
     }
 
     /**
@@ -134,10 +164,21 @@ public final class AutopilotSpawner {
         String agl = terrain == TerrainScanner.UNKNOWN_HEIGHT
             ? "?"
             : String.valueOf(Math.round(plane.getY() - terrain));
+        int minimum = minimumStrikeDistance(plane);
+        String flown = distance >= minimum ? distance + " blocks"
+            : minimum + " blocks (not " + distance + ": this airframe needs " + minimum + " to push over into the dive)";
         return "Strike #" + plane.getId() + " spawned at "
             + Math.round(plane.getX()) + ", " + Math.round(plane.getY()) + ", " + Math.round(plane.getZ())
             + " (" + agl + " above ground), inbound to " + target.toShortString()
-            + " - " + distance + " blocks, bearing " + Math.round(bearing) + ".";
+            + " - " + flown + ", bearing " + Math.round(bearing) + ".";
+    }
+
+    /** "Aircraft: cargo." — read off the entity, so a {@code random} strike says what was drawn. */
+    public static String describeAirframe(PlaneEntity plane) {
+        AircraftType type = AircraftType.of(plane);
+        return "Aircraft: " + (type == null
+            ? BuiltInRegistries.ENTITY_TYPE.getKey(plane.getType()).getPath()
+            : type.getSerializedName()) + ".";
     }
 
     /**
