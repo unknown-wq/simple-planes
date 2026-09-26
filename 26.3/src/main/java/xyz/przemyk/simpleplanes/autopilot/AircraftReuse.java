@@ -277,7 +277,7 @@ public final class AircraftReuse {
         // arrival geometry is sized from it, so a sortie ordered "type cargo" must not quietly get a
         // starter plane because one happened to be parked. RANDOM asked for any of the three and is
         // the one case where a substitution is what was ordered.
-        return wanted == AircraftType.RANDOM ? !actual.isRotorcraft() : actual == wanted;
+        return wanted == AircraftType.RANDOM ? actual.drawnByRandom() : actual == wanted;
     }
 
     /**

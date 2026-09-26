@@ -73,7 +73,10 @@ public enum AircraftType implements StringRepresentable {
      */
     HELICOPTER("helicopter"),
     /** Chosen when the aircraft is created, from the three fixed-wing airframes only. */
-    RANDOM("random");
+    RANDOM("random"),
+    /** Test tooling: flyable by name, never drawn by {@link #RANDOM}. */
+    FIGHTER("fighter"),
+    AIRLINER("airliner");
 
     /**
      * The three fixed-wing airframes, in the order {@link #RANDOM} draws from.
@@ -83,6 +86,9 @@ public enum AircraftType implements StringRepresentable {
      * onto a runway; it is matched separately below instead.
      */
     private static final AircraftType[] FLYABLE = {PLANE, LARGE, CARGO};
+
+    /** Fixed-wing types that {@link #of} recognises but {@link #RANDOM} never draws. */
+    private static final AircraftType[] TESTABLE = {FIGHTER, AIRLINER};
 
     public static final Codec<AircraftType> CODEC = StringRepresentable.fromEnum(AircraftType::values);
 
@@ -120,9 +126,21 @@ public enum AircraftType implements StringRepresentable {
             case LARGE -> SimplePlanesEntities.LARGE_PLANE;
             case CARGO -> SimplePlanesEntities.CARGO_PLANE;
             case HELICOPTER -> SimplePlanesEntities.HELICOPTER;
+            case FIGHTER -> SimplePlanesEntities.FIGHTER;
+            case AIRLINER -> SimplePlanesEntities.AIRLINER;
             // RANDOM only reaches here if resolve() was skipped; the starter plane is the safe answer.
             default -> SimplePlanesEntities.PLANE;
         };
+    }
+
+    /** True for the airframes {@link #RANDOM} draws from. */
+    public boolean drawnByRandom() {
+        for (AircraftType candidate : FLYABLE) {
+            if (candidate == this) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** True for the one airframe the fixed-wing commands refuse and the helicopter commands require. */
@@ -149,6 +167,11 @@ public enum AircraftType implements StringRepresentable {
             return HELICOPTER;
         }
         for (AircraftType candidate : FLYABLE) {
+            if (type == candidate.entityType().get()) {
+                return candidate;
+            }
+        }
+        for (AircraftType candidate : TESTABLE) {
             if (type == candidate.entityType().get()) {
                 return candidate;
             }

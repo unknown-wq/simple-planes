@@ -188,7 +188,18 @@ public final class UpgradesModels {
         }
     }
 
+    /** The new airframes have no upgrade models; the helicopter fallback would float around them. */
+    private static boolean hasNoUpgradeVisuals(EntityType<?> entityType) {
+        return entityType == SimplePlanesEntities.FIGHTER.get()
+            || entityType == SimplePlanesEntities.AIRLINER.get()
+            || entityType == SimplePlanesEntities.AIRSHIP.get()
+            || entityType == SimplePlanesEntities.MINI_HELICOPTER.get();
+    }
+
     private static @Nullable Identifier textureFor(ModelEntry entry, EntityType<?> entityType) {
+        if (hasNoUpgradeVisuals(entityType)) {
+            return null;
+        }
         if (entityType == SimplePlanesEntities.PLANE.get()) {
             return entry.normalTexture();
         }
@@ -202,6 +213,9 @@ public final class UpgradesModels {
     }
 
     private static @Nullable EntityModel<PlaneRenderState> modelFor(ModelEntry entry, EntityType<?> entityType) {
+        if (hasNoUpgradeVisuals(entityType)) {
+            return null;
+        }
         if (entityType == SimplePlanesEntities.PLANE.get()) {
             return entry.normal();
         }
@@ -232,6 +246,9 @@ public final class UpgradesModels {
 
     private static void submitSeats(PlaneRenderState state, PoseStack poseStack, SubmitNodeCollector collector, int light) {
         EntityType<?> entityType = state.entityType;
+        if (hasNoUpgradeVisuals(entityType)) {
+            return;
+        }
         if (entityType == SimplePlanesEntities.PLANE.get()) {
             submitPair(SEATS, WOODEN_SEATS, SEATS_TEXTURE, state, poseStack, collector, light);
         } else if (entityType == SimplePlanesEntities.LARGE_PLANE.get()) {

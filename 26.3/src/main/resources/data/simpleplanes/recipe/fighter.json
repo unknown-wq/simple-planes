@@ -1,0 +1,9 @@
+{
+  "type": "simpleplanes:plane_workbench",
+  "ingredient": "simpleplanes:propeller",
+  "ingredient_amount": 2,
+  "material_amount": 6,
+  "result": {
+    "id": "simpleplanes:fighter"
+  }
+}

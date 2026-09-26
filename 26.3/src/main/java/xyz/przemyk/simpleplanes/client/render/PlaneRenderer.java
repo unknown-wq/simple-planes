@@ -118,6 +118,14 @@ public class PlaneRenderer<T extends PlaneEntity> extends EntityRenderer<T, Plan
             poseStack.translate(0.0F, -0.3F, -1.0F);
         } else if (entityType == SimplePlanesEntities.CARGO_PLANE.get()) {
             poseStack.translate(0.0F, -0.8F, -1.0F);
+        } else if (entityType == SimplePlanesEntities.FIGHTER.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.25F);
+        } else if (entityType == SimplePlanesEntities.AIRLINER.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.375F);
+        } else if (entityType == SimplePlanesEntities.AIRSHIP.get()) {
+            poseStack.translate(0.0F, -0.025F, 0.0F);
+        } else if (entityType == SimplePlanesEntities.MINI_HELICOPTER.get()) {
+            poseStack.translate(0.0F, -0.025F, -0.25F);
         } else {
             poseStack.translate(0.0F, 0.0F, 0.9F);
         }

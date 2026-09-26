@@ -137,6 +137,11 @@ public class SimplePlanesEntities {
     public static final Supplier<EntityType<LargePlaneEntity>> LARGE_PLANE = register("large_plane", LargePlaneEntity::new, 3F, 2.3F);
     public static final Supplier<EntityType<CargoPlaneEntity>> CARGO_PLANE = register("cargo_plane", CargoPlaneEntity::new, 3F, 2.3F);
     public static final Supplier<EntityType<HelicopterEntity>> HELICOPTER = register("helicopter", HelicopterEntity::new, 2.5F, 2.2F);
+    public static final Supplier<EntityType<FighterEntity>> FIGHTER = register("fighter", FighterEntity::new, 3.0F, 2.0F);
+    public static final Supplier<EntityType<AirlinerEntity>> AIRLINER = register("airliner", AirlinerEntity::new, 3.0F, 2.6F);
+    public static final Supplier<EntityType<AirshipEntity>> AIRSHIP = register("airship", AirshipEntity::new, 3.0F, 2.5F);
+    public static final Supplier<EntityType<MiniHelicopterEntity>> MINI_HELICOPTER = register("mini_helicopter", MiniHelicopterEntity::new, 1.5F, 1.95F);
+    public static final Supplier<EntityType<QuadcopterEntity>> QUADCOPTER = register("quadcopter", QuadcopterEntity::new, 1.0F, 0.875F);
 
     public static final Supplier<EntityType<ParachuteEntity>> PARACHUTE =
         register("parachute", ParachuteEntity::new, 1.0F, 1.0F, PARACHUTE_TRACKING_RANGE);
