@@ -1114,14 +1114,16 @@ public class QuadcopterEntity extends Entity {
     }
 
     private void applyDamage(ServerLevel level, float amount, @Nullable DamageSource source) {
-        setHealth((int) (getHealth() - amount));
+        int before = getHealth();
+        setHealth((int) (before - amount));
         boolean creative = source != null && source.getEntity() instanceof Player player && player.getAbilities().instabuild;
         if (creative) {
             CraneFeedback.report(this, "lost: removed by a creative player");
             kill(level);
         } else if (getHealth() <= 0 && !dying) {
-            if (onGround() && source != null && source.getDirectEntity() instanceof Player) {
-                CraneFeedback.report(this, "lost: broken on the ground");
+            // Only a player's own hit gives the item back (see PlaneEntity#isPlayerBreak); anything else crashes it.
+            if (before > 0 && source != null && PlaneEntity.isPlayerBreak(source)) {
+                CraneFeedback.report(this, "lost: broken by a player");
                 kill(level);
                 if (level.getGameRules().get(GameRules.ENTITY_DROPS)) {
                     dropItem(level);
