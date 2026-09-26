@@ -1,0 +1,16 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "simpleplanes:item/mini_helicopter",
+    "tints": [
+      {
+        "type": "minecraft:constant",
+        "value": 14279916
+      },
+      {
+        "type": "minecraft:constant",
+        "value": 16777215
+      }
+    ]
+  }
+}

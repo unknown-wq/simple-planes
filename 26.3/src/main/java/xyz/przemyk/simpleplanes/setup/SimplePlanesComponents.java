@@ -2,6 +2,7 @@ package xyz.przemyk.simpleplanes.setup;
 
 import com.mojang.serialization.Codec;
 import net.minecraft.core.Registry;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
@@ -12,6 +13,7 @@ import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 
+import java.util.UUID;
 import java.util.function.Supplier;
 
 public class SimplePlanesComponents {
@@ -64,5 +66,12 @@ public class SimplePlanesComponents {
         DataComponentType.<CompoundTag>builder()
             .persistent(CompoundTag.CODEC)
             .networkSynchronized(ByteBufCodecs.COMPOUND_TAG)
+            .build());
+
+    /** The quadcopter crane a crane remote is linked to. */
+    public static final ComponentHolder<UUID> CRANE_LINK = register("crane_link",
+        DataComponentType.<UUID>builder()
+            .persistent(UUIDUtil.CODEC)
+            .networkSynchronized(UUIDUtil.STREAM_CODEC)
             .build());
 }

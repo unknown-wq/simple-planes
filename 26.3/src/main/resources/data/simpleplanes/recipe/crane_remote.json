@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    " l ",
+    "iri",
+    " i "
+  ],
+  "key": {
+    "i": "minecraft:iron_ingot",
+    "r": "minecraft:redstone",
+    "l": "minecraft:lever"
+  },
+  "result": {
+    "id": "simpleplanes:crane_remote"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "simpleplanes:item/airship",
+    "tints": [
+      {
+        "type": "minecraft:constant",
+        "value": 13218428
+      },
+      {
+        "type": "minecraft:constant",
+        "value": 16777215
+      }
+    ]
+  }
+}
