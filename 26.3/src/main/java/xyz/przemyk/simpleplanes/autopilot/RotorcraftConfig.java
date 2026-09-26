@@ -148,6 +148,18 @@ public final class RotorcraftConfig {
     public static final double CRUISE_CLEARANCE = 30.0;
 
     /**
+     * Clearance over the ground directly under and just ahead of the aircraft. The forward scan
+     * starts well ahead of the nose, so without this the machine forgets an obstacle once it is
+     * overhead and descends onto it.
+     */
+    public static final double NEAR_CLEARANCE = 8.0;
+
+    /** Near-field look-ahead in blocks, sampled every {@link #NEAR_STEP} on three lanes. */
+    public static final int NEAR_AHEAD = 16;
+    public static final int NEAR_STEP = 4;
+    public static final int NEAR_LANE = 3;
+
+    /**
      * Default en-route speed, in blocks per tick.
      *
      * <p>1.20 b/t is 24 blocks/s, which HELICOPTER-PHYSICS.md §3 measures as full forward cyclic at

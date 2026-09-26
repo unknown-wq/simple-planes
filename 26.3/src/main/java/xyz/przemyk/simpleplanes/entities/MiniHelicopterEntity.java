@@ -353,8 +353,10 @@ public class MiniHelicopterEntity extends HelicopterEntity {
         } else {
             return;
         }
-        // Rotate about the render pivot (0, 0.375, 0) so the rider stays put on the airframe.
-        Vector3f pos = transformPos(local).add(0, 0.375f, 0);
+        // Rotate about the render pivot (0, 0.375, 0) so the rider stays put on the airframe. The
+        // server's Q_Client only follows a player pilot, so an unpiloted server copy uses Q.
+        Vector3f pos = (level().isClientSide() ? transformPos(local) : transformPosPhysics(local))
+            .add(0, 0.375f, 0);
         moveFunction.accept(passenger, getX() + pos.x(), getY() + pos.y(), getZ() + pos.z());
     }
 

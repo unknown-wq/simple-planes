@@ -138,8 +138,12 @@ order is aborted with `NO_LANDING_ZONE`.
   - the hard limit is y 150 (the airframe's thrust fades above y 100, and its ceiling is y 160);
   - terrain that needs more than y 150 fails the leg with `CEILING`;
   - no booster; the autopilot supplies power.
+- In flight it also keeps 8 blocks over the ground under the aircraft and up to 16 blocks ahead,
+  so it does not settle onto an obstacle it has already reached (for example a floating structure).
 - The departure from a landing zone climbs vertically above everything within 24 blocks, plus 8
   blocks.
+- Stowing or losing an aircraft frees its home pad booking at once, so the next `deploy` onto that
+  pad is not refused.
 - A flying leg keeps its own chunks loaded. While `AT_TARGET`, the service holds a radius-2 ticket
   on the aircraft.
 - Any aircraft in an order that cannot be resolved (for example after a restart) gets a radius-2

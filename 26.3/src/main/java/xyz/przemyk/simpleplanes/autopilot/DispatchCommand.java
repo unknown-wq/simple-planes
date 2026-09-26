@@ -171,6 +171,10 @@ public final class DispatchCommand {
         }
         AutopilotSpawner.loadRegion(level, pad.touchdown());
         MiniHelicopterEntity plane = aircraftOnPad(level, pad);
+        if (plane == null && !level.areEntitiesLoaded(net.minecraft.world.level.ChunkPos.containing(pad.centre()).pack())) {
+            source.sendFailure(Component.literal(pad.name() + " is loading now; repeat the command in a moment."));
+            return 0;
+        }
         if (plane == null) {
             DispatchResult deployed = RotorcraftDispatch.tryDeploy(level, medicalItem(true), pad.name(), OWNER);
             if (!deployed.ok()) {

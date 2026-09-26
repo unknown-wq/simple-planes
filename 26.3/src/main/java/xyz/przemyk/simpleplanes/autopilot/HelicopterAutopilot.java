@@ -160,6 +160,8 @@ public final class HelicopterAutopilot {
     private double cmdGroundSpeed;
 
     private final TerrainScanner scanner = new TerrainScanner();
+    /** Highest surface under and just ahead of the aircraft this tick, or UNKNOWN_HEIGHT. */
+    private int nearGround = TerrainScanner.UNKNOWN_HEIGHT;
 
     HelicopterAutopilot(PlaneAutopilot host) {
         this.host = host;
@@ -349,6 +351,8 @@ public final class HelicopterAutopilot {
         modeTicks++;
         Level level = plane.level();
         scanner.scan(level, plane.position(), plane.getYRot());
+        nearGround = mode == AutopilotMode.CRUISE || mode == AutopilotMode.HOLD
+            || mode == AutopilotMode.DESCENT ? scanNear(level, plane) : TerrainScanner.UNKNOWN_HEIGHT;
 
         switch (mode) {
             case PARKED -> tickOnPad(plane);
@@ -763,8 +767,8 @@ public final class HelicopterAutopilot {
             return altitude;
         }
         double safe = scanner.safeAltitude();
-        double floor = safe == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
-            : safe - AutopilotConfig.TERRAIN_CLEARANCE + profile.minClearance();
+        double floor = Math.max(nearFloor(), safe == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
+            : safe - AutopilotConfig.TERRAIN_CLEARANCE + profile.minClearance());
         return Math.min(Math.max(Math.min(altitude, profile.altitudeCap()), floor), profile.hardCeiling());
     }
 
@@ -1152,8 +1156,33 @@ public final class HelicopterAutopilot {
      */
     private double terrainFloor() {
         double safe = scanner.safeAltitude();
-        return safe == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
+        double ahead = safe == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
             : safe - AutopilotConfig.TERRAIN_CLEARANCE + profile.cruiseClearance();
+        return Math.max(ahead, nearFloor());
+    }
+
+    private double nearFloor() {
+        return nearGround == TerrainScanner.UNKNOWN_HEIGHT ? Double.NEGATIVE_INFINITY
+            : nearGround + RotorcraftConfig.NEAR_CLEARANCE;
+    }
+
+    /** Max surface over a 3-lane strip from under the aircraft to NEAR_AHEAD blocks along the nose. */
+    private static int scanNear(Level level, PlaneEntity plane) {
+        Vec3 position = plane.position();
+        double heading = plane.getYRot();
+        int highest = TerrainScanner.UNKNOWN_HEIGHT;
+        for (int d = 0; d <= RotorcraftConfig.NEAR_AHEAD; d += RotorcraftConfig.NEAR_STEP) {
+            Vec3 centre = AutopilotMath.pointAlong(position, heading, d);
+            for (int lane = -1; lane <= 1; lane++) {
+                Vec3 probe = lane == 0 ? centre
+                    : AutopilotMath.pointAlong(centre, heading + 90.0, lane * RotorcraftConfig.NEAR_LANE);
+                int height = TerrainScanner.surfaceHeight(level, probe.x, probe.z);
+                if (height != TerrainScanner.UNKNOWN_HEIGHT && height > highest) {
+                    highest = height;
+                }
+            }
+        }
+        return highest;
     }
 
     // ------------------------------------------------------------------ readouts

@@ -70,8 +70,8 @@ public final class DispatchService {
     private record PendingLeg(ServerLevel level, UUID aircraft, UUID orderId, LegEvent event, @Nullable String detail) {}
 
     private static final int SERVICE_INTERVAL = 20;
-    private static final int HOLD_TICKET_RADIUS = 2;
-    private static final int WAKE_TICKET_RADIUS = 2;
+    private static final int HOLD_TICKET_RADIUS = 3;
+    private static final int WAKE_TICKET_RADIUS = 3;
     /** Ticks an in-order aircraft may stay unresolvable, with a ticket on its last position, before it is lost. */
     static final int LOST_AFTER_TICKS = 2400;
     /** Longest wait for the search area to load before searching what is there. */
@@ -182,7 +182,7 @@ public final class DispatchService {
             return DispatchResult.refused(DispatchReasons.SPAWN_FAILED, "entity could not be created");
         }
         Vec3 touchdown = pad.touchdown();
-        plane.snapTo(touchdown.x, touchdown.y + 0.05, touchdown.z, 0.0f, 0.0f);
+        plane.snapTo(touchdown.x, touchdown.y, touchdown.z, 0.0f, 0.0f);
         Component name = stack.get(DataComponents.CUSTOM_NAME);
         if (name != null) {
             plane.setCustomName(name);
@@ -210,7 +210,7 @@ public final class DispatchService {
         DispatchSavedData data = DispatchSavedData.get(level);
         Sortie s = data.sortie(aircraft);
         MiniHelicopterEntity plane = resolve(level, aircraft);
-        if (plane == null || (s != null && s.inOrder()) || !plane.onGround()
+        if (plane == null || (s != null && s.inOrder()) || !grounded(plane)
             || (plane.getAutopilot() != null && plane.getAutopilot().isActive())) {
             return ItemStack.EMPTY;
         }
@@ -222,10 +222,7 @@ public final class DispatchService {
         plane.setDispatchManaged(false);
         ItemStack stack = plane.getItemStack();
         if (s != null) {
-            Helipad home = AutopilotSavedData.get(level).helipad(s.homePad);
-            if (home != null && aircraft.equals(StandOccupancy.heldBy(level, home.name(), home.centre()))) {
-                StandOccupancy.release(level, home.name(), home.centre());
-            }
+            releaseHomeStand(level, s);
         }
         STOWING.add(aircraft);
         try {
@@ -251,7 +248,7 @@ public final class DispatchService {
         if (plane.getAutopilot() != null && plane.getAutopilot().isActive()) {
             return DispatchResult.refused(DispatchReasons.BUSY, "aircraft is already flying an autopilot leg");
         }
-        if (!plane.onGround() && !plane.isOnWater()) {
+        if (!grounded(plane)) {
             return DispatchResult.refused(DispatchReasons.AIRBORNE, "aircraft is not on the ground");
         }
         for (Entity passenger : plane.getPassengers()) {
@@ -305,7 +302,7 @@ public final class DispatchService {
         if (plane == null) {
             return DispatchResult.refused(DispatchReasons.NOT_LOADED, "aircraft is not loaded");
         }
-        if (!plane.onGround() && !plane.isOnWater()) {
+        if (!grounded(plane)) {
             return DispatchResult.refused(DispatchReasons.AIRBORNE, "aircraft is not on the ground");
         }
         if (entity instanceof Player || entity instanceof PlaneEntity || !entity.isAlive() || entity.level() != level) {
@@ -328,7 +325,7 @@ public final class DispatchService {
 
     public static boolean unloadPassenger(ServerLevel level, UUID aircraft, UUID entity) {
         MiniHelicopterEntity plane = resolve(level, aircraft);
-        if (plane == null || (!plane.onGround() && !plane.isOnWater())) {
+        if (plane == null || !grounded(plane)) {
             return false;
         }
         for (Entity passenger : List.copyOf(plane.getPassengers())) {
@@ -346,7 +343,7 @@ public final class DispatchService {
 
     public static int unloadAll(ServerLevel level, UUID aircraft) {
         MiniHelicopterEntity plane = resolve(level, aircraft);
-        if (plane == null || (!plane.onGround() && !plane.isOnWater())) {
+        if (plane == null || !grounded(plane)) {
             return 0;
         }
         int count = 0;
@@ -462,7 +459,7 @@ public final class DispatchService {
         Phase phase = s == null ? Phase.IDLE : s.phase;
         Vec3 pos = plane != null ? plane.position()
             : s != null ? Vec3.atBottomCenterOf(s.lastKnown) : Vec3.ZERO;
-        boolean onGround = plane != null && plane.onGround();
+        boolean onGround = plane != null && grounded(plane);
         boolean atHome = plane != null && s != null && atHome(level, s, plane);
         Helipad zone = s == null ? null : s.zone;
         int holdLeft = s != null && s.phase == Phase.AT_TARGET
@@ -670,7 +667,7 @@ public final class DispatchService {
         if (s.abortReason == null) {
             abort(level, data, s, DispatchReasons.RETURN_FAILED, detail);
         }
-        if (plane.onGround() && !plane.isInWater()) {
+        if (grounded(plane) && !plane.isInWater()) {
             finishReturn(level, data, s, DispatchReasons.RETURN_FAILED);
             return;
         }
@@ -737,8 +734,9 @@ public final class DispatchService {
     }
 
     private static int searchTicketRadius(int reachBlocks) {
-        // An ENDER_PEARL ticket of radius r makes chunks up to r + 2 away FULL (heightmaps readable).
-        return Mth.clamp((reachBlocks + 15) / 16 - 1, 1, 6);
+        // A ticket of radius r keeps chunks up to r away FULL (heightmaps readable); +1 for the
+        // target's offset inside its chunk.
+        return Mth.clamp((reachBlocks + 15) / 16 + 1, 2, 8);
     }
 
     private static boolean areaLoaded(ServerLevel level, BlockPos target, int reach) {
@@ -830,7 +828,7 @@ public final class DispatchService {
             }
         } else if (s.returnTo != null) {
             startLeg(level, plane, s, null, s.returnTo, false);
-        } else if (atHome(level, s, plane) && plane.onGround()) {
+        } else if (atHome(level, s, plane) && grounded(plane)) {
             finishReturn(level, data, s, null);
         } else if (startLeg(level, plane, s, s.homePad, null, false) != null) {
             emergencyLanding(level, data, s, plane, "home leg could not be started");
@@ -874,7 +872,7 @@ public final class DispatchService {
         }
         PlaneAutopilot autopilot = plane.getAutopilot();
         boolean flying = autopilot != null && autopilot.isActive();
-        if (atHome(level, s, plane) && plane.onGround()) {
+        if (atHome(level, s, plane) && grounded(plane)) {
             if (flying) {
                 autopilot.stop(plane);
             }
@@ -919,7 +917,7 @@ public final class DispatchService {
         String fromName = null;
         Helipad adHocFrom = null;
         Helipad fromPad;
-        boolean grounded = plane.onGround() || plane.isOnWater();
+        boolean grounded = grounded(plane);
         Helipad home = pads.helipad(s.homePad);
         if (grounded && home != null && atHome(level, s, plane)) {
             fromName = home.name();
@@ -961,6 +959,16 @@ public final class DispatchService {
             Mth.floor(plane.getZ())), 1, Helipad.allSectors());
     }
 
+    /** On the ground, on water, or resting within a fraction of a block of the surface (just spawned). */
+    static boolean grounded(PlaneEntity plane) {
+        if (plane.onGround() || plane.isOnWater()) {
+            return true;
+        }
+        int surface = TerrainScanner.surfaceHeight(plane.level(), plane.getX(), plane.getZ());
+        return surface != TerrainScanner.UNKNOWN_HEIGHT && plane.getY() - surface <= 0.6
+            && Math.abs(plane.getDeltaMovement().y) < 0.2;
+    }
+
     private static boolean atHome(ServerLevel level, Sortie s, PlaneEntity plane) {
         Helipad home = AutopilotSavedData.get(level).helipad(s.homePad);
         return home != null && home.covers(plane.position(), 1.0)
@@ -985,7 +993,16 @@ public final class DispatchService {
         LOGGER.info("Dispatch {}: aircraft {} lost: {}", s.orderId, s.aircraft, reason);
         emit(level, data, s, DispatchEvent.Type.LOST, reason);
         forgetTransient(s.aircraft);
+        releaseHomeStand(level, s);
         data.changed();
+    }
+
+    /** Frees the home pad booking this aircraft holds, so the next deploy is not refused. */
+    private static void releaseHomeStand(ServerLevel level, Sortie s) {
+        Helipad home = AutopilotSavedData.get(level).helipad(s.homePad);
+        if (home != null && s.aircraft.equals(StandOccupancy.heldBy(level, home.name(), home.centre()))) {
+            StandOccupancy.release(level, home.name(), home.centre());
+        }
     }
 
     private static void forgetTransient(UUID aircraft) {
