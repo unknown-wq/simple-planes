@@ -575,10 +575,28 @@ cruise height agl 10 + L, transit at 0.8 b/t) -> LOWER_LOAD (over the drop point
 box bottom is 0.2 b above the heightmap, then winch out) -> RELEASE (stopRiding; jaws open) -> STOW
 (winch to 1.0) -> IDLE/RETURN`.
 
-**Mobs allowed.** `LivingEntity` that is alive, not a `Enemy` (hostiles are out for a peaceful crane),
-not a boss, not another vehicle's passenger, not a `PlaneEntity`, and `m <= MAX_LOAD`; players allowed
-unless in spectator mode. Configurable later by a tag `simpleplanes:crane_liftable` (deny-list tag
-`crane_never` also honoured) — start with the rule above and the two empty tags in the datapack.
+**Mobs allowed.** `LivingEntity` that is alive, hostile (`Enemy`) or not, not a boss (ender dragon,
+wither, warden, elder guardian, or tag `c:bosses`), not another vehicle's passenger or vehicle, not a
+`PlaneEntity`/`QuadcopterEntity`, not in tag `simpleplanes:crane_never`, and `m <= MAX_LOAD`; players
+allowed unless in spectator mode. `QuadcopterEntity.ALLOW_HOSTILES` (true) is the switch back to the old
+rule, under which `simpleplanes:crane_liftable` is the allow-list for hostiles. Every refusal names its
+reason: `cannot lift <name>: boss|aircraft|spectator|riding <vehicle>|has a rider|dead|not a mob|in tag
+simpleplanes:crane_never|hostile` or `too heavy: <name> is m, limit 1.55`. Under the mass rule the spider
+(1.76), large slimes and magma cubes (size 3+), hoglin, zoglin, ravager, ghast and creaking stay out.
+
+**A slung mob does not fight** (Q8, answered). While a `Mob` is the crane's passenger it carries a transient
+`FOLLOW_RANGE` modifier `simpleplanes:crane_slung` (x0, added in `addPassenger`, removed in
+`removePassenger`, never saved), so target goals neither find nor keep a target; and every crane tick,
+which runs before the passenger's own tick, clears its target and `ATTACK_TARGET` memory, stops its
+navigation, and runs a creeper's fuse back down. Nothing else is stored on the mob, so its AI resumes as
+soon as it leaves the hook by any path (release, overload, crane destroyed or killed, teleport). A creeper
+lit with flint and steel still explodes; that explosion damages the crane (the passenger exemption in
+`hurtServer` does not cover explosions). Read in the 26.3 sources, not tested: an arrow cannot hit the crane
+while its shooter is on it (`Projectile.canHitEntity`), and a passenger does not despawn
+(`Mob.requiresCustomPersistence`). Tested: endermen do not teleport while riding (vanilla `Enderman`), undead
+still burn in daylight (`load lost: Zombie died`), and a load that converts on the hook (piglin to zombified
+piglin; zombie to drowned takes the same vanilla `ConversionType.SINGLE` path) is handed to its successor,
+which vanilla re-mounts at once: `load changed: Piglin is now Zombified Piglin`.
 
 ### 6.6 Payload mass and hover thrust
 
@@ -997,8 +1015,9 @@ code, which is the calibration.
   upgrade item. Which do you prefer?
 - **Q7. Recall behaviour for the crane** when the remote's owner is far away (> 64 b): the crane hovers
   where it is and waits. Should it fly home to a "base" block instead?
-- **Q8. Hostile mobs** are refused by the crane. Allow them (a zombie on a rope is funny but not
-  peaceful)?
+- **Q8. Hostile mobs** — answered: allowed. Ordinary hostiles are lifted under the same mass limit;
+  bosses are refused; a slung mob does not fight (see 6.5, "A slung mob does not fight"). Details and
+  test results in `design/CRANE-HOSTILES.md`.
 - **Q9. Autopilot types.** `AircraftType.FIGHTER`/`AIRLINER` are added for testing (not random). Keep
   them player-visible on `/autopilot flight ... type airliner`, or hide them?
 - **Q10. Mini helicopter livery and ceiling.** The medical livery is chosen by building from a white block

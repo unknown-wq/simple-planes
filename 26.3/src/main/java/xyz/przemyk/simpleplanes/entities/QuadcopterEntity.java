@@ -9,6 +9,7 @@ import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.DamageTypeTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
 import net.minecraft.util.ProblemReporter;
@@ -19,7 +20,13 @@ import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.InterpolationHandler;
 import net.minecraft.world.entity.LinearInterpolationHandler;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -116,7 +123,15 @@ public class QuadcopterEntity extends Entity {
         Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_liftable"));
     public static final TagKey<EntityType<?>> CRANE_NEVER = TagKey.create(Registries.ENTITY_TYPE,
         Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_never"));
-    public static final boolean ALLOW_HOSTILES = false;
+    /** Fabric's conventional boss tag (ender dragon, wither); read by id, no compile dependency. */
+    public static final TagKey<EntityType<?>> C_BOSSES = TagKey.create(Registries.ENTITY_TYPE,
+        Identifier.fromNamespaceAndPath("c", "bosses"));
+    /** Hostiles ({@code Enemy}) may be lifted; false restores the old rule, with {@link #CRANE_LIFTABLE} as the allow-list. */
+    public static final boolean ALLOW_HOSTILES = true;
+
+    /** Transient (never saved) follow-range modifier on a slung mob: range 0, so target goals find and keep nothing. */
+    public static final AttributeModifier SLUNG_BLIND = new AttributeModifier(
+        Identifier.fromNamespaceAndPath(SimplePlanesMod.MODID, "crane_slung"), -1.0, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL);
 
     public enum State { IDLE, TO_PICKUP, LOWER, ATTACH, WINCH_IN, CARRY, LOWER_LOAD, RELEASE, STOW, RETURN, LAND, OVERLOAD }
 
@@ -147,6 +162,8 @@ public class QuadcopterEntity extends Entity {
     private @Nullable UUID pickupId;
     private @Nullable Entity pendingLoad;
     private @Nullable UUID releasedLoad;
+    /** The entity on the hook, kept only to name why it was lost; not saved. */
+    private @Nullable Entity carried;
     private boolean rotorsOff;
     private boolean physInit;
     private boolean checkLoadAfterLoad;
@@ -315,7 +332,29 @@ public class QuadcopterEntity extends Entity {
 
     @Override
     protected boolean canAddPassenger(Entity passenger) {
-        return passenger == pendingLoad && getPassengers().isEmpty();
+        if (!getPassengers().isEmpty()) {
+            return false;
+        }
+        // a load converting on the hook (piglin zombifying, zombie drowning) hands over to its successor,
+        // which vanilla's ConversionType mounts at the same spot right after the old one dismounts
+        return passenger == pendingLoad || isCarrying() && carried != null && passenger != carried
+            && !carried.isPassenger() && passenger instanceof LivingEntity && passenger.distanceToSqr(carried) < 1.0;
+    }
+
+    @Override
+    protected void addPassenger(Entity passenger) {
+        super.addPassenger(passenger);
+        if (!level().isClientSide() && passenger instanceof Mob mob) {
+            setSlung(mob, true);
+        }
+    }
+
+    @Override
+    protected void removePassenger(Entity passenger) {
+        super.removePassenger(passenger);
+        if (!level().isClientSide() && passenger instanceof Mob mob) {
+            setSlung(mob, false);
+        }
     }
 
     @Override
@@ -375,6 +414,9 @@ public class QuadcopterEntity extends Entity {
             return;
         }
         checkLoad();
+        if (isCarrying() && getFirstPassenger() instanceof Mob mob) {
+            pacify(mob);
+        }
         tickStateMachine(level);
 
         if (rotorsOff || !ALWAYS_POWERED) {
@@ -421,6 +463,7 @@ public class QuadcopterEntity extends Entity {
                 setCarrying(false);
                 CraneFeedback.report(this, "load lost: " + loadName + " did not come back with the save");
                 loadName = "none";
+                carried = null;
                 if (isCarryingState(state)) {
                     enter(State.STOW);
                 }
@@ -580,28 +623,77 @@ public class QuadcopterEntity extends Entity {
 
     // ---- load rules ----
 
-    /** Why this entity cannot be lifted, or null if it can. */
+    /** Why this entity cannot be lifted, or null if it can. Every text is "cannot lift <name>: <reason>" or "too heavy: ...". */
     public static @Nullable String refusal(Entity entity) {
         String name = entity.getName().getString();
-        if (!(entity instanceof LivingEntity living) || !living.isAlive()) {
-            return "cannot lift " + name;
+        if (!(entity instanceof LivingEntity living)) {
+            return "cannot lift " + name + ": not a mob";
         }
-        if (entity instanceof QuadcopterEntity || entity instanceof PlaneEntity || entity.isSpectator()
-            || entity.isPassenger() || entity.isVehicle()) {
-            return "cannot lift " + name;
+        if (!living.isAlive()) {
+            return "cannot lift " + name + ": dead";
+        }
+        if (entity instanceof QuadcopterEntity || entity instanceof PlaneEntity) {
+            return "cannot lift " + name + ": aircraft";
+        }
+        if (entity.isSpectator()) {
+            return "cannot lift " + name + ": spectator";
+        }
+        Entity vehicle = entity.getVehicle();
+        if (vehicle != null) {
+            return "cannot lift " + name + ": riding " + vehicle.getName().getString();
+        }
+        if (entity.isVehicle()) {
+            return "cannot lift " + name + ": has a rider";
+        }
+        if (isBoss(entity)) {
+            return "cannot lift " + name + ": boss";
         }
         var type = entity.getType().builtInRegistryHolder();
-        if (type.is(CRANE_NEVER) || entity.getType() == EntityTypes.ENDER_DRAGON || entity.getType() == EntityTypes.WITHER) {
-            return "cannot lift " + name;
+        if (type.is(CRANE_NEVER)) {
+            return "cannot lift " + name + ": in tag simpleplanes:crane_never";
         }
         if (entity instanceof Enemy && !ALLOW_HOSTILES && !type.is(CRANE_LIFTABLE)) {
-            return "cannot lift " + name;
+            return "cannot lift " + name + ": hostile";
         }
         double m = massOf(entity);
         if (m > SlungLoad.MAX_LOAD) {
             return String.format(Locale.ROOT, "too heavy: %s is %.2f, limit %.2f", name, m, SlungLoad.MAX_LOAD);
         }
         return null;
+    }
+
+    /** Bosses are never lifted, whatever their size or tags. */
+    public static boolean isBoss(Entity entity) {
+        EntityType<?> type = entity.getType();
+        return type == EntityTypes.ENDER_DRAGON || type == EntityTypes.WITHER || type == EntityTypes.WARDEN
+            || type == EntityTypes.ELDER_GUARDIAN || type.builtInRegistryHolder().is(C_BOSSES);
+    }
+
+    /**
+     * A slung mob does not fight. Two parts: {@link #SLUNG_BLIND} while it is a passenger (set and cleared in
+     * {@link #addPassenger}/{@link #removePassenger}, so every way off the hook clears it), and this, every tick
+     * from the crane's tick, which runs before the passenger's: the target is dropped and a creeper's fuse runs
+     * back down. A creeper lit by flint and steel ({@code isIgnited}) still explodes.
+     */
+    private static void pacify(Mob mob) {
+        mob.setTarget(null);
+        mob.getBrain().eraseMemory(MemoryModuleType.ATTACK_TARGET);
+        mob.getNavigation().stop();
+        if (mob instanceof Creeper creeper && !creeper.isIgnited()) {
+            creeper.setSwellDir(-1);
+        }
+    }
+
+    private static void setSlung(Mob mob, boolean slung) {
+        AttributeInstance range = mob.getAttribute(Attributes.FOLLOW_RANGE);
+        if (range == null) {
+            return;
+        }
+        if (slung && !range.hasModifier(SLUNG_BLIND.id())) {
+            range.addTransientModifier(SLUNG_BLIND);
+        } else if (!slung) {
+            range.removeModifier(SLUNG_BLIND.id());
+        }
     }
 
     public static double massOf(Entity entity) {
@@ -777,15 +869,31 @@ public class QuadcopterEntity extends Entity {
         }
         Entity load = getFirstPassenger();
         if (load == null || !load.isAlive()) {
+            String why;
+            if (load != null) {
+                why = " died";
+            } else if (carried != null && carried.isRemoved()) {
+                // a creeper that exploded, a mob discarded on peaceful, /kill
+                Entity.RemovalReason reason = carried.getRemovalReason();
+                why = " was removed (" + (reason == null ? "unknown" : reason.name().toLowerCase(Locale.ROOT)) + ")";
+            } else {
+                why = " let go";
+            }
+            carried = null;
             setCarrying(false);
             rope.mass = 0;
             phys.mass = 1;
-            CraneFeedback.report(this, "load lost: " + loadName + (load == null ? " let go" : " died"));
+            CraneFeedback.report(this, "load lost: " + loadName + why);
             loadName = "none";
             delivery = null;
             if (isCarryingState(state)) {
                 enter(State.STOW);
             }
+        } else if (load != carried) {
+            String was = loadName;
+            load.addTag(LOAD_TAG);
+            attachMass(load);
+            CraneFeedback.report(this, String.format(Locale.ROOT, "load changed: %s is now %s (mass %.2f)", was, loadName, rope.mass));
         }
     }
 
@@ -901,7 +1009,7 @@ public class QuadcopterEntity extends Entity {
         boolean ok = mob.startRiding(this, true, true);
         pendingLoad = null;
         if (!ok || mob.getVehicle() != this) {
-            abortPickup("cannot lift " + mob.getName().getString());
+            abortPickup("cannot lift " + mob.getName().getString() + ": it would not attach to the hook");
             return;
         }
         mob.addTag(LOAD_TAG);
@@ -914,6 +1022,7 @@ public class QuadcopterEntity extends Entity {
     }
 
     private void attachMass(Entity load) {
+        carried = load;
         rope.mass = massOf(load);
         phys.mass = 1.0 + rope.mass;
         loadName = load.getName().getString();
@@ -1016,6 +1125,7 @@ public class QuadcopterEntity extends Entity {
         rope.mass = 0;
         phys.mass = 1;
         loadName = "none";
+        carried = null;
         delivery = null;
         if (load != null) {
             CraneFeedback.report(this, message != null ? message + " (" + name + ")"
@@ -1101,7 +1211,8 @@ public class QuadcopterEntity extends Entity {
             return false;
         }
         Entity direct = source.getDirectEntity();
-        if (direct != null && direct.isPassengerOfSameVehicle(this)) {
+        // the load cannot hit its own crane; an explosion (a lit creeper on the hook) still does
+        if (direct != null && direct.isPassengerOfSameVehicle(this) && !source.is(DamageTypeTags.IS_EXPLOSION)) {
             return false;
         }
         if (onGround() && source.getDirectEntity() instanceof Player) {
@@ -1146,6 +1257,7 @@ public class QuadcopterEntity extends Entity {
             rope.mass = 0;
             phys.mass = 1;
             loadName = "none";
+            carried = null;
         }
         phys.thrust = 0;
         controller.saturated = false;
