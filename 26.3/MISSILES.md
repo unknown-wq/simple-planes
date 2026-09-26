@@ -339,7 +339,7 @@ never force-loaded.
 
 ## 6. Results
 
-Final build, commit `66a7c9c` plus the telemetry cosmetic. Times are game ticks at 20 TPS.
+Final build: commit `66a7c9c` (the code has not changed since). Times are game ticks at 20 TPS.
 
 ### Arrival (40 flights, flat world)
 
