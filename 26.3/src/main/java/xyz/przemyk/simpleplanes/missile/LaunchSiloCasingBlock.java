@@ -14,6 +14,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import org.jspecify.annotations.Nullable;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.phys.BlockHitResult;
+import xyz.przemyk.simpleplanes.airdefence.AirDefenceSilo;
 
 /**
  * A dependent block of a launch silo: every block of the tube's volume that is not the master. Its state holds
@@ -60,6 +64,12 @@ public class LaunchSiloCasingBlock extends Block {
     public void playerDestroy(ServerLevel level, ServerPlayer player, BlockPos pos, BlockState state, @Nullable BlockEntity blockEntity, ItemStack destroyedWith) {
         super.playerDestroy(level, player, pos, state, blockEntity, destroyedWith);
         SiloStructure.dropItems(level, pos);
+    }
+
+    @Override
+    protected InteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos, Player player,
+                                          InteractionHand hand, BlockHitResult hit) {
+        return AirDefenceSilo.use(stack, level, pos, player);
     }
 
     @Override

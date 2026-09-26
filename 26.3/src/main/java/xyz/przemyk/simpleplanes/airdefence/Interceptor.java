@@ -119,6 +119,16 @@ public final class Interceptor {
         return Verdict.NONE;
     }
 
+    /** Report fragment: the aircraft, its health now, the closest approach and the re-targets. */
+    public String describe(ServerLevel level) {
+        Entity e = level.getEntity(targetId);
+        String state = e instanceof PlaneEntity p
+            ? (p.isRemoved() || !p.isAlive() ? "destroyed" : "hp=" + p.getHealth() + "/" + p.getMaxHealth())
+            : "gone";
+        return String.format(java.util.Locale.ROOT, "target=#%d %s closest=%.2f tvel=%.2f retargets=%d",
+            targetEntityId, state, closest, velocity.length(), retargets);
+    }
+
     /** Releases the engagement claim; call once when the flight ends. */
     public void end() {
         Engagements.release(engager);

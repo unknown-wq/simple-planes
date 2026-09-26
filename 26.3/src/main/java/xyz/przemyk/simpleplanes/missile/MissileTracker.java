@@ -52,13 +52,14 @@ public final class MissileTracker {
 
     public record Report(int id, int tier, MissileEntity.Outcome outcome, Vec3 at, Vec3 target, double miss, double closest,
                          int flightTicks, long totalTicks, double pathLength, double launchRange, double maxAltitude,
-                         int stalls, BlockPos silo, String blast) {
+                         int stalls, BlockPos silo, String blast, String ad) {
         public String line() {
             return String.format(Locale.ROOT,
                 "#%d T%d %s at %.2f,%.2f,%.2f target %.2f,%.2f,%.2f miss=%.2f closest=%.2f flight=%dt total=%dt (%.1fs)"
                     + " flown=%.1f range=%.1f max_y=%.1f stalls=%d silo=%s blast=%s",
                 id, tier, outcome, at.x, at.y, at.z, target.x, target.y, target.z, miss, closest, flightTicks, totalTicks,
-                totalTicks / 20.0, pathLength, launchRange, maxAltitude, stalls, silo.toShortString(), blast);
+                totalTicks / 20.0, pathLength, launchRange, maxAltitude, stalls, silo.toShortString(), blast)
+                + (ad.isEmpty() ? "" : " ad " + ad);
         }
     }
 
@@ -130,7 +131,8 @@ public final class MissileTracker {
         long now = missile.level().getGameTime();
         Report r = new Report(missile.getId(), missile.tier().tier, outcome, at, missile.target(), at.distanceTo(missile.target()),
             Math.min(missile.closest(), at.distanceTo(missile.target())), missile.flightTicks(), now - missile.launchCommandTime(),
-            missile.pathLength(), missile.launchRange(), missile.maxAltitude(), missile.stalls(), missile.silo(), blast);
+            missile.pathLength(), missile.launchRange(), missile.maxAltitude(), missile.stalls(), missile.silo(), blast,
+            missile.interceptor() == null || !(missile.level() instanceof ServerLevel sl) ? "" : missile.interceptor().describe(sl));
         REPORTS.addLast(r);
         while (REPORTS.size() > MAX_REPORTS) REPORTS.removeFirst();
         LOGGER.info("[missile] {}", r.line());
@@ -139,6 +141,12 @@ public final class MissileTracker {
     public static void holdSilo(ServerLevel level, BlockPos pos) {
         SILO_HOLDS.computeIfAbsent(level.dimension(), k -> new HashSet<>()).add(pos.immutable());
         ticket(level, pos.getX(), pos.getZ());
+    }
+
+    /** True while a strike launch holds a chunk ticket for the silo at {@code pos}. */
+    public static boolean holdsSilo(ServerLevel level, BlockPos pos) {
+        Set<BlockPos> set = SILO_HOLDS.get(level.dimension());
+        return set != null && set.contains(pos);
     }
 
     public static void releaseSilo(ServerLevel level, BlockPos pos) {

@@ -9,7 +9,16 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.commands.arguments.item.ItemArgument;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.Ticket;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.TicketStorage;
+import xyz.przemyk.simpleplanes.missile.MissileTracker;
+import net.minecraft.core.Direction;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -63,6 +72,27 @@ public final class AirDefenceCommand {
                 .then(Commands.argument("silo", BlockPosArgument.blockPos()).executes(AirDefenceCommand::scan)));
 
             root.then(Commands.literal("spec").executes(AirDefenceCommand::spec));
+
+            root.then(Commands.literal("mode")
+                .then(Commands.argument("silo", BlockPosArgument.blockPos())
+                    .then(Commands.literal("strike").executes(c -> mode(c, LaunchSiloBlockEntity.Mode.MANUAL)))
+                    .then(Commands.literal("air_defence").executes(c -> mode(c, LaunchSiloBlockEntity.Mode.AIR_DEFENCE)))));
+
+            root.then(Commands.literal("tickets")
+                .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(AirDefenceCommand::tickets)));
+
+            root.then(Commands.literal("click")
+                .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                    .executes(c -> click(c, ItemStack.EMPTY, false))
+                    .then(Commands.argument("item", ItemArgument.item(registry))
+                        .executes(c -> click(c, ItemArgument.getItem(c, "item").createItemStack(1), false))
+                        .then(Commands.literal("sneak")
+                            .executes(c -> click(c, ItemArgument.getItem(c, "item").createItemStack(1), true))))));
+
+            root.then(Commands.literal("place")
+                .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                    .then(Commands.argument("item", ItemArgument.item(registry))
+                        .executes(AirDefenceCommand::place))));
 
             dispatcher.register(root);
             AllegianceOption.graft(dispatcher);
@@ -146,6 +176,72 @@ public final class AirDefenceCommand {
         }
         return ok(c, "At most " + InterceptorSpec.MAX_PER_TARGET + " missiles per target; silos scan every "
             + InterceptorSpec.SCAN_INTERVAL + " ticks.");
+    }
+
+    private static int mode(CommandContext<CommandSourceStack> c, LaunchSiloBlockEntity.Mode mode) {
+        ServerLevel level = c.getSource().getLevel();
+        BlockPos master = SiloStructure.masterOf(level, BlockPosArgument.getBlockPos(c, "silo"));
+        if (master == null || !(level.getBlockEntity(master) instanceof LaunchSiloBlockEntity silo)) return fail(c, "No silo there.");
+        String problem = silo.setMode(mode);
+        if (problem != null) return fail(c, "Silo at " + master.toShortString() + " cannot switch mode: " + problem + ".");
+        return ok(c, "Silo at " + master.toShortString() + " is in " + silo.mode().label + " mode.");
+    }
+
+    /** Test: a survival fake player right-clicks the top of {@code pos} holding {@code stack} (empty hand by default). */
+    private static int click(CommandContext<CommandSourceStack> c, ItemStack stack, boolean sneak) {
+        ServerLevel level = c.getSource().getLevel();
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        AirDefenceTestPlayer player = new AirDefenceTestPlayer(level);
+        Vec3 hit = Vec3.atCenterOf(pos).add(0, 0.5, 0);
+        player.snapTo(hit.x, hit.y + 1.0, hit.z, 0.0F, 90.0F);
+        player.setShiftKeyDown(sneak);
+        player.setItemInHand(InteractionHand.MAIN_HAND, stack);
+        String held = stack.isEmpty() ? "empty hand" : stack.getItem().toString();
+        InteractionResult result = player.gameMode.useItemOn(player, level, stack, InteractionHand.MAIN_HAND,
+            new BlockHitResult(hit, Direction.UP, pos, false));
+        BlockPos master = SiloStructure.masterOf(level, pos);
+        String silo = master != null && level.getBlockEntity(master) instanceof LaunchSiloBlockEntity be ? be.describe() : "no silo";
+        Component message = player.lastMessage();
+        return ok(c, String.format(Locale.ROOT, "click with %s%s: %s, %d left, message \"%s\"; %s",
+            held, sneak ? " (sneaking)" : "",
+            result.consumesAction() ? "accepted" : result instanceof InteractionResult.Fail ? "refused" : "passed",
+            player.getMainHandItem().getCount(), message == null ? "" : message.getString(), silo));
+    }
+
+    /** Test: a survival fake player standing on {@code pos} looking straight down uses {@code item} (a plane item). */
+    private static int place(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        ServerLevel level = c.getSource().getLevel();
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        ItemStack stack = ItemArgument.getItem(c, "item").createItemStack(1);
+        AirDefenceTestPlayer player = new AirDefenceTestPlayer(level);
+        player.snapTo(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 0.0F, 90.0F);
+        player.setItemInHand(InteractionHand.MAIN_HAND, stack);
+        java.util.Set<Integer> before = new java.util.HashSet<>();
+        for (PlaneEntity p : AircraftRoster.loaded(level)) before.add(p.getId());
+        InteractionResult result = player.gameMode.useItem(player, level, stack, InteractionHand.MAIN_HAND);
+        ok(c, "place " + stack.getItem() + ": " + (result.consumesAction() ? "accepted" : "refused"));
+        int n = 0;
+        for (PlaneEntity p : AircraftRoster.loaded(level)) {
+            if (before.contains(p.getId())) continue;
+            ok(c, "  placed " + line(p, c.getSource().getPosition()));
+            n++;
+        }
+        return n;
+    }
+
+    /** The chunk tickets on the chunk holding {@code pos}, whether it ticks, and whether a silo there holds a ticket. */
+    private static int tickets(CommandContext<CommandSourceStack> c) {
+        ServerLevel level = c.getSource().getLevel();
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        ChunkPos chunk = ChunkPos.containing(pos);
+        TicketStorage storage = level.getDataStorage().get(TicketStorage.TYPE);
+        List<Ticket> list = storage == null ? List.of() : storage.getTickets(chunk.pack());
+        boolean loaded = level.hasChunk(chunk.x(), chunk.z());
+        // never load the chunk to answer: masterOf reads block states
+        BlockPos master = loaded ? SiloStructure.masterOf(level, pos) : null;
+        return ok(c, String.format(Locale.ROOT, "chunk %d,%d: loaded %s, block-ticking %s, %d ticket(s) %s; silo ticket hold: %s",
+            chunk.x(), chunk.z(), loaded, level.getChunkSource().isPositionTicking(chunk.pack()),
+            list.size(), list, !loaded ? "not checked (chunk unloaded)" : master == null ? "no silo" : MissileTracker.holdsSilo(level, master) ? "YES" : "none"));
     }
 
     static int ok(CommandContext<CommandSourceStack> c, String text) {
