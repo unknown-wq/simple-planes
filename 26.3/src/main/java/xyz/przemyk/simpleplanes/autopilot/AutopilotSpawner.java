@@ -11,6 +11,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import xyz.przemyk.simpleplanes.airdefence.Allegiance;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.misc.MathUtil;
 import xyz.przemyk.simpleplanes.setup.SimplePlanesEntities;
@@ -113,6 +114,8 @@ public final class AutopilotSpawner {
         plane.setThrottle(BoosterUpgrade.MAX_THROTTLE);
         Vec3 run = targetVec.subtract(spawn.x, altitude, spawn.z).normalize();
         plane.setDeltaMovement(run.scale(STRIKE_LAUNCH_SPEED));
+        // Every strike aircraft is hostile, from the tool and from the command alike.
+        plane.setAllegiance(Allegiance.HOSTILE);
 
         addToWorld(level, plane);
 

@@ -602,7 +602,7 @@ public final class AutopilotCommand {
             source.sendFailure(Component.literal("Could not create the aircraft."));
             return 0;
         }
-        AllegianceOption.apply(context, plane);
+        // Always hostile (set in launchStrike); the trailing keyword is accepted and changes nothing.
         source.sendSuccess(() -> Component.literal(
             AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
                 + " Warhead: " + plane.warhead(blast).describe() + ". " + AutopilotSpawner.describeAirframe(plane)), true);
