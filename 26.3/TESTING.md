@@ -534,6 +534,10 @@ Scenarios (each on a fresh copy of the template, then `tick sprint N`):
 ./cmd.sh 'autopilot airfields oneway "airfield-3" 36'
 # S0 arrival conflict: land on 36 first, then depart: "not 18: arrivals landing 36", 18 again after it lands
 ./cmd.sh 'autopilot inbound 212 -20 700 "airfield-3" 2.60'; ./cmd.sh "tick sprint 300"
+# S6 one-way is departures only: with oneway 36, an arrival from the north lands 18, from the south 36
+./cmd.sh 'autopilot inbound 212 -20 -700 "airfield-3" 2.60'   # expect "landed at airfield-3/18"
+# ...and with a departure rolling 36 at the same time, the arrival holds until it has climbed out
+./cmd.sh 'autopilot flight "airfield-3" "airfield-2"'; ./cmd.sh 'autopilot inbound 212 -20 -700 "airfield-3" 2.60'
 # S1 pits: one across the straight stand->threshold line, one beside the apron lane
 ./cmd.sh "fill 25 -62 -7 29 -61 -1 minecraft:air"
 ./cmd.sh "fill 47 -63 -52 53 -61 -30 minecraft:air"
@@ -569,6 +573,18 @@ AGL; ticks with `pos` y more than 0.45 below the runway (a pit); ticks where the
 touch, where the fuselage rectangles overlap, and where span × 60 %-length rectangles overlap. The
 parked aircraft's positions can be confirmed after the run with
 `execute as @e[tag=parked] run data get entity @s Pos`. Results are in `design/TAXI.md`.
+
+Slopes: a taxi route can only change level in half steps (`TAXI_MAX_STEP` 0.55), so ramps are slabs.
+On airfield-3 (runway x 200..224):
+
+```sh
+./cmd.sh "fill 234 -60 -52 246 -60 -40 minecraft:stone"             # stand platform, one block up
+./cmd.sh 'autopilot airfields park "airfield-3" 240 -59 -46'          # refused: no level route
+./cmd.sh "fill 226 -60 -52 233 -60 -40 minecraft:smooth_stone_slab"  # slab ramp to the runway
+./cmd.sh 'autopilot airfields park "airfield-3" 240 -59 -46'          # accepted
+./cmd.sh 'autopilot airfields unpark "airfield-3" 230 -61 -94'        # so the flight uses the new stand
+./cmd.sh 'autopilot flight "airfield-3" "airfield-2"'                 # taxies down the slabs, departs
+```
 
 Two pitfalls. `tick sprint` finishes long before `console.log` is flushed on a loaded machine — wait
 for `Sprint completed`, and count occurrences when a run sprints twice. A departure to airfield-2

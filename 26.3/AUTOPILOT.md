@@ -485,8 +485,8 @@ killed mid-taxi while holding `airfield-1` leaves the board reading `airfield-1 
 **There is no timeout on the runway gate, and that is deliberate.** Rolling anyway after some number
 of failed polls would put an aircraft onto a runway that is genuinely occupied, which is the one
 thing the gate exists to prevent. A departure waits for as long as it takes; `/autopilot tower` is
-what makes that visible. (The *taxi* keeps its `TAXI_TIMEOUT` — by then the aircraft already owns the
-strip and the only question is whether it is straight on it.)
+what makes that visible. (The *taxi* is bounded by its moving time, `TAXI_TIME_BASE +
+TAXI_TIME_PER_BLOCK` × route length — by then the aircraft already owns the strip.)
 
 **No order between waiting aircraft.** A parked aircraft polls every `DEPARTURE_POLL_INTERVAL` (20)
 ticks on its own tick counter, which is the same rule and the same interval an arrival in `HOLD`
@@ -1415,9 +1415,26 @@ keeps its name and its parking spots — re-marking a threshold that was a few b
 normal way to correct a survey, not a way to create a second field. A re-survey also keeps the
 one-way setting.
 
-`/autopilot airfields oneway <airfield> <designator|off|both>` restricts every take-off and landing
-at the field to one end (for example `oneway "airfield-3" 36`); `off` or `both` clears it. The detail
-view shows `one-way: every movement uses 36`. See §4f for how departures report it.
+`/autopilot airfields oneway <airfield> <designator|off|both>` restricts **departures** at the field
+to one end (for example `oneway "airfield-3" 36`); `off` or `both` clears it. The detail view shows
+`one-way: every take-off uses 36 (arrivals from either end)`. See §4f for how departures report it.
+
+**Arrivals ignore it.** An arrival picks its end exactly as on a two-way runway (`Airfield#bestEnd`:
+approach obstacles, then the track from where it is, then uphill), may switch ends after its go-arounds
+as usual, and is kept apart from departures by the same two things as everywhere else:
+
+* the runway reservation — it holds while a departure is taxiing or rolling, and a departure waits on
+  its stand while an arrival holds the runway;
+* the direction of a departure's climb-out — a departure in `TAXI`, `TAKEOFF`, or `CLIMB` within
+  `FINAL_INTERCEPT_DISTANCE` (300) of its far end makes landing the other way cost
+  `ARRIVAL_OPPOSING_DEPARTURE_COST` (400, one obstacle column) when the end is chosen, and the end is
+  chosen again when the arrival leaves the hold. If the chosen end is still head-on to such a
+  departure, the arrival keeps holding (`departure climbing out on 36, holding`) until it is clear.
+
+Measured on a 100-block field, one-way 36, a plane inbound from 600 blocks north: before, it overflew
+the field and landed 36 at t = 1223; after, it lands 18 at t = 813. Inbound from the south it still
+lands 36. With a departure rolling on 36 while that arrival was holding, it waited for the departure
+to leave the climb-out before starting its descent, instead of descending towards it head-on.
 
 ---
 
@@ -1853,6 +1870,7 @@ sampled lazily and cached for `TAXI_GRID_TTL` ticks. A cell is walkable when eve
 the aircraft's footprint (bbox half-width + `TAXI_TERRAIN_MARGIN`) is within `TAXI_MAX_STEP`
 (0.55, the vehicle's own step) of the centre, has solid ground (no fluid) and 3 blocks of headroom,
 so a pit, a wall or a pond edge is an obstacle for the whole airframe, not just the centreline.
+Ground height is the top of the collision shape, so a slab is a half step.
 Every grounded aircraft is an inflated obstacle — hull and wing rectangles from the airframe
 table, grown by this aircraft's sweep + `TAXI_WING_MARGIN`, so both spans are cleared — and a stand
 booked in `StandOccupancy` whose aircraft is not loaded is treated as occupied. A* (8-connected, no
@@ -1890,7 +1908,7 @@ The far end is still used, and `plan[…]` says why, when:
 |---|---|
 | Runway occupied or reserved | not a choice of end: the departure waits on the stand, `holding: runway occupied by #N` |
 | Near end gives too little run from the nearest entry | `nearest entry leaves 6 blocks of run, plane needs 50` (entry moves down the strip or to the other end) |
-| Runway is one-way | `not 18: one-way 36` |
+| Runway is one-way (departures only; arrivals ignore it, §4a) | `not 18: one-way 36` |
 | An arrival is on approach to the opposite end | `not 18: arrivals landing 36` |
 | The near end has obstacles in its climb-out | `not 18: 3 in its climb-out` |
 | No route to the near end | `not 18: blocked by #61` |
@@ -1898,11 +1916,35 @@ The far end is still used, and `plan[…]` says why, when:
 The end is decided again when the plan is older than 100 ticks and once the runway comes free after
 a wait, so an arrival that forced the far end stops forcing it once it has landed.
 
-`/autopilot airfields oneway <airfield> <designator|off>` makes every take-off and landing at the
-field use one end (saved as `one_way` on the airfield; shown in `airfields info`). Measured on a
+`/autopilot airfields oneway <airfield> <designator|off>` makes every take-off at the field use one
+end; arrivals still land from either end (see "Management" in §4a). It is saved as `one_way` on the
+airfield and shown in `airfields info`. Measured on a
 100-block runway with the stand 18 blocks from the 18 threshold: before, 97.9 blocks and 544 ticks
 of taxi to the far threshold, lift-off at 615 ticks; after, 19.1 blocks and 130 ticks, entering 6
 blocks in with 94 to run, lift-off at 212 ticks.
+
+### Slopes must be slab ramps
+
+A taxiing aircraft can only climb or descend `TAXI_MAX_STEP` (0.55 blocks) between neighbouring
+columns, and every column under its footprint has to be within that of the centre. That is the
+aircraft's own step (`maxUpStep` is 0.6 below 0.5 blocks/tick), so the limit is physical, not a
+setting to relax. **A full-block step is impassable**: stairs of full blocks, a one-block kerb, or a
+stand one block above the apron are walls to the planner, and a stand behind one reports
+`no taxi route: no level ground route` (and marking it is refused: `there is no level route from it
+to the runway`). Stair blocks are no better: their collision shape reaches the top of the block.
+
+To taxi between levels, build a ramp of **slabs**: each level change is a band of bottom slabs, so
+the ground goes up half a block at a time (grass → slab → block → slab on block → …). Make the band
+as wide as the route, at least the widest airframe's footprint plus `TAXI_TERRAIN_MARGIN` on each
+side — about 5 blocks for the airliner and cargo — and long enough that the aircraft's footprint
+never spans more than one half step (2–3 blocks of slab per half step for the large airframes).
+Runway and stands still have to be within `PARKING_MAX_ELEVATION_DIFFERENCE` (2) of each other for a
+stand to be accepted at all.
+
+Measured on the rig: a stand on a 13 × 13 stone platform one block above the apron was refused;
+after a band of smooth-stone slabs 8 blocks wide was laid between the platform and the runway, the
+same stand was accepted, and a plane taxied from it down the slabs and departed (28 blocks of taxi,
+no hold). Marking a stand drops the planner's cached grid first, so a ramp built a moment ago counts.
 
 ### Restart
 

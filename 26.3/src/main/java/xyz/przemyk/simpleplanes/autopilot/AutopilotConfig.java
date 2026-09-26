@@ -290,8 +290,6 @@ public final class AutopilotConfig {
     public static final double STAND_OCCUPIED_RADIUS = PARKING_SPOT_CLEARANCE / 2.0;
     /** Most parking spots one airfield may have marked, so a stray tool cannot fill the save. */
     public static final int MAX_PARKING_SPOTS = 8;
-    /** Ticks a taxi may take before the aircraft gives up and departs from where it stands. */
-    public static final int TAXI_TIMEOUT = 900;
 
     // ---- taxi in (arrival: runway -> stand) ----
     /**
@@ -344,7 +342,7 @@ public final class AutopilotConfig {
     /**
      * Ticks a taxi in may take before the aircraft gives up and stops where it is.
      *
-     * <p>Sized on the job rather than copied from {@link #TAXI_TIMEOUT}: {@link #TAXI_IN_MAX_DISTANCE}
+     * <p>Sized on the job: {@link #TAXI_IN_MAX_DISTANCE}
      * at {@link #TAXI_SPEED} is 1280 ticks of pure rolling, and the aircraft also has to turn off the
      * runway and slow down at the end. 2400 is that with most of a minute in hand. There is a timeout
      * at all — unlike the departure runway gate, which deliberately has none — because an aircraft
@@ -353,15 +351,14 @@ public final class AutopilotConfig {
      */
     public static final int TAXI_IN_TIMEOUT = 2400;
     /**
-     * Ground speed under which a taxi in is judged to have stalled, in blocks/tick.
+     * Ground speed under which a taxiing aircraft (out or in) counts as standing still, in
+     * blocks/tick: ticks above it are the moving time the route-time bound is measured against.
      *
      * <p>A tenth of {@link #TAXI_SPEED}. Below {@code 0.1} {@code PlaneEntity#tickOnGround} applies
      * its static-friction penalty, which divides the thrust by five, so an aircraft that has been
      * pushed below this by something in its way is not going to climb back out of it by itself.
      */
     public static final double TAXI_IN_STALLED_SPEED = 0.02;
-    /** Ticks below {@link #TAXI_IN_STALLED_SPEED} before a taxi in is declared stuck. */
-    public static final int TAXI_IN_STALLED_TICKS = 100;
 
     // ---- taxi route planner and driver (see TaxiPlanner, TaxiDriver and design/TAXI.md)
 
@@ -1038,6 +1035,11 @@ public final class AutopilotConfig {
      * go-around or a hillside, and no amount of saved detour is worth flying at one.
      */
     public static final double APPROACH_OBSTACLE_COST = 400.0;
+    /**
+     * What landing head-on to a departure at the same field costs an arrival choosing its end, in
+     * blocks of track: the same as one obstacle column. See {@code Airfield#bestEnd}.
+     */
+    public static final double ARRIVAL_OPPOSING_DEPARTURE_COST = APPROACH_OBSTACLE_COST;
     /** Tie-break bonus for landing uphill, in blocks of track. Decides a level choice, buys nothing. */
     public static final double UPHILL_END_BONUS = 40.0;
     /** Extra clearance an obstacle must leave under the approach path to not be flagged. */

@@ -148,7 +148,7 @@ public final class AirfieldBrowser {
         output.component(AutopilotText.tr("detail.preferred", "  preferred landing direction %s",
             airfield.bestEnd(level).designator()));
         if (airfield.oneWayEnd() != null) {
-            output.component(AutopilotText.tr("detail.one_way", "  one-way: every movement uses %s",
+            output.component(AutopilotText.tr("detail.one_way", "  one-way: every take-off uses %s (arrivals from either end)",
                 airfield.oneWayEnd().designator()).withStyle(ChatFormatting.YELLOW));
         }
 
@@ -610,7 +610,8 @@ public final class AirfieldBrowser {
 
     /**
      * Restricts a runway to one direction ({@code direction} is a designator of it) or makes it
-     * two-way again ({@code off}). Departures, arrivals and go-arounds all keep to it.
+     * two-way again ({@code off}). Only departures keep to it: an arrival lands from whichever end
+     * suits it, so long as the runway is free and no departure is using the other direction.
      */
     public static boolean oneWay(AutopilotOutput output, ServerLevel level, String name, String direction) {
         AutopilotSavedData data = AutopilotSavedData.get(level);
@@ -629,8 +630,8 @@ public final class AirfieldBrowser {
             if (sameDesignator(end.designator(), direction)) {
                 data.put(airfield.withOneWay(end.designator()));
                 output.component(AutopilotText.tr("manage.one_way",
-                    "%s is one-way %s: every take-off and landing uses %s.", name, end.designator(),
-                    end.designator()).withStyle(ChatFormatting.GREEN));
+                    "%s is one-way %s: every take-off uses %s; arrivals may land from either end.", name,
+                    end.designator(), end.designator()).withStyle(ChatFormatting.GREEN));
                 return true;
             }
         }

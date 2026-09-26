@@ -101,7 +101,7 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
     }
 
     /**
-     * The only end in use when the runway is one-way, or null for a two-way runway. A stored
+     * The only end departures use when the runway is one-way, or null for a two-way runway. A stored
      * designator that matches neither end (the strip was re-surveyed the other way round) reads as
      * two-way rather than closing the field.
      */
@@ -117,7 +117,7 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
         return null;
     }
 
-    /** Whether movements in the direction of {@code end} are allowed. */
+    /** Whether departures in the direction of {@code end} are allowed. Arrivals ignore one-way. */
     public boolean allows(RunwayEnd end) {
         RunwayEnd only = oneWayEnd();
         return only == null || only.designator().equals(end.designator());
@@ -227,18 +227,36 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
      * {@link AutopilotConfig#UPHILL_END_BONUS} blocks, which decides a level choice and never buys a
      * detour.
      *
+     * <p>A one-way setting is deliberately not consulted: it restricts departures only (see
+     * {@link DeparturePlan}), and an arrival lands from whichever end suits it while the runway is free.
+     *
      * @param from where the aircraft is now, or null to ask the question without one — which is what
      *             a departure does, since it is standing on the runway either way
      */
     public RunwayEnd bestEnd(Level level, @Nullable Vec3 from) {
-        RunwayEnd only = oneWayEnd();
-        if (only != null) {
-            return only;
-        }
+        return bestEnd(level, from, List.of());
+    }
+
+    /**
+     * As {@link #bestEnd(Level, Vec3)}, for an arrival that knows which directions departures at this
+     * field are using. Landing on the end opposite a departure's is head-on with its climb-out, and
+     * costs {@link AutopilotConfig#ARRIVAL_OPPOSING_DEPARTURE_COST}: as much as one obstacle column, so
+     * it outweighs any overfly on a clean field but never buys an approach over a hill.
+     *
+     * @param departing designators departures are rolling towards or climbing out from
+     */
+    public RunwayEnd bestEnd(Level level, @Nullable Vec3 from, List<String> departing) {
         RunwayEnd a = endA();
         RunwayEnd b = endB();
         int obstaclesA = approachObstacles(level, a);
         int obstaclesB = approachObstacles(level, b);
+        if (from != null && !departing.isEmpty()) {
+            double costA = arrivalCost(a, obstaclesA, from)
+                + (departing.contains(b.designator()) ? AutopilotConfig.ARRIVAL_OPPOSING_DEPARTURE_COST : 0);
+            double costB = arrivalCost(b, obstaclesB, from)
+                + (departing.contains(a.designator()) ? AutopilotConfig.ARRIVAL_OPPOSING_DEPARTURE_COST : 0);
+            return costA <= costB ? a : b;
+        }
         if (from == null) {
             if (obstaclesA != obstaclesB) {
                 return obstaclesA < obstaclesB ? a : b;
@@ -667,6 +685,11 @@ public record Airfield(String name, BlockPos thresholdA, BlockPos thresholdB, in
                 + " down a step", Math.abs(surface - nearest.y));
         }
         Vec3 position = new Vec3(probe.x, surface, probe.z);
+        // Read the ground as it is now: a player marking a stand has often just built the ramp to it,
+        // and the planner's grid may be a cached copy from before.
+        if (!level.isClientSide()) {
+            TaxiPlanner.invalidate(level, airfield);
+        }
         if (!reachesRunway(level, airfield, position, nearest)) {
             return "there is no level route from it to the runway";
         }

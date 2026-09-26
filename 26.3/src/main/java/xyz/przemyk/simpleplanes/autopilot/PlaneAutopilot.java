@@ -436,6 +436,51 @@ public class PlaneAutopilot {
         };
     }
 
+    /**
+     * The runway end this aircraft is departing from at {@code airfieldName} — taxiing to it, rolling
+     * on it, or still climbing out within {@link AutopilotConfig#FINAL_INTERCEPT_DISTANCE} of its far
+     * end — or null. An arrival landing the other way would meet it head-on.
+     */
+    public @Nullable String departureDesignator(String airfieldName, PlaneEntity self) {
+        if (!active || departureEnd == null || !departureEnd.airfield().name().equals(airfieldName)) {
+            return null;
+        }
+        return switch (mode) {
+            case TAXI, TAKEOFF -> departureEnd.designator();
+            case CLIMB -> AutopilotMath.horizontalDistance(self.position(), departureEnd.farEnd())
+                <= AutopilotConfig.FINAL_INTERCEPT_DISTANCE ? departureEnd.designator() : null;
+            default -> null;
+        };
+    }
+
+    /**
+     * The designator of a departure at the landing field that is using the direction opposite this
+     * arrival's end — so its climb-out runs down this aircraft's approach — or null.
+     */
+    private @Nullable String opposingDeparture(PlaneEntity plane) {
+        if (landingAirfield == null || landingEnd == null) {
+            return null;
+        }
+        String opposite = landingEnd.opposite().designator();
+        return departuresUsing(landingAirfield, plane).contains(opposite) ? opposite : null;
+    }
+
+    /** Designators departures at {@code airfield} are using, other than {@code self}'s. */
+    private static List<String> departuresUsing(Airfield airfield, PlaneEntity self) {
+        List<String> ends = new ArrayList<>();
+        for (PlaneEntity other : AutopilotRegistry.active()) {
+            if (other == self || other.level() != self.level()) {
+                continue;
+            }
+            PlaneAutopilot autopilot = other.getAutopilot();
+            String designator = autopilot == null ? null : autopilot.departureDesignator(airfield.name(), other);
+            if (designator != null && !ends.contains(designator)) {
+                ends.add(designator);
+            }
+        }
+        return ends;
+    }
+
     /** True when this flight is being flown by the rotorcraft controller rather than by this one. */
     public boolean isRotorcraft() {
         return rotorcraft != null;
@@ -1445,7 +1490,8 @@ public class PlaneAutopilot {
                 > AutopilotConfig.ARRIVAL_WAYPOINT_IS_THE_FIELD) {
             return false;
         }
-        RunwayEnd end = landingEnd != null ? landingEnd : airfield.bestEnd(serverLevel, plane.position());
+        RunwayEnd end = landingEnd != null ? landingEnd
+            : airfield.bestEnd(serverLevel, plane.position(), departuresUsing(airfield, plane));
         ArrivalPlan.Capability me = capability(plane);
         return AutopilotMath.horizontalDistance(plane.position(), end.threshold())
             <= ArrivalPlan.decisionRange(me, ArrivalPlan.standardInterceptDistance(me));
@@ -1506,11 +1552,13 @@ public class PlaneAutopilot {
         }
 
         if (toFix < arrivalRadius(plane) + 20) {
-            if (RunwayOccupancy.tryOccupy(plane.level(), landingAirfield.name(), plane)) {
+            String opposing = opposingDeparture(plane);
+            if (opposing == null && RunwayOccupancy.tryOccupy(plane.level(), landingAirfield.name(), plane)) {
                 setMode(plane, AutopilotMode.APPROACH);
             } else {
                 holdFix = initialFix;
-                AutopilotFeedback.overlay(owner, "Plane #" + plane.getId() + ": runway occupied, holding");
+                AutopilotFeedback.overlay(owner, "Plane #" + plane.getId() + ": "
+                    + (opposing == null ? "runway occupied" : "departure climbing out on " + opposing) + ", holding");
                 setMode(plane, AutopilotMode.HOLD);
             }
         }
@@ -1559,7 +1607,8 @@ public class PlaneAutopilot {
             // replan that re-ran bestEnd would hand it straight back and the two would swap the
             // aircraft between the ends for ever.
             if (goArounds == 0) {
-                landingEnd = landingAirfield.bestEnd(plane.level(), plane.position());
+                landingEnd = landingAirfield.bestEnd(plane.level(), plane.position(),
+                    departuresUsing(landingAirfield, plane));
             }
             commitArrival(plane, ArrivalPlan.decide(landingEnd, me, free), trigger);
         }
@@ -2447,6 +2496,17 @@ public class PlaneAutopilot {
         if (!RunwayOccupancy.isFree(plane.level(), landingAirfield.name(), plane)) {
             return;
         }
+        // The end was chosen before the wait. What held the runway is often a departure that has
+        // just released it and is still climbing out, so choose again with it in view (not after a
+        // go-around, which owns the end from then on).
+        if (goArounds == 0) {
+            landingEnd = landingAirfield.bestEnd(plane.level(), plane.position(),
+                departuresUsing(landingAirfield, plane));
+        }
+        // Still head-on to a departure climbing out the other way: wait until it is clear.
+        if (opposingDeparture(plane) != null) {
+            return;
+        }
         // Free runway. Rejoin as soon as some final — extended if need be — can absorb whatever
         // height is left, which for an aircraft that only ever held for traffic is immediately.
         ArrivalPlan planned = ArrivalPlan.decide(landingEnd, capability(plane), true);
@@ -2485,8 +2545,8 @@ public class PlaneAutopilot {
         if (landingAirfield != null) {
             RunwayOccupancy.release(plane.level(), landingAirfield.name(), plane);
         }
-        if (goArounds == AutopilotConfig.MAX_GO_AROUNDS && landingEnd != null
-            && landingAirfield != null && landingAirfield.oneWayEnd() == null) {
+        // A one-way runway restricts departures only, so an arrival may switch ends here as well.
+        if (goArounds == AutopilotConfig.MAX_GO_AROUNDS && landingEnd != null) {
             // Try the other direction once before giving up on a clean approach.
             landingEnd = landingEnd.opposite();
             AutopilotFeedback.progress(owner, "Plane #" + plane.getId() + " switching to runway " + landingEnd.designator() + ".");
@@ -2887,7 +2947,7 @@ public class PlaneAutopilot {
         // The aircraft's own position is part of the choice now: two ends with equally clean funnels
         // are not equal when one of them is behind the aircraft. Obstacles still dominate — see
         // Airfield#bestEnd — so this cannot trade a clear approach for a shorter one.
-        landingEnd = airfield.bestEnd(level, plane.position());
+        landingEnd = airfield.bestEnd(level, plane.position(), departuresUsing(airfield, plane));
         plan.setAirfieldName(airfield.name());
         return true;
     }

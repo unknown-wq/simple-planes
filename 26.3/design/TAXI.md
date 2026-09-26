@@ -108,7 +108,7 @@ The search is 8-connected with no corner cutting. The heuristic is the distance 
 
 For each end, the planner is run to its `entryGoal` from where the aircraft stands. An end is closed:
 
-- when the airfield is one-way the other way (`/autopilot airfields oneway <field> <designator|off>`, saved as `one_way` on the airfield);
+- when the airfield is one-way the other way (`/autopilot airfields oneway <field> <designator|off>`, saved as `one_way` on the airfield). One-way restricts departures only: arrivals choose their end as on a two-way runway and are separated from departures by the runway reservation and by holding while a departure climbs out towards them (see AUTOPILOT.md, §4a "Management");
 - when an arrival is on approach to the opposite end, which would be head-on.
 
 Among the usable ends the choice is made in this order:
@@ -206,12 +206,11 @@ An entry point must leave `requiredRun + TAXI_LINEUP_ALLOWANCE` (8) of runway ah
 | **S3** Crossing traffic: departure leaving stand (40,−24) while a plane arrival taxis back to (40,−8) across its path | — | Arrival gave way to the runway holder (`giving way to #64`). The departure held (`blocked by #65`, then `giving way to #65`) while the arrival passed. Min centre distance 7.0 blocks. 0 contacts. Both completed: taxi 359 ticks / 33.9 blocks, and taxi-in 304 ticks / 42.2 blocks. |
 | **S4** Stand walled on three sides, opening closed by three parked aircraft | Drove into them: 138 bbox-touch ticks, 308 hull-overlap ticks. Gave up. | Held on the stand, `no taxi route: blocked by #61`, 640 ticks. **0 contacts.** After two blockers were removed it planned again and left: 243 ticks, 31.9 blocks, 0 contacts. |
 | **S5** Restart mid-taxi (departure) | Loaded as TAKEOFF at (34.9,−5.9) on the apron. Took off across grass and through the pit (agl 3 over a y −63 floor). | Loaded as PARKED at (24,−10), planned again (11.5 blocks), lifted off from the runway. 0 pit ticks. |
+| **S6** One-way 36, plane arrival from 600 blocks north | Overflew and landed 36 at t = 1223 | Landed 18 (its natural end) at t = 813; from the south it still lands 36 |
+| **S6** Same, a departure rolling 36 while the arrival holds | Landed 36, the one-way end, behind the departure. (With arrivals free to use 18 but no climb-out check, an intermediate build started its descent on 18 while the departure was climbing out at (223, −35, −129) towards it.) | Arrival kept holding until the departure had left the climb-out, then landed 18 |
 | **S5** Restart mid taxi-in | Taxi-in dropped; aircraft left where it stood. | Resumed: `taxi to stand 40,−61,−40, 5 of 5 blocks left`, parked on the stand. |
 
 ### Not measured
 
-- A one-way airfield's effect on arrivals.
-  - `bestEnd` returns the one-way end, and the go-around does not switch ends.
-  - An arrival inbound from the wrong side was not flown.
 - Two taxiing aircraft meeting head-on in a lane only one aircraft wide. Neither can reverse. Both hold (no contact), and the departure gives the runway back after `TAXI_OUT_HOLD_RELEASE`. Nothing resolves it by itself.
 - The fighter, cargo and regional airliner as departing aircraft on the new route. They appear here as parked obstacles only.
