@@ -11,6 +11,8 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.commands.arguments.coordinates.Vec3Argument;
+import net.minecraft.commands.arguments.item.ItemArgument;
+import net.minecraft.commands.arguments.item.ItemInput;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -19,10 +21,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.crafting.CraftingInput;
 import net.minecraft.world.item.crafting.RecipeType;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -91,12 +95,22 @@ public final class MissileCommand {
                     .then(Commands.argument("pos", BlockPosArgument.blockPos())
                         .then(Commands.argument("face", StringArgumentType.word())
                             .then(Commands.argument("yaw", FloatArgumentType.floatArg(-360.0F, 360.0F))
-                                .executes(c -> itemUse(c, 1))
+                                .executes(c -> itemUse(c, 1, null, ""))
                                 .then(Commands.argument("count", IntegerArgumentType.integer(1, 64))
-                                    .executes(c -> itemUse(c, IntegerArgumentType.getInteger(c, "count"))))))))
+                                    .executes(c -> itemUse(c, IntegerArgumentType.getInteger(c, "count"), null, ""))
+                                    .then(Commands.argument("item", ItemArgument.item(registry))
+                                        .executes(c -> itemUse(c, IntegerArgumentType.getInteger(c, "count"),
+                                            ItemArgument.getItem(c, "item"), ""))
+                                        .then(Commands.argument("flags", StringArgumentType.word())
+                                            .executes(c -> itemUse(c, IntegerArgumentType.getInteger(c, "count"),
+                                                ItemArgument.getItem(c, "item"), StringArgumentType.getString(c, "flags"))))))))))
                 .then(Commands.literal("break")
-                    .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(MissileCommand::itemBreak)))
-                .then(Commands.literal("recipe").executes(MissileCommand::itemRecipe)));
+                    .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                        .executes(c -> itemBreak(c, false))
+                        .then(Commands.literal("creative").executes(c -> itemBreak(c, true)))))
+                .then(Commands.literal("recipe")
+                    .executes(c -> itemRecipe(c, false))
+                    .then(Commands.literal("all").executes(c -> itemRecipe(c, true)))));
             root.then(Commands.literal("guard")
                 .then(Commands.literal("add")
                     .then(Commands.argument("from", BlockPosArgument.blockPos())
@@ -151,32 +165,55 @@ public final class MissileCommand {
             up.grewToward(), up.master().toShortString()));
     }
 
-    /** Test: a survival fake player uses {@code count} silo items on {@code face} of {@code pos}, looking along {@code yaw}. */
-    private static int itemUse(CommandContext<CommandSourceStack> c, int count) {
+    /**
+     * Test: a fake player uses {@code count} items (silo items unless {@code item} is given; {@code air} is an empty
+     * hand) on {@code face} of {@code pos}, looking along {@code yaw}. {@code flags}, comma-separated: {@code sneak},
+     * {@code creative}, {@code offhand} (the items go in the off hand and the main hand is tried first, as a client does).
+     */
+    private static int itemUse(CommandContext<CommandSourceStack> c, int count, @Nullable ItemInput item, String flags) {
         ServerLevel level = c.getSource().getLevel();
         BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
         Direction face = Direction.byName(StringArgumentType.getString(c, "face"));
         if (face == null) return fail(c, "Unknown face; use up, down, north, south, east or west.");
+        Set<String> flagSet = new HashSet<>(List.of(flags.split(",")));
+        flagSet.remove("");
+        for (String f : flagSet)
+            if (!Set.of("sneak", "creative", "offhand").contains(f)) return fail(c, "Unknown flag " + f + "; use sneak, creative, offhand.");
         float yaw = FloatArgumentType.getFloat(c, "yaw");
         SiloTestPlayer player = new SiloTestPlayer(level);
+        if (flagSet.contains("creative")) player.setGameMode(GameType.CREATIVE);
+        player.setShiftKeyDown(flagSet.contains("sneak"));
         Vec3 hit = Vec3.atCenterOf(pos).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
         player.snapTo(hit.x, hit.y + 1.0, hit.z, yaw, 45.0F);
-        ItemStack stack = new ItemStack(Missiles.LAUNCH_SILO_ITEM, count);
-        player.setItemInHand(InteractionHand.MAIN_HAND, stack);
-        InteractionResult result = player.gameMode.useItemOn(player, level, stack, InteractionHand.MAIN_HAND,
-            new BlockHitResult(hit, face, pos, false));
+        ItemStack stack = item == null ? new ItemStack(Missiles.LAUNCH_SILO_ITEM, count) : new ItemStack(item.item(), count, item.components());
+        Item used = stack.getItem();
+        int initial = stack.getCount();
+        InteractionHand held = flagSet.contains("offhand") ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        player.setItemInHand(held, stack);
+        BlockHitResult ray = new BlockHitResult(hit, face, pos, false);
+        InteractionResult result = InteractionResult.PASS;
+        for (InteractionHand hand : InteractionHand.values()) {
+            result = player.gameMode.useItemOn(player, level, player.getItemInHand(hand), hand, ray);
+            if (result.consumesAction() || result instanceof InteractionResult.Fail) break;
+        }
         Component message = player.lastMessage();
         BlockPos master = SiloStructure.masterOf(level, pos);
         LaunchSiloBlockEntity be = master == null ? null : silo(level, master);
         String silo = be == null ? "no silo at " + pos.toShortString()
             : be.describe() + (SiloStructure.isIntact(level, master, be.tier()) ? ", intact" : ", STRUCTURE DAMAGED");
-        return ok(c, String.format(Locale.ROOT, "item use: %s, %d of %d item(s) left, message \"%s\"; %s",
-            result.consumesAction() ? "accepted" : "refused", player.getMainHandItem().getCount(), count,
-            message == null ? "" : message.getString(), silo));
+        return ok(c, String.format(Locale.ROOT, "item use%s: %s, %d of %d item(s) left, main hand %s, message \"%s\"; %s",
+            flagSet.isEmpty() ? "" : " (" + String.join(",", flagSet) + ")",
+            result.consumesAction() ? "accepted" : result instanceof InteractionResult.Fail ? "refused" : "passed",
+            player.getItemInHand(held).is(used) ? player.getItemInHand(held).getCount() : 0, initial,
+            describe(player.getMainHandItem()), message == null ? "" : message.getString(), silo));
     }
 
-    /** Test: a survival fake player breaks the block at {@code pos}; reports the silo items dropped. */
-    private static int itemBreak(CommandContext<CommandSourceStack> c) {
+    private static String describe(ItemStack stack) {
+        return stack.isEmpty() ? "empty" : stack.getCount() + " x " + BuiltInRegistries.ITEM.getKey(stack.getItem());
+    }
+
+    /** Test: a survival (or creative) fake player breaks the block at {@code pos}; reports the silo and missile items dropped. */
+    private static int itemBreak(CommandContext<CommandSourceStack> c, boolean creative) {
         ServerLevel level = c.getSource().getLevel();
         BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
         AABB around = new AABB(pos).inflate(8.0);
@@ -184,32 +221,60 @@ public final class MissileCommand {
         for (ItemEntity e : level.getEntitiesOfClass(ItemEntity.class, around)) before.add(e.getId());
         String was = BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).getBlock()).toString();
         SiloTestPlayer player = new SiloTestPlayer(level);
+        if (creative) player.setGameMode(GameType.CREATIVE);
         player.snapTo(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 0.0F, 90.0F);
         boolean broken = player.gameMode.destroyBlock(pos);
         int dropped = 0;
         int other = 0;
+        StringBuilder missiles = new StringBuilder();
         for (ItemEntity e : level.getEntitiesOfClass(ItemEntity.class, around)) {
             if (before.contains(e.getId())) continue;
             if (e.getItem().is(Missiles.LAUNCH_SILO_ITEM)) dropped += e.getItem().getCount();
+            else if (e.getItem().getItem() instanceof MissileItem) missiles.append(", ").append(describe(e.getItem()));
             else other += e.getItem().getCount();
         }
         String now = BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).getBlock()).toString();
-        return ok(c, String.format(Locale.ROOT, "item break at %s: %s, was %s, now %s, dropped %d silo item(s) and %d other item(s)",
-            pos.toShortString(), broken ? "broken" : "not broken", was, now, dropped, other));
+        return ok(c, String.format(Locale.ROOT, "item break at %s%s: %s, was %s, now %s, dropped %d silo item(s), missiles [%s] and %d other item(s)",
+            pos.toShortString(), creative ? " (creative)" : "", broken ? "broken" : "not broken", was, now, dropped,
+            missiles.isEmpty() ? "none" : missiles.substring(2), other));
     }
 
-    /** Test: looks the silo recipe up by its ingredients, the way a crafting table does. */
-    private static int itemRecipe(CommandContext<CommandSourceStack> c) {
+    /** Test: looks the silo recipe (with {@code all}, also the four missile recipes) up by its ingredients, the way a crafting table does. */
+    private static int itemRecipe(CommandContext<CommandSourceStack> c, boolean all) {
         ServerLevel level = c.getSource().getLevel();
+        ItemStack e = ItemStack.EMPTY;
         ItemStack i = new ItemStack(Items.IRON_INGOT);
         ItemStack r = new ItemStack(Items.REDSTONE);
         ItemStack s = new ItemStack(Items.SMOOTH_STONE);
-        CraftingInput grid = CraftingInput.of(3, 3, List.of(i, r, i, s, ItemStack.EMPTY, s, s, i, s));
-        var found = level.getServer().getRecipeManager().getRecipeFor(RecipeType.CRAFTING, grid, level);
-        if (found.isEmpty()) return fail(c, "No crafting recipe matches iron/redstone/iron, stone/-/stone, stone/iron/stone.");
-        ItemStack out = found.get().value().assemble(grid);
-        return ok(c, "Recipe " + found.get().id().identifier() + " matches and gives " + out.getCount() + " x "
-            + BuiltInRegistries.ITEM.getKey(out.getItem()) + ".");
+        ItemStack g = new ItemStack(Items.GUNPOWDER);
+        ItemStack f = new ItemStack(Items.FIREWORK_ROCKET);
+        ItemStack t = new ItemStack(Items.TNT);
+        ItemStack k = new ItemStack(Items.COMPARATOR);
+        ItemStack b = new ItemStack(Items.FIRE_CHARGE);
+        ItemStack n = new ItemStack(Items.NETHERITE_INGOT);
+        ItemStack m = new ItemStack(Missiles.MISSILE_T3);
+        List<List<ItemStack>> grids = List.of(
+            List.of(i, r, i, s, e, s, s, i, s),
+            List.of(e, r, e, e, g, e, i, f, i),
+            List.of(e, r, e, i, t, i, i, f, i),
+            List.of(i, k, i, t, b, t, i, f, i),
+            List.of(t, n, t, t, m, t, i, f, i));
+        int matched = 0;
+        for (List<ItemStack> cells : all ? grids : grids.subList(0, 1)) {
+            CraftingInput grid = CraftingInput.of(3, 3, cells);
+            String shape = cells.stream().map(x -> x.isEmpty() ? "-" : BuiltInRegistries.ITEM.getKey(x.getItem()).getPath())
+                .collect(java.util.stream.Collectors.joining(" "));
+            var found = level.getServer().getRecipeManager().getRecipeFor(RecipeType.CRAFTING, grid, level);
+            if (found.isEmpty()) {
+                fail(c, "No crafting recipe matches " + shape + ".");
+                continue;
+            }
+            ItemStack out = found.get().value().assemble(grid);
+            ok(c, "Recipe " + found.get().id().identifier() + " matches and gives " + out.getCount() + " x "
+                + BuiltInRegistries.ITEM.getKey(out.getItem()) + " (" + shape + ").");
+            matched++;
+        }
+        return matched;
     }
 
     private static int guardAdd(CommandContext<CommandSourceStack> c, boolean suppress) {

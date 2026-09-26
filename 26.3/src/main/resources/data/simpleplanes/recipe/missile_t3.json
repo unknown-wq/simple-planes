@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "iCi",
+    "TBT",
+    "iFi"
+  ],
+  "key": {
+    "C": "minecraft:comparator",
+    "T": "minecraft:tnt",
+    "B": "minecraft:fire_charge",
+    "i": "#c:ingots/iron",
+    "F": "minecraft:firework_rocket"
+  },
+  "result": {
+    "id": "simpleplanes:missile_t3"
+  }
+}

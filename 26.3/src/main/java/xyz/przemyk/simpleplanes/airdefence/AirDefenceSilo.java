@@ -16,6 +16,7 @@ import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.SimplePlanesMod;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.missile.LaunchSiloBlockEntity;
+import xyz.przemyk.simpleplanes.missile.MissileItem;
 import xyz.przemyk.simpleplanes.missile.MissileTracker;
 import xyz.przemyk.simpleplanes.missile.Missiles;
 import xyz.przemyk.simpleplanes.missile.SiloStructure;
@@ -80,15 +81,18 @@ public final class AirDefenceSilo {
     }
 
     /**
-     * Right-click on any part of a silo. The silo item passes through to its own {@code useOn} (upgrade); any other
-     * hand, empty included, toggles strike / air defence.
+     * Right-click on any part of a silo. The silo item and the missile items pass through to their own {@code useOn}
+     * (upgrade, load); sneaking with empty hands unloads; any other hand, empty included, toggles strike / air defence.
      */
     public static InteractionResult use(ItemStack stack, Level level, BlockPos pos, Player player) {
-        if (stack.is(Missiles.LAUNCH_SILO_ITEM)) return InteractionResult.PASS;
+        if (stack.is(Missiles.LAUNCH_SILO_ITEM) || stack.getItem() instanceof MissileItem) return InteractionResult.PASS;
+        // empty main hand, missile in the off hand: let the off hand load instead of toggling
+        if (stack.isEmpty() && player.getOffhandItem().getItem() instanceof MissileItem) return InteractionResult.PASS;
         if (!player.mayBuild()) return InteractionResult.PASS;
         if (!(level instanceof ServerLevel server)) return InteractionResult.SUCCESS;
         BlockPos master = SiloStructure.masterOf(server, pos);
         if (master == null || !(server.getBlockEntity(master) instanceof LaunchSiloBlockEntity silo)) return InteractionResult.PASS;
+        if (stack.isEmpty() && player.isSecondaryUseActive()) return MissileItem.unload(server, master, silo, player);
         String problem = silo.toggleMode();
         if (problem != null) {
             player.sendOverlayMessage(Component.translatableWithFallback(SimplePlanesMod.MODID + ".silo.cannot_toggle",
