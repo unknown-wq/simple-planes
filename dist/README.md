@@ -1,6 +1,6 @@
 # dist
 
-## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.12.jar`
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.13.jar`
 
 A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
 has had a full play-through yet; most of it was tested on a headless dedicated server, and the fighter
@@ -12,7 +12,7 @@ glass, the airliner cabin and the world-map tab also in a real client.
 | Loader | Fabric, loader ≥ 0.19.5 |
 | Java | 25 |
 | Requires | Fabric API 0.160.5+26.3 or newer |
-| sha256 | `c5108937ad67121e187a4c4961b7ca7073871deaf4bb3b15a7b566830df9495b` |
+| sha256 | `12ecb8b106b7a5f2c13620fb18f11fc721152083ab0acffbf96b13fb3f0fa5d8` |
 
 What it adds on top of 5.3.14:
 
@@ -97,6 +97,7 @@ On beta.9: a clean build; adds the infinite-missiles game rule (PR #57).
 On beta.10: a clean build; adds the piercing blast, tested on its branch (PR #58).
 On beta.11: a clean build; adds piercing missile warheads, tested on its branch (PR #59).
 On beta.12: a clean build; adds the per-block blast filter API, tested on its branch (PR #60).
+On beta.13: a clean build; logs every filtered blast and shows the last one in `/blastguard status` (PR #61).
 
 ## Stable builds
 
