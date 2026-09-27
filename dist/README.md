@@ -1,6 +1,6 @@
 # dist
 
-## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.8.jar`
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.9.jar`
 
 A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
 has had a full play-through yet; most of it was tested on a headless dedicated server, and the fighter
@@ -12,7 +12,7 @@ glass, the airliner cabin and the world-map tab also in a real client.
 | Loader | Fabric, loader ≥ 0.19.5 |
 | Java | 25 |
 | Requires | Fabric API 0.160.5+26.3 or newer |
-| sha256 | `6044273e6f28fa9d81601475406477cedd702c75844f01454e672388cf799461` |
+| sha256 | `4ee0c4fbbf7bfb9ba497c0b5e03e668bec6794b30e129cea600a186e82054d60` |
 
 What it adds on top of 5.3.14:
 
@@ -71,6 +71,7 @@ What it adds on top of 5.3.14:
   to one end; arrivals land from either end when the runway is free. Taxi slopes must be slab ramps.
 - Airliners: taller fuselage, glazed windows seen from inside and out, cabin lining, longer roll-out on
   landing, animated retracting landing gear (`/airliner gear`).
+- `/gamerule simpleplanes:infinite_missiles true`: silos fire without a loaded missile and never use one up.
 - Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`, `/airdefence`, `/aviation`.
 
 Design and test reports are in `../26.3/design/` and `../26.3/MISSILES.md`. Checked here: a clean
@@ -86,6 +87,7 @@ answering; the dispatch API and the hostile strikes were tested on their branche
 On beta.7: a clean build; the patrol drones were tested on their branch (PR #52).
 On beta.8: a clean build; missile fuel, fighter evasion, airfield taxi and the airliner changes were
 tested on their branches (PRs #53–#56).
+On beta.9: a clean build; adds the infinite-missiles game rule (PR #57).
 
 ## Stable builds
 
