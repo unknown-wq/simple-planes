@@ -103,6 +103,8 @@ public class MissileEntity extends Entity {
     private float lastYaw;
     /** Set for an air-defence missile: pursuit instead of the climb-cruise-dive profile. */
     private @Nullable Interceptor interceptor;
+    /** A strike missile with the tier's piercing warhead ({@link MissileTier#pierceWarhead}). Never set on an interceptor. */
+    private boolean pierce;
     private double exitPath;
     /** Fuel left and the budget, in blocks of powered flight past the tube. */
     private double fuel;
@@ -121,9 +123,20 @@ public class MissileEntity extends Entity {
         this.noPhysics = true;
     }
 
-    /** Creates a missile seated in the silo's tube and adds it to the world. The silo calls this when its hatch is open. */
+    /** Creates a missile with the tier's ordinary warhead seated in the silo's tube and adds it to the world. */
     public static MissileEntity launch(ServerLevel level, BlockPos silo, MissileTier tier, Vec3 target, long launchCommandTime) {
+        return launch(level, silo, tier, target, launchCommandTime, false);
+    }
+
+    /**
+     * Creates a missile seated in the silo's tube and adds it to the world. The silo calls this when its hatch is open.
+     *
+     * @param pierce the tier's piercing warhead instead of the ordinary one ({@link MissileTier#strikeWarhead}).
+     */
+    public static MissileEntity launch(ServerLevel level, BlockPos silo, MissileTier tier, Vec3 target, long launchCommandTime,
+                                       boolean pierce) {
         MissileEntity m = new MissileEntity(Missiles.MISSILE, level);
+        m.pierce = pierce;
         m.entityData.set(DATA_TIER, tier.tier);
         m.refreshDimensions();
         m.silo = silo.immutable();
@@ -168,6 +181,11 @@ public class MissileEntity extends Entity {
 
     public @Nullable Interceptor interceptor() {
         return interceptor;
+    }
+
+    /** True for a strike missile carrying the tier's piercing warhead. Server side only (not synced). */
+    public boolean isPiercing() {
+        return pierce;
     }
 
     public MissileTier tier() {
@@ -468,6 +486,8 @@ public class MissileEntity extends Entity {
         finished = true;
         MissileFx.puff(level, at, tier());
         String blast = detonate(level, outcome, at);
+        // a piercing missile says so in the report even when nothing went off (inert, suppressed, none)
+        if (pierce && !blast.contains(",pierce")) blast += "(pierce)";
         if (interceptor != null) interceptor.end(level, outcome.name());
         MissileTracker.report(this, outcome, at, blast);
         discard();
@@ -480,7 +500,7 @@ public class MissileEntity extends Entity {
             // an interceptor's warhead goes off only on its fuse; spent, it falls with the spent warhead (none by default)
             ordered = outcome == Outcome.INTERCEPTED ? tier().warhead : outcome == Outcome.FELL ? InterceptorSpec.SPENT_WARHEAD : null;
         } else {
-            ordered = outcome == Outcome.ARRIVED || outcome == Outcome.TERRAIN || outcome == Outcome.FELL ? tier().warhead : null;
+            ordered = outcome == Outcome.ARRIVED || outcome == Outcome.TERRAIN || outcome == Outcome.FELL ? tier().strikeWarhead(pierce) : null;
         }
         if (ordered == null) return "none";
         if (!level.getGameRules().get(Missiles.EXPLOSIONS)) return "inert";
@@ -490,8 +510,8 @@ public class MissileEntity extends Entity {
         Blast applied = ordered.detonate(level, this, centre);
         double ms = (System.nanoTime() - t0) / 1.0E6;
         if (applied == null) return "suppressed";
-        return String.format(Locale.ROOT, "%s%.1f%s%s,%.1fms", applied.equals(ordered) ? "" : "guarded:", applied.power(),
-            applied.breaksBlocks() ? ",blocks" : "", applied.fire() ? ",fire" : "", ms);
+        return String.format(Locale.ROOT, "%s%.1f%s%s%s,%.1fms", applied.equals(ordered) ? "" : "guarded:", applied.power(),
+            applied.breaksBlocks() ? ",blocks" : "", applied.fire() ? ",fire" : "", applied.pierce() ? ",pierce" : "", ms);
     }
 
     public void abort() {
@@ -583,8 +603,8 @@ public class MissileEntity extends Entity {
         double hd = Math.hypot(target.x - c.x, target.z - c.z);
         int ground = level().getHeight(Heightmap.Types.MOTION_BLOCKING, Mth.floor(c.x), Mth.floor(c.z));
         return String.format(Locale.ROOT,
-            "#%d T%d t=%d %s pos=%.1f,%.1f,%.1f spd=%.2f pitch=%.1f agl=%.1f to_go=%.1f dist=%.1f flown=%.1f fins=%.2f booster=%s stalls=%d %s",
-            getId(), tier().tier, flightTicks, phase.name().toLowerCase(Locale.ROOT), c.x, c.y, c.z, speed,
+            "#%d T%d%s t=%d %s pos=%.1f,%.1f,%.1f spd=%.2f pitch=%.1f agl=%.1f to_go=%.1f dist=%.1f flown=%.1f fins=%.2f booster=%s stalls=%d %s",
+            getId(), tier().tier, pierce ? " pierce" : "", flightTicks, phase.name().toLowerCase(Locale.ROOT), c.x, c.y, c.z, speed,
             -getXRot(), c.y - ground, hd, nose().distanceTo(target), pathLength, entityData.get(DATA_FINS),
             tier() != MissileTier.T4 ? "-" : boosterAttached() ? "on" : "off", stalls, fuelLine());
     }

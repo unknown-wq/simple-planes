@@ -23,6 +23,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * AviationMap.requestSnapshot();        // when the map's aviation view opens, then every few seconds
  * AviationMap.requestLaunch(silo, x, AviationMap.SURFACE, z);
  * AviationMap.requestLoad(silo);        // operators, near the silo
+ * AviationMap.requestLaunch(silo, x, AviationMap.SURFACE, z, true);   // this launch piercing (API 4)
+ * AviationMap.requestWarhead(silo, true);                           // the silo's own setting (API 4)
  * </pre>
  */
 public final class AviationMap {
@@ -34,9 +36,12 @@ public final class AviationMap {
      * ({@link SiloAction}), the action on {@link LaunchResult}, and the service and air-defence fields on
      * {@link AviationSnapshot.Silo}. 3: remote launch -- a silo out of reach or in an unloaded chunk may be
      * {@link AviationSnapshot.Silo#usable() usable}, and its launch is answered first with a
-     * {@link LaunchResult#pending() pending} result while the server loads the silo's chunk.
+     * {@link LaunchResult#pending() pending} result while the server loads the silo's chunk. 4: warheads -- the
+     * {@code piercing}, {@code pierceMinRange} and {@code pierceRadius} fields of {@link AviationSnapshot.Silo},
+     * {@link #requestLaunch(BlockPos, int, int, int, boolean)} with a warhead for one launch, and
+     * {@link #requestWarhead} for the silo's own setting. Everything of API 3 is unchanged.
      */
-    public static final int API_VERSION = 3;
+    public static final int API_VERSION = 4;
 
     /** Target height meaning "the server picks the surface". */
     public static final int SURFACE = Integer.MIN_VALUE;
@@ -103,6 +108,45 @@ public final class AviationMap {
     public static boolean requestLaunch(BlockPos silo, int x, int y, int z) {
         if (!isAvailable()) return false;
         ClientPlayNetworking.send(new AviationPayloads.LaunchRequest(silo.immutable(), x, y, z));
+        return true;
+    }
+
+    /**
+     * Whether the connected server takes a warhead with a launch and warhead settings (API 4): true whenever
+     * {@link #isAvailable()} is, on a server of this version. When false, the warhead methods send nothing.
+     */
+    public static boolean canChooseWarhead() {
+        return ClientPlayNetworking.canSend(AviationPayloads.WarheadLaunchRequest.TYPE)
+            && ClientPlayNetworking.canSend(AviationPayloads.WarheadRequest.TYPE);
+    }
+
+    /**
+     * {@link #requestLaunch(BlockPos, int, int, int)} with the warhead of this one launch: {@code piercing} true fires
+     * the tier's piercing warhead (entities only, armour ignored, no block broken), false its ordinary blast, whatever
+     * the silo is set to. The silo's setting is not changed. A piercing launch needs the target at least
+     * {@link AviationSnapshot.Silo#pierceMinRange()} away. The answer arrives as {@link Listener#onLaunchResult}, as
+     * for any launch, pending first for a silo whose chunk is not loaded. Since API 4.
+     *
+     * @return false, sending nothing, when the server does not take warheads ({@link #canChooseWarhead()}).
+     */
+    public static boolean requestLaunch(BlockPos silo, int x, int y, int z, boolean piercing) {
+        if (!canChooseWarhead()) return false;
+        ClientPlayNetworking.send(new AviationPayloads.WarheadLaunchRequest(silo.immutable(), x, y, z, piercing));
+        return true;
+    }
+
+    /**
+     * Asks the server to set the silo's own strike warhead, like {@code /missile silo warhead <silo> pierce|blast}:
+     * {@code piercing} true for the tier's piercing warhead, false for its ordinary blast. Operators only, from any
+     * distance, for a silo whose chunk is loaded; either mode. There is no {@link LaunchResult} for it: the answer is
+     * the action-bar line and a fresh snapshot, whose {@link AviationSnapshot.Silo#piercing()} shows the setting.
+     * Since API 4.
+     *
+     * @return false, sending nothing, when the server does not take warheads ({@link #canChooseWarhead()}).
+     */
+    public static boolean requestWarhead(BlockPos silo, boolean piercing) {
+        if (!canChooseWarhead()) return false;
+        ClientPlayNetworking.send(new AviationPayloads.WarheadRequest(silo.immutable(), piercing));
         return true;
     }
 

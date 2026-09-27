@@ -22,6 +22,7 @@ import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.airdefence.AirDefenceSilo;
 import xyz.przemyk.simpleplanes.airdefence.InterceptorSpec;
+import xyz.przemyk.simpleplanes.autopilot.Blast;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 
 import java.util.ArrayList;
@@ -54,6 +55,31 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         }
     }
 
+    /**
+     * The strike warhead the silo fires by default: the tier's ordinary blast, or its piercing warhead (entities only,
+     * armour ignored, no block broken; {@link MissileTier#pierceWarhead}). Set with {@code /missile silo warhead} or
+     * from the map; a single launch may override it ({@code /missile launch ... pierce|blast}). Air-defence
+     * interceptors always carry the ordinary warhead: aircraft are not living entities, so a piercing one would not
+     * touch them.
+     */
+    public enum Warhead {
+        BLAST("blast"), PIERCING("piercing");
+
+        public final String label;
+
+        Warhead(String label) {
+            this.label = label;
+        }
+
+        public boolean pierce() {
+            return this == PIERCING;
+        }
+
+        public static Warhead of(boolean pierce) {
+            return pierce ? PIERCING : BLAST;
+        }
+    }
+
     /** Ticks the hatch stays open after ignition before it starts closing. */
     private static final int LAUNCH_HOLD_TICKS = 60;
     /**
@@ -70,6 +96,9 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     private float hatchO;
     private @Nullable Vec3 target;
     private Mode mode = Mode.MANUAL;
+    private Warhead warhead = Warhead.BLAST;
+    /** The warhead of the current (or last) strike sequence: the setting, or the launch's own override. */
+    private boolean launchPierce;
     private int launches;
     private int lastMissileId = -1;
     private long launchCommandTime;
@@ -104,6 +133,10 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     }
     public Phase phase() { return phase; }
     public Mode mode() { return mode; }
+    /** The silo's warhead setting for strike launches. */
+    public Warhead warhead() { return warhead; }
+    /** Whether the current (or last) strike launch carries the piercing warhead. */
+    public boolean launchPiercing() { return launchPierce; }
     public float hatch(float partialTicks) { return Mth.lerp(partialTicks, hatchO, hatch); }
     public @Nullable Vec3 target() { return target; }
     public int launches() { return launches; }
@@ -128,6 +161,16 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         setChanged();
     }
 
+    /**
+     * Sets the strike warhead the silo fires by default. Allowed in any phase and in either mode: a launch already under
+     * way keeps the warhead it was started with, and an air-defence silo keeps it for when it is back in strike mode.
+     */
+    public void setWarhead(Warhead next) {
+        if (next == warhead) return;
+        warhead = next;
+        sync();
+    }
+
     public @Nullable String toggleMode() {
         return setMode(mode == Mode.AIR_DEFENCE ? Mode.MANUAL : Mode.AIR_DEFENCE);
     }
@@ -144,6 +187,7 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     /** Takes over the persistent state of the silo this one replaced when an upgrade moved the master block. */
     void adopt(LaunchSiloBlockEntity old) {
         mode = old.mode;
+        warhead = old.warhead;
         launches = old.launches;
         lastMissileId = old.lastMissileId;
         target = old.target;
@@ -174,16 +218,28 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         return null;
     }
 
-    /** Starts the launch sequence, or says why not. */
+    /** Starts the launch sequence with the silo's own warhead setting, or says why not. */
     public @Nullable String launch(ServerLevel level, Vec3 aim) {
+        return launch(level, aim, null);
+    }
+
+    /**
+     * Starts the launch sequence, or says why not.
+     *
+     * @param pierce the warhead of this one launch: true piercing, false the ordinary blast, null the silo's
+     *               {@link #warhead() setting}. The setting itself is not changed.
+     */
+    public @Nullable String launch(ServerLevel level, Vec3 aim, @Nullable Boolean pierce) {
         MissileTier tier = tier();
         if (mode == Mode.AIR_DEFENCE) return "the silo is in air-defence mode";
         String problem = readiness(level, tier);
         if (problem != null) return problem;
-        String outOfRange = rangeProblem(worldPosition, tier, aim);
+        boolean piercing = pierce != null ? pierce : warhead.pierce();
+        String outOfRange = rangeProblem(worldPosition, tier, aim, piercing);
         if (outOfRange != null) return outOfRange;
         if (aim.y < level.getMinY() || aim.y > level.getMaxY()) return "target is outside the world's height range";
         target = aim;
+        launchPierce = piercing;
         adLaunch = false;
         adTarget = null;
         phase = Phase.OPENING;
@@ -197,13 +253,24 @@ public class LaunchSiloBlockEntity extends BlockEntity {
 
     /** Why {@code aim} is outside the horizontal range of a tier {@code tier} silo at {@code master}; null when inside. */
     public static @Nullable String rangeProblem(BlockPos master, MissileTier tier, Vec3 aim) {
+        return rangeProblem(master, tier, aim, false);
+    }
+
+    /**
+     * Why {@code aim} is outside the horizontal range of a tier {@code tier} silo at {@code master} for this warhead;
+     * null when inside. A piercing launch has a longer minimum, {@link MissileTier#pierceMinRange}: the silo must be
+     * outside its own missile's radius.
+     */
+    public static @Nullable String rangeProblem(BlockPos master, MissileTier tier, Vec3 aim, boolean pierce) {
         Vec3 mouth = SiloStructure.mouth(master, tier);
         double range = Math.hypot(aim.x - mouth.x, aim.z - mouth.z);
-        if (range >= tier.minRange && range <= tier.maxRange) return null;
+        double min = tier.minRange(pierce);
+        if (range >= min && range <= tier.maxRange) return null;
         // a target on or next to the silo is usually the looked-at block that Tab filled in
-        String hint = range < 8.0 ? " (the target is the silo itself or right next to it; Tab fills in the block you look at, so type the target's x y z)" : "";
-        return String.format(Locale.ROOT, "target too %s: %.1f blocks from the silo; a tier %d missile needs at least %.0f and at most %.0f blocks horizontally%s",
-            range < tier.minRange ? "close" : "far", range, tier.tier, tier.minRange, tier.maxRange, hint);
+        String hint = range < 8.0 ? " (the target is the silo itself or right next to it; Tab fills in the block you look at, so type the target's x y z)"
+            : pierce && range < min ? " (the piercing warhead's radius; the silo must be outside it)" : "";
+        return String.format(Locale.ROOT, "target too %s: %.1f blocks from the silo; a tier %d missile%s needs at least %.0f and at most %.0f blocks horizontally%s",
+            range < min ? "close" : "far", range, tier.tier, pierce ? " with the piercing warhead" : "", min, tier.maxRange, hint);
     }
 
     /** Idle, loaded, intact and a clear hatch: the checks every launch shares. */
@@ -364,7 +431,7 @@ public class LaunchSiloBlockEntity extends BlockEntity {
             // the missile claimed the aircraft on creation; the silo's claim ends in the same tick
             AirDefenceSilo.handOver(level, worldPosition, missile);
         } else {
-            missile = MissileEntity.launch(level, worldPosition, tier, aim, launchCommandTime);
+            missile = MissileEntity.launch(level, worldPosition, tier, aim, launchCommandTime, launchPierce);
         }
         lastMissileId = missile.getId();
         launches++;
@@ -400,6 +467,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         output.putInt("cooldown", cooldown);
         output.putFloat("hatch", hatch);
         output.putString("mode", mode.name());
+        output.putString("warhead", warhead.name());
+        output.putBoolean("launch_pierce", launchPierce);
         output.putBoolean("ad_launch", adLaunch);
         if (adTarget != null) output.putString("ad_target", adTarget.toString());
         output.putInt("launches", launches);
@@ -426,6 +495,9 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         float h = input.getFloatOr("hatch", 0.0F);
         if (level == null || !level.isClientSide()) hatch = hatchO = h;
         mode = parse(Mode.class, input.getStringOr("mode", "MANUAL"), Mode.MANUAL);
+        // absent in silos saved before the setting existed: the ordinary blast, as before
+        warhead = parse(Warhead.class, input.getStringOr("warhead", "BLAST"), Warhead.BLAST);
+        launchPierce = input.getBooleanOr("launch_pierce", false);
         adLaunch = input.getBooleanOr("ad_launch", false);
         adTarget = input.getString("ad_target").map(LaunchSiloBlockEntity::uuid).orElse(null);
         launches = input.getIntOr("launches", 0);
@@ -465,13 +537,29 @@ public class LaunchSiloBlockEntity extends BlockEntity {
         return tag;
     }
 
+    /**
+     * The warhead setting for status lines: {@code blast 16.0, blocks, fire} or {@code piercing 64.0 (radius 128,
+     * entities only)}, and {@code , air defence uses the ordinary blast} in air-defence mode when piercing is set.
+     */
+    public String warheadLine() {
+        MissileTier tier = tier();
+        Blast b = tier.strikeWarhead(warhead.pierce());
+        String line = warhead.pierce()
+            ? String.format(Locale.ROOT, "piercing %.1f (radius %.0f, entities only)", b.power(), tier.pierceRadius())
+            : String.format(Locale.ROOT, "blast %.1f%s%s", b.power(), b.breaksBlocks() ? ", blocks" : "", b.fire() ? ", fire" : "");
+        return line + (warhead.pierce() && mode == Mode.AIR_DEFENCE ? "; interceptors keep the ordinary blast" : "");
+    }
+
     public String describe() {
         MissileTier tier = tier();
-        return String.format(Locale.ROOT, "silo T%d at %s: %s, %s, hatch %.2f, mode %s%s, launches %d, last missile #%d%s",
+        return String.format(Locale.ROOT, "silo T%d at %s: %s, %s, hatch %.2f, mode %s%s, warhead %s%s, launches %d, last missile #%d%s",
             tier.tier, worldPosition.toShortString(), isLoaded() ? "loaded" : "empty",
             phase.name().toLowerCase(Locale.ROOT), hatch, mode.label + (adLaunch && adTarget != null && phase == Phase.OPENING ? " (engaging)" : "")
                 + (level instanceof ServerLevel sl ? AirDefenceSilo.holding(sl, worldPosition) : ""),
-            phase == Phase.COOLDOWN ? ", cooldown " + cooldown + "t" : "", launches, lastMissileId,
+            phase == Phase.COOLDOWN ? ", cooldown " + cooldown + "t" : "", warheadLine(),
+            phase != Phase.IDLE && !adLaunch && launchPierce != warhead.pierce()
+                ? " (this launch: " + Warhead.of(launchPierce).label + ")" : "",
+            launches, lastMissileId,
             target == null ? "" : String.format(Locale.ROOT, ", target %.1f %.1f %.1f", target.x, target.y, target.z))
             + (phase != Phase.IDLE && level != null && frozen(level) ? ", GAME FROZEN (/tick freeze): nothing moves until /tick unfreeze" : "");
     }

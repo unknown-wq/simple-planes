@@ -136,6 +136,9 @@ public final class AirDefenceSilo {
             ? Component.translatableWithFallback(SimplePlanesMod.MODID + ".silo.mode.air_defence",
                 "Silo mode: air defence (engages hostile aircraft within %s blocks)",
                 (int) InterceptorSpec.of(silo.tier()).detectionRadius()).withStyle(ChatFormatting.GOLD)
+            : silo.warhead().pierce()
+            ? Component.translatableWithFallback(SimplePlanesMod.MODID + ".silo.mode.strike_pierce",
+                "Silo mode: strike (launch to coordinates), piercing warhead").withStyle(ChatFormatting.AQUA)
             : Component.translatableWithFallback(SimplePlanesMod.MODID + ".silo.mode.strike",
                 "Silo mode: strike (launch to coordinates)").withStyle(ChatFormatting.AQUA));
         server.playSound(null, master, SoundEvents.LEVER_CLICK, SoundSource.BLOCKS, 1.0F, ad ? 1.2F : 0.8F);

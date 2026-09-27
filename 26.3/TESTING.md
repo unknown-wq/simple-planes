@@ -477,6 +477,67 @@ About one lethal roll in ten kills a citizen outright. That is MineColonies' own
 when a second piercing blast reaches it dies, because MineColonies ignores further damage to a
 downed citizen only when that damage has an attacker, and this blast has none.
 
+### Recipe: piercing missile warheads
+
+The missile side of the piercing blast (`design/MISSILE-PIERCE.md`): each tier's piercing warhead has
+its own radius, so each tier gets its own rings, and a real flight is the point, so this runs in real
+time (a T4 over 480 blocks is about 10 s from the launch command; do not `tick sprint` it). The world
+is the missile rig of `MISSILES.md` §5: superflat bedrock, 40 stone, 3 dirt, grass (surface −19),
+structures off, `spawn_mobs false`, `pause-when-empty-seconds=0`.
+
+```sh
+./cmd.sh "forceload add -8 -8 40 40"
+./cmd.sh "missile silo place 0 -20 0 1 true"     # T1; T2 at 0 -20 20, T3 at 10 -20 0, T4 at 10 -20 20
+# the target site, -350 -19 -300, force-loaded out to 1.08 x 128 (two commands: 256 chunks each at most)
+./cmd.sh "forceload add -490 -440 -350 -160"; ./cmd.sh "forceload add -349 -440 -210 -160"
+# 20 zombies per ring at r = 0.15 ... 1.05 x R around the target, R = 32, 48, 80, 128 for T1..T4,
+# alternating Protection IV and Blast Protection IV full netherite (the summon of the previous recipe),
+# tagged d0..d6 by ring
+./cmd.sh "missile hash -484 -30 -434 -216 10 -166 snapshot"
+./cmd.sh "missile silo load 10 -20 20"
+./cmd.sh "missile silo warhead 10 -20 20 pierce"             # the setting ...
+./cmd.sh "missile launch 10 -20 20 -350 -19 -300"            # ... or one launch: "... -300 pierce"
+# -> Silo at 10, -20, 20: hatch opening, tier 4 missile (piercing warhead 64, radius 128) to ...
+# -> piercing blast 64.0 (radius 128): 120 in range, 76 lethal rolls (76 reached death), 44 wounded, ...
+#    (the 1.05 R ring is outside the radius, so 6 rings x 20 = 120 are in range)
+# -> [missile] #… T4 ARRIVED ... blast=64.0,pierce,…ms
+./cmd.sh "execute if entity @e[tag=d3]"                       # survivors per ring, after 2 s
+./cmd.sh "missile hash -484 -30 -434 -216 10 -166 diff"     # -> 0 block(s) changed
+```
+
+Compare the deaths per ring with the table in `design/PIERCING-BLAST.md` (the same for every tier,
+since x = r / R). `blast=…,pierce` in the report and the `piercing blast` line are what prove the
+missile carried the piercing warhead; a report reading `blast=16.0,blocks,fire` from a silo you set
+to piercing means the setting was not read.
+
+The rest, one line each:
+
+- **The setting survives a restart:** `missile silo warhead <silo> pierce`, `./stop.sh`, `./start.sh`,
+  `missile silo status <silo>` still says `warhead piercing 64.0 (radius 128, entities only)`.
+- **The override does not stick:** `missile launch <silo> <target> blast` from a piercing silo reports
+  `blast=16.0,blocks,fire`, and `status` still says piercing afterwards.
+- **Minimum range:** `missile launch 10 -20 20 100 -19 20 pierce` is refused (89.5 < 128); the same
+  without `pierce` is accepted.
+- **Remote launch through the map API**, without a client: move the silo's chunk out of every ticket
+  (`forceload remove all`, no player near), then
+  `aviation test launch 0 -19 0 <silo> <tx> <tz> op pierce` → `PENDING`, and the log shows
+  `launched silo … warhead piercing (this launch) [remote, chunk loaded in N ticks]`.
+  `aviation test warhead 0 -19 0 <silo> pierce` sets the setting as the map would (`SET`), and
+  `aviation snapshot 0 -19 0` shows `warhead=piercing pierce_min=128 pierce_radius=128`.
+- **Game rule:** `gamerule simpleplanes:missile_explosions false`, a piercing launch into a ring →
+  `blast=inert(pierce)`, no `piercing blast` line, every zombie alive.
+- **Air defence:** set a silo to piercing, `airdefence mode <silo> air_defence`, summon a hostile
+  aircraft in range → the interceptor's report reads `blast=<ordinary power>,blocks…` and the
+  aircraft is destroyed.
+- **With MineColonies** (headless): found a colony around the target, `mc citizens fill`, snapshot the
+  colony, a piercing T4 onto the town hall, `mc citizens carestatus <colony>` → CRITICAL INJURY for
+  lethal rolls; `diff` → no colony block changed. About 10% of the lethal rolls die outright and leave
+  a `blockminecoloniesgrave` (MineColonies' `criticalcareinstantdeathchance`, default 10); those graves
+  are the only blocks in the diff.
+- **A piercing hit on terrain:** a planks hut with a glass roof over a zombie, the missile aimed at the
+  roof → the zombie dies, `diff` → 0 changed. Fill the ground under the hut with dirt first: covered
+  grass turns to dirt by itself and would show up in the diff.
+
 ### Recipe: proving something survives a save
 
 `autopilot status` after a restart is **not** proof: a plane in a chunk nobody loads is not ticking

@@ -57,6 +57,7 @@ public class MissileItem extends Item {
         level.playSound(null, master, SoundEvents.METAL_PLACE, SoundSource.BLOCKS, 1.0F, 1.3F);
         if (player != null) player.sendOverlayMessage(silo.mode() == LaunchSiloBlockEntity.Mode.AIR_DEFENCE
             ? Component.translatable("simpleplanes.missile.loaded_ad", tier.tier, (int) InterceptorSpec.of(tier).detectionRadius())
+            : silo.warhead().pierce() ? Component.translatable("simpleplanes.missile.loaded_pierce", tier.tier)
             : Component.translatable("simpleplanes.missile.loaded", tier.tier));
         MissileTracker.LOGGER.info("[missile] silo {} T{} loaded by {}", master.toShortString(), tier.tier,
             player == null ? "?" : player.getName().getString());
@@ -100,6 +101,9 @@ public class MissileItem extends Item {
             .withStyle(ChatFormatting.GRAY));
         builder.accept(Component.translatable(tier.warhead.fire() ? "simpleplanes.missile.tooltip.warhead_fire"
             : "simpleplanes.missile.tooltip.warhead", String.format(Locale.ROOT, "%.0f", tier.warhead.power()))
+            .withStyle(ChatFormatting.GRAY));
+        builder.accept(Component.translatable("simpleplanes.missile.tooltip.pierce",
+                String.format(Locale.ROOT, "%.0f", tier.pierceWarhead.power()), (int) tier.pierceRadius())
             .withStyle(ChatFormatting.GRAY));
         builder.accept(Component.translatable("simpleplanes.missile.tooltip.range", (int) tier.minRange, (int) tier.maxRange)
             .withStyle(ChatFormatting.GRAY));
