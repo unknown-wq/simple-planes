@@ -41,7 +41,7 @@ needed where that is called out separately.
 ## Strike
 
 ```
-/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire] [type <aircraft>]
+/autopilot strike <x y z> [distance] [bearing] [blast] [blocks] [fire] [type <aircraft>] [pierce [true|false]]
 ```
 
 Spawns an aircraft off to one side of the target and flies it straight in at full throttle.
@@ -51,10 +51,11 @@ Spawns an aircraft off to one side of the target and flies it straight in at ful
 | `x y z` | any | — | the point the aircraft flies into. `~ ~ ~` and `^ ^ ^5` both work |
 | `distance` | 20…4000 | 400 | how many blocks out from the target it spawns |
 | `bearing` | 0…359 | from the caller's side | **which side the run-in comes from** — see below |
-| `blast` | 0…16 | 4 | 4 is ordinary TNT, 6 a charged creeper, 16 the ceiling |
+| `blast` | 0…16, or 0…64 with `pierce` | 4 | 4 is ordinary TNT, 6 a charged creeper, 16 the ceiling for an ordinary blast |
 | `blocks` | true/false | true | `false` — damages entities but leaves the build alone |
 | `fire` | true/false | false | `true` — leaves fires burning |
 | `type <aircraft>` | see below | `plane` | which aircraft flies it. May follow any of the arguments above |
+| `pierce` | keyword, optionally `true`/`false` | off | a **piercing blast**: entities only, armour ignored, up to 64 — see "Piercing blast" below. May follow any of the arguments above, and `type <aircraft>`; `hostile` goes after it |
 
 ```mcfunction
 # 400 blocks of run-in, approaching from the northeast,
@@ -67,6 +68,69 @@ Spawns an aircraft off to one side of the target and flies it straight in at ful
 # incendiary, no demolition
 /autopilot strike 100 70 200 400 0 8 false true
 ```
+
+### Piercing blast
+
+`pierce` turns the warhead into an entity-only blast that armour does not stop. It is meant for
+hitting people, not buildings:
+
+* **not one block is broken and nothing is set on fire**, whatever `blocks`/`fire` say (they
+  are ignored, and the message says so if you asked for either);
+* **power goes up to 64** (radius 128) instead of 16. Above 16 without `pierce` the command
+  refuses with the reason;
+* **armour does not matter at all** — netherite, Protection IV, Blast Protection IV, a raised
+  shield, Resistance I–IV: the chance to die depends only on the distance from the centre and
+  on cover;
+* only living things are hit. Dropped items, item frames, paintings, boats and minecarts are
+  left alone. An armour stand breaks only on a lethal roll (vanilla breaks it on any explosion
+  damage).
+
+**Who dies.** The radius is `R = 2 × blast`, as for a vanilla explosion. Inside the inner
+quarter of it death is certain. From there out to `R` each creature rolls once, and the chance
+of a lethal hit falls smoothly from 100 % to 0 %. A creature that survives the roll still takes
+damage and a knockback that fall with distance (up to three quarters of its maximum health just
+outside the core, nothing at the edge). Cover helps: behind solid blocks the lethal band is up to
+half as wide. In the open:
+
+| distance from centre | blast 16 | blast 32 | blast 64 | chance of death, in the open | fully behind cover |
+|---|---|---|---|---|---|
+| core, 0…¼ R | 0–8 | 0–16 | 0–32 | **100 %** | **100 %** |
+| 0.35 R | 11 | 22 | 45 | 95 % | 82 % |
+| 0.45 R | 14 | 29 | 58 | 82 % | 45 % |
+| 0.55 R | 18 | 35 | 70 | 65 % | 10 % |
+| 0.625 R | 20 | 40 | 80 | 50 % | 0 % |
+| 0.7 R | 22 | 45 | 90 | 35 % | 0 % |
+| 0.8 R | 26 | 51 | 102 | 18 % | 0 % |
+| 0.9 R | 29 | 58 | 115 | 5 % | 0 % |
+| R and beyond | 32 | 64 | 128 | 0 % | 0 % |
+
+What still saves you: creative and spectator mode (not touched at all), a Totem of Undying (it
+works as usual), Resistance V (commands only) and anything invulnerable. Difficulty does not
+matter, peaceful included. A MineColonies citizen hit by a lethal roll goes down CRITICAL
+(explosion damage) and goes to hospital rather than dying on the spot, as with any explosion;
+a non-lethal roll leaves it wounded. The formula and the measurements are in
+`26.3/design/PIERCING-BLAST.md`.
+
+```mcfunction
+# a piercing strike, radius 128: kills everything within 32 blocks whatever it wears
+/autopilot strike 100 70 200 400 0 64 pierce
+
+# the same from a fighter, from the east
+/autopilot strike 100 70 200 400 90 64 type fighter pierce
+
+# blast 32 (radius 64) with every other argument at its default
+/autopilot strike 100 70 200 400 0 32 pierce
+
+# refused: above 16 needs pierce
+/autopilot strike 100 70 200 400 0 32
+```
+
+A drone keeps its own small fixed charge (1, radius 2) with `pierce` on — it does not grow — but
+that charge is then a piercing one: a precise weapon that kills what it hits through any armour.
+
+The blast still goes through the blast guards (see "Blast protection") exactly as any other: a
+guard may suppress it. A guard that only takes away block damage and fire has nothing to take
+away here and lets it through unchanged.
 
 ### Which aircraft
 
@@ -260,8 +324,8 @@ break blocks", "start fires", a pinned bearing and the aircraft, is written onto
 **in hand** with:
 
 ```
-/autopilot tool <distance> [bearing] [blast] [blocks] [fire] [type <aircraft>]
-/autopilot tool type <aircraft>
+/autopilot tool <distance> [bearing] [blast] [blocks] [fire] [type <aircraft>] [pierce [true|false]]
+/autopilot tool type <aircraft> [pierce [true|false]]
 ```
 
 The same arguments in the same order as `strike`, minus the target — the target is
@@ -276,7 +340,20 @@ whatever block you right-click.
 
 # send a cargo plane, keeping every other setting
 /autopilot tool type cargo
+
+# a piercing tool: 400 out, bearing from wherever you stand, blast 64, entities only
+/autopilot tool 400 -1 64 pierce
+
+# back to an ordinary blast (the power has to come down to 16 or less with it)
+/autopilot tool 400 -1 8 pierce false
 ```
+
+`pierce` works as on `strike` (see "Piercing blast" above) and, like every other setting, stays
+on the tool until changed: `pierce false` turns it off again. The tooltip and the
+right-click-the-air line show `piercing (entities only, armour ignored)` after the power. With
+`pierce` on, sneak + right-click cycles the blast through 16 → 32 → 64 → 8 instead of
+4 → 8 → 16 → 1. The tool's own `blocks`/`fire` settings are kept while `pierce` is on, and apply
+again once it is off.
 
 Arguments left off keep their current value — a second call can change one setting
 without restating the rest. Settings live on the item itself, so they survive logging

@@ -58,6 +58,10 @@ import java.util.stream.Collectors;
  * onto the held tool by {@code /autopilot tool}, which takes the same arguments in the same order as
  * {@code /autopilot strike}. Every setting is stored on the stack, so it survives logging out.
  *
+ * <p><b>Piercing.</b> {@code /autopilot tool ... pierce} makes the tool's blast a piercing one
+ * ({@link Blast#pierce()}): entity-only, armour ignored, power up to {@link Blast#MAX_PIERCE_POWER}.
+ * The sneak gesture then cycles {@code 16, 32, 64, 8} instead of {@code 4, 8, 16, 1}.
+ *
  * <p>Unset means what a strike has always done: {@value Blast#DEFAULT_POWER} strength, blocks
  * broken, no fire, and a run-in worked out from where the player is standing.
  */
@@ -66,6 +70,8 @@ public class PlaneStrikeToolItem extends Item {
     private static final int[] DISTANCES = {100, 200, 400, 800};
     /** Blast strengths the tool cycles through. The first is vanilla TNT, i.e. the historic default. */
     private static final float[] BLASTS = {Blast.DEFAULT_POWER, 8.0F, Blast.MAX_POWER, 1.0F};
+    /** The same cycle for a piercing tool, which goes past the block-breaking bound. */
+    private static final float[] PIERCE_BLASTS = {Blast.MAX_POWER, 32.0F, Blast.MAX_PIERCE_POWER, 8.0F};
 
     public PlaneStrikeToolItem(Properties properties) {
         super(properties.stacksTo(1));
@@ -81,11 +87,12 @@ public class PlaneStrikeToolItem extends Item {
         Float power = stack.get(AutopilotComponents.STRIKE_BLAST);
         Boolean blocks = stack.get(AutopilotComponents.STRIKE_BLOCKS);
         Boolean fire = stack.get(AutopilotComponents.STRIKE_FIRE);
-        if (power == null && blocks == null && fire == null) {
+        Boolean pierce = stack.get(AutopilotComponents.STRIKE_PIERCE);
+        if (power == null && blocks == null && fire == null && pierce == null) {
             return Blast.DEFAULT;
         }
         return new Blast(power == null ? Blast.DEFAULT_POWER : power,
-            blocks == null || blocks, fire != null && fire);
+            blocks == null || blocks, fire != null && fire, pierce != null && pierce);
     }
 
     /** Airframe stored on the tool; unset is the starter plane, as before the setting existed. */
@@ -274,7 +281,9 @@ public class PlaneStrikeToolItem extends Item {
                 // Strength only. The block-breaking and incendiary flags are left exactly as
                 // /autopilot tool set them — a gesture meant for the two numbers must not quietly
                 // undo the two settings it does not show.
-                blast = new Blast(BLASTS[nextIndex(BLASTS, blast.power())], blast.breaksBlocks(), blast.fire());
+                float[] cycle = blast.pierce() ? PIERCE_BLASTS : BLASTS;
+                blast = new Blast(cycle[nextIndex(cycle, blast.power())], blast.breaksBlocks(), blast.fire(),
+                    blast.pierce());
                 stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
             }
             AutopilotFeedback.info(player, "Strike spawn distance: " + next

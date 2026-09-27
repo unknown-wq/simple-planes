@@ -25,6 +25,8 @@
     "itemGroup.simpleplanes": "Simple Planes",
     "simpleplanes.container.plane_workbench": "Аэроверстак",
     "death.attack.plane_crash": "%1$s умер в авиакатастрофе.",
+    "death.attack.simpleplanes.piercing_blast": "%1$s накрыло пробивающим взрывом.",
+    "death.attack.simpleplanes.piercing_blast.player": "%1$s накрыло пробивающим взрывом (%2$s).",
     "plane.onboard": "Нажми %2$s — ускориться | Нажми %1$s — спешиться.",
     "helicopter.onboard": "Нажми %2$s — взлететь | Нажми %1$s — спешиться.",
     "key.simpleplanes.category": "Simple Planes",
