@@ -7,6 +7,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import xyz.przemyk.simpleplanes.autopilot.FilteredExplosion;
 
 /**
  * {@code /blastguard} — the off switch for {@link BlastGuards}.
@@ -35,6 +36,10 @@ import net.minecraft.server.level.ServerLevel;
  * switch is on, and whether any guard is actually registered. Those are independent. Someone running
  * this mod on its own has guarding switched on and no guards at all, and the honest answer for them is
  * that their explosions are untouched — not a bare "enabled" that implies something is happening.
+ *
+ * <p>When block filters are registered, {@code status} also repeats the last blast one of them narrowed —
+ * the same summary as the {@code Filtered blast:} line in the log: power, centre, source, how many of the
+ * blocks the blast would have taken were allowed (solid and air) and each filter's own account of it.
  */
 public final class BlastGuardCommand {
 
@@ -60,7 +65,10 @@ public final class BlastGuardCommand {
         int guards = BlastGuards.count();
         int filters = BlastBlockFilters.count();
 
-        context.getSource().sendSuccess(() -> Component.literal(describe(enabled, guards, filters)), false);
+        String last = filters == 0 ? null : FilteredExplosion.lastFiltered();
+        String line = describe(enabled, guards, filters)
+            + (filters == 0 ? "" : last == null ? " No blast has been narrowed by a filter since the server started." : " Last filtered blast: " + last);
+        context.getSource().sendSuccess(() -> Component.literal(line), false);
         return enabled ? 1 : 0;
     }
 

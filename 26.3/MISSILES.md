@@ -354,7 +354,10 @@ z, power, fire, interaction)`. `PlaneEntity#explode` now calls the same method, 
 drift apart. A guard sees the missile as the `source` entity and may downgrade or suppress the blast as for an
 aircraft. A registered `BlastBlockFilter` (see `api/BlastBlockFilter`) then narrows which blocks a non-piercing
 blast may break, for missiles exactly as for aircraft: with one in force the call is the `Level#explode` overload
-that takes an `ExplosionDamageCalculator`, with none it is the short overload above, unchanged.
+that takes an `ExplosionDamageCalculator`, with none it is the short overload above, unchanged. Each blast a filter
+narrowed logs one `Filtered blast:` INFO line (power, centre, source, allowed of candidate blocks with solid and air
+apart, and each filter's own account), and `/blastguard status` repeats the last one. A blast whose filters allowed
+air but no solid block is the one that leaves fire and no crater.
 
 - **The centre** is the target point on arrival. On a terrain hit it is the hit point moved 0.05 blocks back
   along the flight path, so that the blast starts in the air cell in front of the face and not inside the block.

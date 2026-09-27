@@ -867,6 +867,19 @@ and `status` says so plainly.
 The setting is server-wide (not per dimension) and stored in the world, in
 `<world>/data/simpleplanes/blast_guard.dat`, so it survives a restart.
 
+A mod may also register a *block filter* (26.3 line), which lets the blast go off as
+ordered but narrows which blocks it breaks — only a colony's buildings, say, never its
+ground. `off` switches filters off too. Every blast a filter narrowed leaves one line in
+the server log, and `status` repeats the last one:
+
+```
+Filtered blast: power 8.0,blocks,fire at 15.5 -49.0 20.5 by simpleplanes:missile: 22 of 3151 blocks the
+blast would have taken were allowed (0 solid, 22 air); <the filter's own account>
+```
+
+Solid blocks allowed are the ones that broke; air allowed is where fire may start. A
+blast with air allowed and no solid leaves fire and no crater.
+
 ---
 
 ## Claimed airspace
