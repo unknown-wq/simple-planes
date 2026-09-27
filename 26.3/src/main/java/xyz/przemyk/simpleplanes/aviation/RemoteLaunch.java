@@ -16,6 +16,7 @@ import xyz.przemyk.simpleplanes.api.map.LaunchResult;
 import xyz.przemyk.simpleplanes.api.map.SiloAction;
 import xyz.przemyk.simpleplanes.missile.LaunchSiloBlockEntity;
 import xyz.przemyk.simpleplanes.missile.MissileTier;
+import xyz.przemyk.simpleplanes.missile.Missiles;
 import xyz.przemyk.simpleplanes.missile.SiloStructure;
 
 import java.util.ArrayList;
@@ -90,7 +91,7 @@ final class RemoteLaunch {
         MissileTier tier = MissileTier.of(Mth.clamp(entry.tier(), 1, 4));
         if (pending(level, pos)) problem = "busy (loading the silo's chunk)";
         else if (!entry.strike()) problem = "the silo is in air-defence mode (last known state)";
-        else if (!entry.loaded()) problem = "no missile loaded (last known state)";
+        else if (!entry.loaded() && !level.getGameRules().get(Missiles.INFINITE)) problem = "no missile loaded (last known state)";
         else problem = LaunchSiloBlockEntity.rangeProblem(pos, tier, new Vec3(request.x() + 0.5, 0, request.z() + 0.5));
         if (problem != null) {
             return AviationService.refused(player, pos, SiloAction.LAUNCH, AviationPayloads.text("refuse.silo",

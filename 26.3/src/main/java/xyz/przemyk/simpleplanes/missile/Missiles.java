@@ -66,6 +66,11 @@ public final class Missiles {
         .category(GameRuleCategory.MISC)
         .buildAndRegister(id("missile_explosions"));
 
+    /** {@code /gamerule simpleplanes:infinite_missiles true}: silos fire without a loaded missile and never use one up. */
+    public static final GameRule<Boolean> INFINITE = GameRuleBuilder.forBoolean(false)
+        .category(GameRuleCategory.MISC)
+        .buildAndRegister(id("infinite_missiles"));
+
     public static void init() {
         MissileTracker.init();
         MissileCommand.register();
