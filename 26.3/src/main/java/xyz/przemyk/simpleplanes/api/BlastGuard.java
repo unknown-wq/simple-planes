@@ -40,7 +40,16 @@ import xyz.przemyk.simpleplanes.autopilot.Blast;
  * land-claim mod, a protection plugin or a server's own datapack glue can refuse a blast without
  * this mod having to grow a dependency on any of them, or even know they exist.
  *
+ * <h2>Sparing some blocks and not others</h2>
+ * A guard's say over the world is all-or-nothing: a blast breaks blocks or it does not. To let a blast go
+ * off as ordered but break only <em>some</em> blocks — craters outside a claim and none inside, or
+ * buildings but not the ground they stand on — register a {@link BlastBlockFilter} with
+ * {@link BlastBlockFilters} as well. It is resolved once per detonation, after the guards, into a cheap
+ * per-block predicate that vanilla's explosion consults for every block it would break and every fire it
+ * would start.
+ *
  * @see BlastGuards
+ * @see BlastBlockFilter
  */
 @FunctionalInterface
 public interface BlastGuard {

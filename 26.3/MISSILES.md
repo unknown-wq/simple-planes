@@ -352,7 +352,9 @@ Measured sizes are in §6a.
 method runs `BlastGuards.filter`, which respects `/blastguard off`, and then `ServerLevel#explode(source, x, y,
 z, power, fire, interaction)`. `PlaneEntity#explode` now calls the same method, so aircraft and missiles cannot
 drift apart. A guard sees the missile as the `source` entity and may downgrade or suppress the blast as for an
-aircraft.
+aircraft. A registered `BlastBlockFilter` (see `api/BlastBlockFilter`) then narrows which blocks a non-piercing
+blast may break, for missiles exactly as for aircraft: with one in force the call is the `Level#explode` overload
+that takes an `ExplosionDamageCalculator`, with none it is the short overload above, unchanged.
 
 - **The centre** is the target point on arrival. On a terrain hit it is the hit point moved 0.05 blocks back
   along the flight path, so that the blast starts in the air cell in front of the face and not inside the block.

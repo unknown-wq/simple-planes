@@ -58,8 +58,9 @@ public final class BlastGuardCommand {
         ServerLevel level = context.getSource().getLevel();
         boolean enabled = BlastGuardSettings.isEnabled(level);
         int guards = BlastGuards.count();
+        int filters = BlastBlockFilters.count();
 
-        context.getSource().sendSuccess(() -> Component.literal(describe(enabled, guards)), false);
+        context.getSource().sendSuccess(() -> Component.literal(describe(enabled, guards, filters)), false);
         return enabled ? 1 : 0;
     }
 
@@ -67,11 +68,12 @@ public final class BlastGuardCommand {
         ServerLevel level = context.getSource().getLevel();
         boolean changed = BlastGuardSettings.setEnabled(level, enabled);
         int guards = BlastGuards.count();
+        int filters = BlastBlockFilters.count();
 
         String prefix = changed
             ? (enabled ? "Blast guarding switched on. " : "Blast guarding switched off. ")
             : (enabled ? "Blast guarding was already on. " : "Blast guarding was already off. ");
-        context.getSource().sendSuccess(() -> Component.literal(prefix + describe(enabled, guards)), true);
+        context.getSource().sendSuccess(() -> Component.literal(prefix + describe(enabled, guards, filters)), true);
         return changed ? 1 : 0;
     }
 
@@ -79,6 +81,19 @@ public final class BlastGuardCommand {
      * One sentence covering both the switch and whether anything is listening, because either alone
      * misleads.
      */
+    private static String describe(boolean enabled, int guards, int filters) {
+        if (filters == 0) {
+            return describe(enabled, guards);
+        }
+        if (enabled && guards == 0) {
+            return "No blast guard is registered; " + filters
+                + " block filter(s) are, and they may limit which blocks an aircraft's explosion breaks.";
+        }
+        return describe(enabled, guards) + " " + filters + (enabled
+            ? " block filter(s) registered; they may limit which blocks an explosion breaks."
+            : " registered block filter(s) are not being consulted either.");
+    }
+
     private static String describe(boolean enabled, int guards) {
         if (!enabled) {
             return guards == 0
