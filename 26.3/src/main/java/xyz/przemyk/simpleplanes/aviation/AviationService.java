@@ -43,6 +43,7 @@ import xyz.przemyk.simpleplanes.autopilot.Shuttle;
 import xyz.przemyk.simpleplanes.entities.PlaneEntity;
 import xyz.przemyk.simpleplanes.missile.LaunchSiloBlockEntity;
 import xyz.przemyk.simpleplanes.missile.MissileTier;
+import xyz.przemyk.simpleplanes.missile.Missiles;
 import xyz.przemyk.simpleplanes.missile.SiloStructure;
 
 import java.util.ArrayList;
@@ -304,7 +305,7 @@ public final class AviationService {
         }
         MissileTier tier = be != null ? be.tier() : MissileTier.of(Mth.clamp(e.tier(), 1, 4));
         boolean strike = be != null ? be.mode() == LaunchSiloBlockEntity.Mode.MANUAL : e.strike();
-        boolean loaded = be != null ? be.isLoaded() : e.loaded();
+        boolean loaded = be != null ? be.hasMissile() : e.loaded() || level.getGameRules().get(Missiles.INFINITE);
         String phase = be != null ? be.phase().name().toLowerCase(Locale.ROOT) : "unknown";
         Vec3 mouth = SiloStructure.mouth(pos, tier);
         double distance = player.position().distanceTo(mouth);

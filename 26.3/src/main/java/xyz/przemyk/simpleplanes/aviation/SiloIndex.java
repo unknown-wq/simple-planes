@@ -89,7 +89,7 @@ public final class SiloIndex extends SavedData {
     /** Records the silo's current state. Marks the file dirty only when something persistent changed. */
     public void update(LaunchSiloBlockEntity be, long now) {
         BlockPos pos = be.getBlockPos().immutable();
-        Entry next = new Entry(pos, be.tier().tier, be.mode() == LaunchSiloBlockEntity.Mode.MANUAL, be.isLoaded(), now);
+        Entry next = new Entry(pos, be.tier().tier, be.mode() == LaunchSiloBlockEntity.Mode.MANUAL, be.hasMissile(), now);
         Entry previous = silos.put(pos, next);
         if (previous == null || !previous.sameState(next)) setDirty();
     }

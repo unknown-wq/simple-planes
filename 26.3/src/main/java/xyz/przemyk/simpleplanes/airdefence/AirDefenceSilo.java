@@ -41,7 +41,7 @@ public final class AirDefenceSilo {
         BlockPos pos = silo.getBlockPos();
         // spread silos over the scan interval
         if (Math.floorMod(level.getGameTime() + Mth.getSeed(pos), InterceptorSpec.SCAN_INTERVAL) != 0) return;
-        if (!silo.isLoaded()) return;
+        if (!silo.hasMissile()) return;
         PlaneEntity target = TargetSelector.select(level, pos, silo.tier(), Engagements.silo(level, pos));
         if (target == null) return;
         if (silo.launchAirDefence(level, target) == null) {

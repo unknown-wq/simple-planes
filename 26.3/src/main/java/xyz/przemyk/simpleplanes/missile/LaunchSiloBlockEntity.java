@@ -97,6 +97,11 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     }
 
     public boolean isLoaded() { return loadedTier > 0; }
+
+    /** Ready to fire: a missile is loaded, or the infinite-missiles game rule is on (server side only). */
+    public boolean hasMissile() {
+        return isLoaded() || (level instanceof ServerLevel server && server.getGameRules().get(Missiles.INFINITE));
+    }
     public Phase phase() { return phase; }
     public Mode mode() { return mode; }
     public float hatch(float partialTicks) { return Mth.lerp(partialTicks, hatchO, hatch); }
@@ -205,7 +210,7 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     public @Nullable String readiness(ServerLevel level, MissileTier tier) {
         recoverIfStale();
         if (phase != Phase.IDLE) return busy();
-        if (!isLoaded()) return "no missile loaded";
+        if (!hasMissile()) return "no missile loaded";
         if (!SiloStructure.isIntact(level, worldPosition, tier)) return "the silo structure is damaged";
         for (int k = 1; k <= tier.tier + 3; k++)
             for (int dx = 0; dx < tier.footprint; dx++)
@@ -344,7 +349,8 @@ public class LaunchSiloBlockEntity extends BlockEntity {
     private void ignite(ServerLevel level, MissileTier tier) {
         hatch = 1.0F;
         Vec3 aim = target;
-        loadedTier = 0;
+        // infinite_missiles: a loaded missile stays loaded
+        if (!level.getGameRules().get(Missiles.INFINITE)) loadedTier = 0;
         setPhase(Phase.LAUNCHING);
         if (aim == null) return;
         MissileEntity missile;
