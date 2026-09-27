@@ -1,6 +1,6 @@
 # dist
 
-## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.9.jar`
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.10.jar`
 
 A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
 has had a full play-through yet; most of it was tested on a headless dedicated server, and the fighter
@@ -12,7 +12,7 @@ glass, the airliner cabin and the world-map tab also in a real client.
 | Loader | Fabric, loader ≥ 0.19.5 |
 | Java | 25 |
 | Requires | Fabric API 0.160.5+26.3 or newer |
-| sha256 | `4ee0c4fbbf7bfb9ba497c0b5e03e668bec6794b30e129cea600a186e82054d60` |
+| sha256 | `c80c32f2df71d4415ddd3774ae6decfd47a5f87d3b354bc6f6c81c1c02972c2d` |
 
 What it adds on top of 5.3.14:
 
@@ -72,6 +72,8 @@ What it adds on top of 5.3.14:
 - Airliners: taller fuselage, glazed windows seen from inside and out, cabin lining, longer roll-out on
   landing, animated retracting landing gear (`/airliner gear`).
 - `/gamerule simpleplanes:infinite_missiles true`: silos fire without a loaded missile and never use one up.
+- Piercing strikes (`pierce` on `/autopilot strike` and `/autopilot tool`): entities only, no blocks broken, armour
+  ignored, power up to 64; survival depends on distance from the centre and on cover.
 - Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`, `/airdefence`, `/aviation`.
 
 Design and test reports are in `../26.3/design/` and `../26.3/MISSILES.md`. Checked here: a clean
@@ -88,6 +90,7 @@ On beta.7: a clean build; the patrol drones were tested on their branch (PR #52)
 On beta.8: a clean build; missile fuel, fighter evasion, airfield taxi and the airliner changes were
 tested on their branches (PRs #53–#56).
 On beta.9: a clean build; adds the infinite-missiles game rule (PR #57).
+On beta.10: a clean build; adds the piercing blast, tested on its branch (PR #58).
 
 ## Stable builds
 
