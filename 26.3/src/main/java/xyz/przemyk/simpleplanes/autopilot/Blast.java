@@ -116,7 +116,8 @@ public record Blast(float power, boolean breaksBlocks, boolean fire, boolean pie
 
     /**
      * Sets this blast off at {@code at}: the one path every explosion of this mod takes. The registered
-     * {@link BlastGuards} are consulted first and may weaken or suppress it.
+     * {@link BlastGuards} are consulted first and may weaken or suppress it; then the registered
+     * {@link xyz.przemyk.simpleplanes.api.BlastBlockFilters} may narrow which blocks it breaks.
      *
      * <p>A piercing blast is asked about in exactly the same way and at the same point. It arrives
      * at the guards with {@code breaksBlocks} and {@code fire} already off, so a guard that only
@@ -131,7 +132,7 @@ public record Blast(float power, boolean breaksBlocks, boolean fire, boolean pie
             if (applied.pierce()) {
                 PiercingBlast.detonate(level, source, at, applied.power());
             } else {
-                level.explode(source, at.x, at.y, at.z, applied.power(), applied.fire(), applied.interaction());
+                FilteredExplosion.explode(level, source, at, applied);
             }
         }
         return applied;
