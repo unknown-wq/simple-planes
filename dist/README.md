@@ -1,6 +1,6 @@
 # dist
 
-## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.11.jar`
+## 26.3 beta: `simpleplanes-26.3-5.4.0-beta.12.jar`
 
 A preview build of the 26.3 line with the new aircraft and missiles. It is not a release: nothing in it
 has had a full play-through yet; most of it was tested on a headless dedicated server, and the fighter
@@ -12,7 +12,7 @@ glass, the airliner cabin and the world-map tab also in a real client.
 | Loader | Fabric, loader ≥ 0.19.5 |
 | Java | 25 |
 | Requires | Fabric API 0.160.5+26.3 or newer |
-| sha256 | `1dd96336abdb41bdb7794edfd997d9e1fde6c756cc8720186ed05ea013d2725f` |
+| sha256 | `c5108937ad67121e187a4c4961b7ca7073871deaf4bb3b15a7b566830df9495b` |
 
 What it adds on top of 5.3.14:
 
@@ -76,6 +76,8 @@ What it adds on top of 5.3.14:
   ignored, power up to 64; survival depends on distance from the centre and on cover.
 - Piercing missile warheads (`/missile silo warhead <pos> pierce`, or `pierce` on `/missile launch`):
   power 16/24/40/64 for T1–T4; a piercing launch needs at least its own radius of range.
+- `BlastBlockFilter` API: another mod can limit which blocks a blast may break (used by MineColonies'
+  buildings-only colony protection).
 - Test commands: `/aircraft`, `/airliner`, `/airship`, `/crane`, `/missile`, `/airdefence`, `/aviation`.
 
 Design and test reports are in `../26.3/design/` and `../26.3/MISSILES.md`. Checked here: a clean
@@ -94,6 +96,7 @@ tested on their branches (PRs #53–#56).
 On beta.9: a clean build; adds the infinite-missiles game rule (PR #57).
 On beta.10: a clean build; adds the piercing blast, tested on its branch (PR #58).
 On beta.11: a clean build; adds piercing missile warheads, tested on its branch (PR #59).
+On beta.12: a clean build; adds the per-block blast filter API, tested on its branch (PR #60).
 
 ## Stable builds
 
