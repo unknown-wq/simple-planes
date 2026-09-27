@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xyz.przemyk.simpleplanes.autopilot.Blast;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiPredicate;
@@ -79,7 +80,7 @@ public final class BlastBlockFilters {
         if (!BlastGuardSettings.isEnabled(level)) {
             return null;
         }
-        BiPredicate<BlockPos, BlockState> combined = null;
+        List<Checked> active = new ArrayList<>(1);
         for (BlastBlockFilter filter : FILTERS) {
             final BiPredicate<BlockPos, BlockState> only;
             try {
@@ -91,10 +92,46 @@ public final class BlastBlockFilters {
             if (only == null) {
                 continue;
             }
-            BiPredicate<BlockPos, BlockState> checked = new Checked(filter, only);
-            combined = combined == null ? checked : combined.and(checked);
+            active.add(new Checked(filter, only));
         }
-        return combined;
+        if (active.isEmpty()) {
+            return null;
+        }
+        return active.size() == 1 ? active.getFirst() : new All(active.toArray(new Checked[0]));
+    }
+
+    /**
+     * Several filters' predicates combined with AND. Its {@code toString} lists each filter's own, which is
+     * what the one log line per filtered blast prints.
+     */
+    private static final class All implements BiPredicate<BlockPos, BlockState> {
+        private final Checked[] all;
+
+        All(Checked[] all) {
+            this.all = all;
+        }
+
+        @Override
+        public boolean test(BlockPos pos, BlockState state) {
+            for (Checked one : all) {
+                if (!one.test(pos, state)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder out = new StringBuilder();
+            for (Checked one : all) {
+                if (!out.isEmpty()) {
+                    out.append("; ");
+                }
+                out.append(one);
+            }
+            return out.toString();
+        }
     }
 
     /**
@@ -124,6 +161,27 @@ public final class BlastBlockFilters {
                 LOGGER.error("Blast block filter {} threw on a block; ignoring it for the rest of this blast", filter.getClass().getName(), t);
                 return true;
             }
+        }
+
+        /**
+         * The filter's own description of this blast: the predicate's {@code toString} if it wrote one,
+         * otherwise the filter's, otherwise the filter's class. A filter is encouraged to override
+         * {@code toString} on the predicate it returns with what it decided, since that is the only line a
+         * server owner gets to see.
+         */
+        @Override
+        public String toString() {
+            String own = described(only);
+            if (own == null) {
+                own = described(filter);
+            }
+            return (own == null ? filter.getClass().getName() : own) + (broken ? " (threw; ignored)" : "");
+        }
+
+        /** {@code toString} of an object unless it is {@code Object}'s own class-and-hash default. */
+        private static @Nullable String described(Object o) {
+            String text = String.valueOf(o);
+            return text.equals(o.getClass().getName() + "@" + Integer.toHexString(o.hashCode())) ? null : text;
         }
     }
 }

@@ -55,6 +55,13 @@ import java.util.function.BiPredicate;
  * (a {@code java.lang.reflect.Proxy} returning a plain lambda) by a mod that does not compile against
  * this one.
  *
+ * <h2>Saying what it decided</h2>
+ * Every blast a filter narrows leaves one {@code Filtered blast:} INFO line in the log, repeated by
+ * {@code /blastguard status}: how many of the blocks the blast would have taken were allowed, solid and air
+ * apart, followed by each filter's predicate's {@code toString}. A predicate that overrides it with what the
+ * filter resolved for this blast (whose ground, which areas it spares) turns that line into a diagnosis; one
+ * that does not is named by its filter's class.
+ *
  * @see BlastBlockFilters
  * @see BlastGuard
  */
