@@ -39,6 +39,14 @@ normal warhead. A spent interceptor lands harmlessly. Design notes and measureme
 - **Unloading.** Sneak and right-click the silo with both hands empty: the missile comes back into the hand.
 - **Breaking** a loaded silo in survival drops the missile with the silo items.
 
+**Piercing warheads (this build)** (§1b, "Piercing warheads"): a strike silo can fire its tier's **piercing**
+warhead instead of the ordinary blast: the entity-only, armour-ignoring blast of the strike aircraft
+(`design/PIERCING-BLAST.md`), at power 16, 24, 40 and 64 for tiers 1 to 4 (radius 32, 48, 80 and 128). Not one
+block is broken and nothing is set on fire. It is a per-silo setting (`/missile silo warhead <silo> pierce|blast`,
+saved with the silo and shown in its status), and a single launch may override it (`/missile launch <silo>
+<target> pierce|blast`); the map can do both (§8, API 4). Missiles, recipes and interceptors are unchanged. Design
+notes and measurements: `design/MISSILE-PIERCE.md`.
+
 `/missile silo load` stays for operators and tests. Launching strike missiles is still a command. Intercepting
 missiles (as opposed to aircraft) is not implemented (see [Not done, planned next](#not-done-planned-next)).
 
@@ -57,7 +65,7 @@ Everything lives in its own packages. Each package is registered with one line f
 | Where | What |
 |---|---|
 | `missile/Missiles` | Registration of the entity type, the two silo blocks, the block entity, the silo item, the four missile items, the `missile_explosions` game rule and the creative tab entries, plus `init()`. Called once from `SimplePlanesMod.onInitialize` |
-| `missile/MissileTier` | Per-tier geometry, flight parameters and warhead (`warhead`, a `Blast`), and the shared constants |
+| `missile/MissileTier` | Per-tier geometry, flight parameters and warheads (`warhead` and `pierceWarhead`, each a `Blast`; `pierceMinRange()`), and the shared constants |
 | `missile/MissileEntity` | The missile |
 | `missile/LaunchSiloBlock`, `LaunchSiloCasingBlock` | The master block and the dependent blocks of the multiblock |
 | `missile/SiloStructure` | Multiblock geometry: placement checks, placement, upgrade, integrity check, dismantling and restoring the ground, break drops |
@@ -321,12 +329,15 @@ A strike missile that ends its flight `ARRIVED`, `TERRAIN` or `FELL` (it ran out
 something) detonates. The values are the `warhead` field of
 `MissileTier`, one `Blast` per tier, and nothing else holds them:
 
-| Tier | Power | Block damage | Fire | Damage radius (2 x power) |
-|---|---|---|---|---|
-| 1 | 2.0 | yes | no | 4 |
-| 2 | 4.0 (`Blast.DEFAULT_POWER`, TNT) | yes | no | 8 |
-| 3 | 8.0 | yes | yes | 16 |
-| 4 | 16.0 (`Blast.MAX_POWER`) | yes | yes | 32 |
+| Tier | Power | Block damage | Fire | Damage radius (2 x power) | Piercing warhead (`pierceWarhead`): power, radius, certain-death core | Piercing minimum range |
+|---|---|---|---|---|---|---|
+| 1 | 2.0 | yes | no | 4 | 16, 32, 8 | 32 (24 for a blast) |
+| 2 | 4.0 (`Blast.DEFAULT_POWER`, TNT) | yes | no | 8 | 24, 48, 12 | 48 (32) |
+| 3 | 8.0 | yes | yes | 16 | 40, 80, 20 | 80 (48) |
+| 4 | 16.0 (`Blast.MAX_POWER`) | yes | yes | 32 | 64 (`Blast.MAX_PIERCE_POWER`), 128, 32 | 128 (64) |
+
+The first five columns are the ordinary warhead, which a silo fires unless it is set to piercing; they are
+unchanged. The piercing columns are described below.
 
 This is the suggested table, unchanged:
 
@@ -370,6 +381,51 @@ need an unchanged world set it first.
 **The report** carries a `blast=` field (§4): what was applied and the time spent in the explode call, a
 `guarded:` prefix when a guard changed the blast, or `suppressed`, `inert` (the game rule is off) or `none` (the
 ending does not detonate).
+
+#### Piercing warheads
+
+The owner asked for missiles to get the piercing blast of the strike aircraft, "the tier 4 missile at the maximum,
+by analogy with the plane". Each tier has a second warhead, `MissileTier.pierceWarhead`, a `Blast` with
+`pierce = true`:
+
+- **What it does** is exactly the aircraft's piercing blast (`PiercingBlast`, `design/PIERCING-BLAST.md`): living
+  entities only, armour, enchantments and shields ignored, a death chance that depends on the distance from the
+  centre and on cover, no block broken, no fire. The damage type is `simpleplanes:piercing_blast`, tagged
+  `is_explosion`, so a MineColonies citizen hit by a lethal roll goes down CRITICAL rather than dying outright.
+- **The scale** is 16, 24, 40 and 64: radius 32, 48, 80 and 128. Tier 4 is `Blast.MAX_PIERCE_POWER`, the cap of the
+  aircraft. Tier 1 reaches as far as the ordinary tier 4 blast. The steps in between are close to geometric (x1.6 in
+  radius, x2.5 in area per tier). Reasons and the death-chance table per tier: `design/MISSILE-PIERCE.md`.
+- **The minimum range** of a piercing launch is the tier's minimum raised to the warhead's radius, so a silo is
+  never inside its own missile's radius: 32, 48, 80 and 128 blocks. A launch inside it is refused with the reason
+  (`target too close: 89.5 blocks from the silo; a tier 4 missile with the piercing warhead needs at least 128 and
+  at most 10000 blocks horizontally (the piercing warhead's radius; the silo must be outside it)`). The ordinary
+  warheads keep their minimums.
+- **How it is chosen.** The warhead is a launch-time setting of the silo, not a different missile:
+  - **The silo's setting**, `blast` (default) or `piercing`. `/missile silo warhead <silo> pierce|blast` sets it,
+    `/missile silo warhead <silo>` prints it. It is saved with the silo (`warhead`, absent in older saves and read
+    as `blast`), synced to clients with the rest of the block entity, kept through an upgrade, and shown in
+    `/missile silo status`, `/airdefence` status lines, the load message ("Tier 4 missile loaded (strike, piercing
+    warhead)"), the strike toggle message ("Silo mode: strike (launch to coordinates), piercing warhead") and the
+    map snapshot. It may be changed in any phase and in either mode: a launch under way keeps the warhead it was
+    started with (saved as `launch_pierce`, so a sequence that spans a restart keeps it too).
+  - **A one-launch override**: `/missile launch <silo> <target> pierce` or `... blast`. The setting is not changed.
+  - **From the map**, both (§8, API 4): a warhead with the launch, or a request that sets the silo's setting.
+- **Interceptors are unchanged.** An air-defence missile always carries the ordinary warhead of its tier, whatever
+  the setting. Aircraft are not living entities, so the piercing pass would not touch them. The status line of a
+  piercing AD silo says `interceptors keep the ordinary blast`.
+- **Everything else is shared** with the ordinary warhead: the centre (target point, or 0.05 blocks in front of the
+  terrain face), the endings that detonate (`ARRIVED`, `TERRAIN`, `FELL`; a piercing missile that runs out of fuel
+  lands with its piercing warhead), the `missile_explosions` game rule (off: `inert`, no blast, piercing or not)
+  and the blast guards, which are asked exactly as for an aircraft. MineColonies' colony guard defuses only blasts
+  that break blocks or start fires, so it hands a piercing blast back unchanged; `/missile guard`'s test guard now
+  keeps the `pierce` flag when it downgrades.
+- **The report** shows it: `blast=64.0,pierce,3.2ms`, or `inert(pierce)`, `suppressed(pierce)`, `none(pierce)`.
+  The telemetry line reads `#id T4 pierce t=...`. `PiercingBlast` writes its own line for every blast:
+  `piercing blast 64.0 (radius 128): 140 in range, ...`.
+
+The missile items are unchanged, and their recipes too: the tooltip lists both warheads ("Piercing warhead, if the
+silo is set to it: power 64, radius 128; entities only, armour ignored, no block broken"). A separate piercing
+missile item was considered and not built: see `design/MISSILE-PIERCE.md`.
 
 ### 1c. Air defence
 
@@ -644,7 +700,9 @@ Four items rather than one item with a tier component, because each tier then ha
 and stack, and none of them needs a component.
 
 **Tooltip:** the silo it fits ("Fits a tier 3 launch silo (2x2)"), the warhead ("Warhead: blast power 8 (TNT is 4),
-incendiary"), the range ("Range: 48 to 5000 blocks") and how to use it. The figures are read from `MissileTier`.
+incendiary"), the piercing warhead the silo may be set to ("Piercing warhead, if the silo is set to it: power 40,
+radius 80; entities only, armour ignored, no block broken"), the range ("Range: 48 to 5000 blocks") and how to use
+it. The figures are read from `MissileTier`.
 
 **Loading.** Use the item on **any part of a silo** (the top face in practice). The silo blocks pass it through
 (§1c), so vanilla calls `MissileItem#useOn`; sneaking with it reaches the same method. It works in both modes: an
@@ -841,8 +899,9 @@ horizontal range from the silo (T1 24–1200, T2 32–2500, T3 48–5000, T4 64�
 | `/missile silo load <pos>` | Loads a missile of the silo's tier without an item, for operators and tests. Players use the missile items (§1d). Refused if a missile is already loaded or a launch is under way | `/missile silo load 10 -20 20` |
 | `/missile silo unload <pos>` | Removes the loaded missile. No item is given | `/missile silo unload 10 -20 20` |
 | `/missile silo reset <pos>` | **Recovery.** Puts a busy silo back to idle with the hatch shut, whatever its phase. A missile not yet fired stays loaded. Prints what it was doing. The same thing happens on its own to a sequence that has not ticked for 600 game ticks (§1) | `/missile silo reset 0 -20 0` |
-| `/missile silo status <pos>` | Prints the tier, loaded or empty, the phase, the hatch, the mode, the cooldown, the launch count, the last missile id and the target, and flags a damaged structure | `/missile silo status 0 -20 0` |
-| `/missile launch <silo> <target>` | Starts the launch sequence toward the point `target` (x y z; integer x and z are centred on the block). Refused with the reason for anything in §1's check list | `/missile launch 0 -20 0 500 -19 0` |
+| `/missile silo status <pos>` | Prints the tier, loaded or empty, the phase, the hatch, the mode, the cooldown, the warhead setting (and the warhead of a launch under way when it differs), the launch count, the last missile id and the target, and flags a damaged structure | `/missile silo status 0 -20 0` |
+| `/missile silo warhead <pos> [pierce\|blast]` | Without a keyword, prints the silo's strike warhead setting. With one, sets it: `pierce` the tier's piercing warhead (entities only, armour ignored, no block broken; §1b), `blast` the ordinary one. Saved with the silo. Allowed in any phase and either mode; a launch under way keeps its warhead | `/missile silo warhead 10 -20 20 pierce` |
+| `/missile launch <silo> <target> [pierce\|blast]` | Starts the launch sequence toward the point `target` (x y z; integer x and z are centred on the block), with the silo's warhead setting, or with `pierce` / `blast` for this launch only. Refused with the reason for anything in §1's check list; a piercing launch needs the target at least the warhead's radius away (32, 48, 80, 128) | `/missile launch 0 -20 0 500 -19 0`, `/missile launch 10 -20 20 -350 -19 -300 pierce` |
 | `/missile list` | One telemetry line per missile in flight, with its fuel and motor state | `/missile list` |
 | `/missile report [count]` | The last `count` (default 10, max 64) flight reports since the server started | `/missile report 4` |
 | `/missile abort all` / `/missile abort <id>` | Ends one or all flights with the harmless puff and no warhead (outcome `ABORTED`) | `/missile abort 1445` |
@@ -921,11 +980,12 @@ The permissions are those of the parent commands (level 2).
 - For an AD missile, `target` and `miss` refer to the last lead point, and the line ends with
   `ad target=#<aircraft> hp=<health>/<max>|destroyed|gone closest=<fuse distance to the box> tvel=<measured
   aircraft speed> retargets=<n>`, read just after the blast.
-- `blast` is the warhead. It is `<power>[,blocks][,fire],<ms>`, where `ms` is the time spent in the explode call.
-  `guarded:` in front means a blast guard changed it. It can also read `suppressed` (a guard cancelled it),
-  `inert` (the game rule is off) or `none` (the ending does not detonate).
+- `blast` is the warhead. It is `<power>[,blocks][,fire][,pierce],<ms>`, where `ms` is the time spent in the
+  explode call. `guarded:` in front means a blast guard changed it. It can also read `suppressed` (a guard
+  cancelled it), `inert` (the game rule is off) or `none` (the ending does not detonate); a piercing missile adds
+  `(pierce)` to those three.
 
-**Telemetry line:** `#id Tn t=<ticks> <phase> pos=x,y,z spd=<b/t> pitch=<deg> agl=<height above ground>
+**Telemetry line:** `#id Tn [pierce] t=<ticks> <phase> pos=x,y,z spd=<b/t> pitch=<deg> agl=<height above ground>
 to_go=<horizontal> dist=<nose to target> flown=<path> fins=<0..1> booster=on|off|- stalls=<n> fuel=<left>/<budget>
 motor=boost|cruise|unpowered`. An AD missile shows the phase `pursuit`, and "target" is its current lead point. A
 burnt-out missile shows the phase `unpowered`. `motor` is `boost` in the tube, while the fins deploy, while
@@ -1494,7 +1554,7 @@ table, the causes and the test list are in `design/MISSILE-FUEL.md`.
 ## 8. Launching from the map
 
 A world map can show the silos, launch from them, and load or unload them. Simple Planes does not draw a map of
-its own. It answers map mods over five play payloads and offers a small client API,
+its own. It answers map mods over seven play payloads and offers a small client API,
 `xyz.przemyk.simpleplanes.api.map.AviationMap`.
 The first user is the world map in the minecolonies-fabric repository (`worldmap/26.3`, aviation tab). The same
 snapshot also carries airfields, helipads, shuttles and flights (see `AUTOPILOT.md` §9a).
@@ -1503,7 +1563,10 @@ The code is in `aviation/` (server side) and `api/map/` (client API and records)
 launch code is not touched. The map's paths end in the same calls as the commands:
 
 - a launch ends in `LaunchSiloBlockEntity#launch`, as `/missile launch` does, including a remote launch (§8h);
-- a load or unload ends in `LaunchSiloBlockEntity#load` / `#unload`, as `/missile silo load|unload` do.
+- a load or unload ends in `LaunchSiloBlockEntity#load` / `#unload`, as `/missile silo load|unload` do;
+- a warhead setting ends in `LaunchSiloBlockEntity#setWarhead`, as `/missile silo warhead` does, and a launch with a
+  warhead in `LaunchSiloBlockEntity#launch(level, target, pierce)`, as `/missile launch ... pierce|blast` does
+  (API 4, §8i).
 
 ### 8a. Who may launch, load and unload, and from where
 
@@ -1524,7 +1587,7 @@ The server handles a request (`AviationService.handleLaunch`) in this order and 
 | 5 | Silo chunk loaded (`level.isLoaded`). If not, the request becomes a remote launch (§8h). | (§8h) |
 | 6 | A silo is there (`SiloStructure.masterOf` plus the block entity). If not, the index entry is re-checked and dropped. | `there is no silo at x, y, z` |
 | 7 | A remote launch of this silo is not already loading its chunk | `silo at … cannot launch: busy (loading the silo's chunk)` |
-| 8 | `LaunchSiloBlockEntity#launch`: strike mode, idle, loaded, intact, hatch clear, min and max range, height | `silo at … cannot launch: <the silo's own reason>` |
+| 8 | `LaunchSiloBlockEntity#launch`: strike mode, idle, loaded, intact, hatch clear, min and max range (the piercing minimum for a piercing launch, §1b), height | `silo at … cannot launch: <the silo's own reason>` |
 
 Since protocol 3 a launch has no distance check: the silo may be anywhere in the dimension (§8h). Load and unload
 keep it (below).
@@ -1584,16 +1647,17 @@ After this, the missile's own terminal guidance takes over, and it dives on what
 
 ### 8c. Payloads
 
-Protocol `3`. Version 3 added the `pending` flag on the reply (remote launch, §8h). Version 2 added load and
-unload, the action on the reply, and the service and air-defence fields; version 1 had none of these.
-All five payloads are registered in `PayloadTypeRegistry` by the common initializer, so a dedicated server has
+Protocol `4`. Version 4 added the warhead fields on each silo and the two warhead requests (§8i). Version 3
+added the `pending` flag on the reply (remote launch, §8h). Version 2 added load and unload, the action on the
+reply, and the service and air-defence fields; version 1 had none of these.
+All seven payloads are registered in `PayloadTypeRegistry` by the common initializer, so a dedicated server has
 them. Both sides check `canSend` before sending. A vanilla client, or a client without Simple Planes, is never
 sent anything.
 
 The server also remembers the protocol each player's last snapshot request carried. It sends snapshots and
 replies only to a client that asked with the server's own version. A client of another version gets no
 clientbound bytes it would fail to decode, and the server logs this once:
-`[aviation] <player> asked with map protocol N, this server speaks 3; not answering`.
+`[aviation] <player> asked with map protocol N, this server speaks 4; not answering`.
 
 | Id | Direction | Content |
 |---|---|---|
@@ -1601,6 +1665,8 @@ clientbound bytes it would fail to decode, and the server logs this once:
 | `simpleplanes:aviation_snapshot` | S → C | `AviationSnapshot`: dimension, game time, near radius, `launchPermitted`, snapshot radius, airfields, helipads, routes (shuttles), flights, silos |
 | `simpleplanes:aviation_launch` | C → S | silo `BlockPos`, target `x` (var int), `y` (int, may be `SURFACE`), `z` (var int) |
 | `simpleplanes:aviation_silo` | C → S | silo `BlockPos`, action (var int: `SiloAction` ordinal, `LOAD` = 1 or `UNLOAD` = 2; `LAUNCH` is refused) |
+| `simpleplanes:aviation_launch_warhead` | C → S | the `aviation_launch` fields, then `piercing` (boolean): a launch with the warhead of this one launch (§8i). A payload of its own, so the older launch request keeps its exact bytes and a server without it is simply not sent one. Answered like `aviation_launch` |
+| `simpleplanes:aviation_warhead` | C → S | silo `BlockPos`, `piercing` (boolean): set the silo's warhead (§8i). No `LaunchResult`; the answer is the action-bar line and a fresh snapshot |
 | `simpleplanes:aviation_launch_result` | S → C | `LaunchResult`: silo, accepted, message (`Component`), target x/y/z, action (`SiloAction` ordinal), pending (boolean). It answers every silo request and is followed by a fresh snapshot, so the map shows the hatch opening or the new load without waiting for its next poll. A remote launch is answered twice: first `pending` (not accepted, "loading the chunk…"), then the final accepted or refused reply (§8h). |
 
 **Snapshot limits.** The lists cover a 12000-block horizontal radius around the player: the tier 4 range plus a
@@ -1627,7 +1693,10 @@ margin. Each list is sorted by distance and capped at 128 airfields, 128 helipad
 
   Detection is a 3D radius around the silo mouth; a map draws it as a horizontal circle. The engagement range is
   the interceptor's motor path, so it is an upper bound on how far from the silo an intercept can happen, not a
-  sharp edge. Both are sent for every silo, in either mode, so a map never hard-codes them.
+  sharp edge. Both are sent for every silo, in either mode, so a map never hard-codes them;
+- since protocol 4, `piercing` (the silo's warhead setting; from the index when the chunk is not loaded),
+  `pierceMinRange` (32, 48, 80, 128: the minimum range of a piercing launch) and `pierceRadius` (32, 48, 80, 128:
+  the piercing warhead's radius). `minRange` stays the ordinary warhead's minimum.
 
 `usable` answers "would the server accept a launch right now", leaving out permission and the target. It gives
 the same answer as checks 4 to 8. Since protocol 3 it does not depend on distance, and a silo in an unloaded chunk
@@ -1639,7 +1708,9 @@ permission and the silo's own state (loaded, busy, damaged). It is true for air-
 
 ### 8d. Client API
 
-`AviationMap` has `API_VERSION = 3`. Version 3 added `LaunchResult.pending()` and the remote-launch meaning of
+`AviationMap` has `API_VERSION = 4`. Version 4 added the warhead (§8i): `canChooseWarhead()`,
+`requestLaunch(silo, x, y, z, piercing)`, `requestWarhead(silo, piercing)`, and the `piercing`, `pierceMinRange`
+and `pierceRadius` fields of `AviationSnapshot.Silo` (whose API 3 constructor is kept). Version 3 added `LaunchResult.pending()` and the remote-launch meaning of
 `AviationSnapshot.Silo.usable()` (any distance, unloaded chunks). Version 2 added load and unload, `SiloAction`,
 the action on `LaunchResult`, and the service and air-defence fields on `AviationSnapshot.Silo`. All methods are
 called on the client thread.
@@ -1655,6 +1726,9 @@ pending reply as a refusal with the "loading the chunk" text, followed by the re
 | `canService()` | The server also takes load and unload requests. |
 | `requestSnapshot()` / `requestLaunch(silo, x, y, z)` | Send a request. Both return false when nothing could be sent. |
 | `requestLoad(silo)` / `requestUnload(silo)` | Send a load or unload request (§8a). Both return false when nothing could be sent. |
+| `canChooseWarhead()` | The server also takes the two warhead requests (API 4). |
+| `requestLaunch(silo, x, y, z, piercing)` | A launch with the warhead of this one launch: `true` piercing, `false` the ordinary blast, whatever the silo is set to (§8i). Returns false, sending nothing, when `canChooseWarhead()` is false. |
+| `requestWarhead(silo, piercing)` | Sets the silo's own warhead (§8i). Returns false when nothing could be sent. |
 | `latest()` / `lastResult()` | The last snapshot, and the last answer to any silo request, on this connection, or null. Both are cleared on disconnect. `LaunchResult.action()` says which request was answered. |
 | `addListener` / `removeListener` | `Listener.onSnapshot`, `Listener.onLaunchResult` |
 | `SURFACE` | "Let the server find the surface" (§8b). |
@@ -1666,7 +1740,8 @@ so that it runs without Simple Planes. The world map does this in `AviationBridg
 
 The server cannot list silos in unloaded chunks from the world. So it keeps a per-dimension `SavedData`,
 `simpleplanes:silos` (for the overworld, `<world>/dimensions/minecraft/overworld/data/simpleplanes/silos.dat`).
-It holds the master position, tier, mode, loaded state and the game time of the last sighting.
+It holds the master position, tier, mode, loaded state, warhead setting (`piercing`, absent in older files and
+read as false) and the game time of the last sighting.
 
 The index uses Fabric events only. There are no hooks in the silo classes.
 
@@ -1691,7 +1766,8 @@ Events are queued and handled in the level tick, never mid-chunk-promotion. A dr
 | `/aviation index` | Lists the index for the current dimension. |
 | `/aviation index sweep` | Runs a sweep now and reports how many entries were dropped. |
 | `/aviation snapshot [<at> [op\|nonop]]` | Prints what a snapshot would hold, for the executor or for a test player at `<at>`. |
-| `/aviation test launch <at> <silo> <tx> <tz> [op\|nonop [y]]` | Runs the real launch handler for a test player standing at `<at>`, and prints the answer (`ACCEPTED`, `REFUSED`, or `PENDING` for a remote launch; its outcome is in the log). |
+| `/aviation test launch <at> <silo> <tx> <tz> [op\|nonop [y]] [pierce\|blast]` | Runs the real launch handler for a test player standing at `<at>`, and prints the answer (`ACCEPTED`, `REFUSED`, or `PENDING` for a remote launch; its outcome is in the log). With `pierce` or `blast` it is the API 4 launch with a warhead (§8i), the handler `aviation_launch_warhead` calls. |
+| `/aviation test warhead <at> <silo> blast\|pierce [op\|nonop]` | The handler of the map's warhead setting request (§8i); prints `SET` or `REFUSED` and the action-bar line. |
 | `/aviation test load\|unload <at> <silo> [op\|nonop]` | The same for the load and unload handler. |
 | `/aviation test resetlimits` | Clears the rate limits. |
 
@@ -1813,6 +1889,31 @@ Before each run `execute if loaded` said `Test failed` for the silo and `forcelo
 
 Not reached in a test: the 100-tick timeout. On these worlds the chunk was always ticking one tick after the
 ticket was added.
+
+### 8i. Warheads from the map (API 4)
+
+A map can show and choose the strike warhead (§1b, "Piercing warheads") in two ways; the world map does neither
+yet.
+
+- **Show it.** `AviationSnapshot.Silo.piercing()` is the silo's setting, `pierceMinRange()` the minimum range of a
+  piercing launch and `pierceRadius()` its radius, for a ring around the target.
+- **One launch.** `AviationMap.requestLaunch(silo, x, y, z, piercing)` sends `aviation_launch_warhead`. The server
+  runs `AviationService.handleLaunch(player, request, piercing)`: every check of §8a in the same order, and a remote
+  launch (§8h) carries the warhead until the silo's chunk has loaded. The index pre-check of a remote launch uses
+  the requested warhead's minimum range. The answer is a `LaunchResult` as for any launch; a piercing success
+  reads `Launch: tier N missile, piercing warhead, from … to … (N blocks)` and is logged with `warhead piercing
+  (this launch)`. The four-argument `requestLaunch` is unchanged and fires the silo's setting.
+- **The setting.** `AviationMap.requestWarhead(silo, piercing)` sends `aviation_warhead`. The server
+  (`AviationService.handleWarhead`) checks operator permission, the shared rate limit, world bounds, that the
+  silo's chunk is loaded (any distance) and that a silo is there, then calls `setWarhead`, updates the index and
+  answers on the action bar (`Silo at x, y, z: piercing warhead (radius 128, entities only)` or `Warhead not
+  changed: <reason>`, for example `the silo's chunk is not loaded; choose the warhead with the launch instead`) and
+  with a fresh snapshot. It sends no `LaunchResult`, so `SiloAction` has no new constant and a map's exhaustive
+  `switch` over it still compiles.
+
+A map built for API 3 keeps working against API 4: every method, record accessor and the old `Silo` constructor
+are unchanged; it only fires the silo's setting and cannot see it. A client and server of different protocol
+versions do not talk at all (§8c).
 
 ## Not done, planned next
 

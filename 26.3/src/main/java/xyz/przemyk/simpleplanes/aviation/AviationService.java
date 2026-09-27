@@ -107,6 +107,8 @@ public final class AviationService {
         PayloadTypeRegistry.serverboundPlay().register(AviationPayloads.SnapshotRequest.TYPE, AviationPayloads.SnapshotRequest.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(AviationPayloads.LaunchRequest.TYPE, AviationPayloads.LaunchRequest.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(AviationPayloads.SiloRequest.TYPE, AviationPayloads.SiloRequest.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(AviationPayloads.WarheadLaunchRequest.TYPE, AviationPayloads.WarheadLaunchRequest.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(AviationPayloads.WarheadRequest.TYPE, AviationPayloads.WarheadRequest.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(AviationPayloads.Snapshot.TYPE, AviationPayloads.Snapshot.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(AviationPayloads.LaunchReply.TYPE, AviationPayloads.LaunchReply.CODEC);
 
@@ -116,6 +118,12 @@ public final class AviationService {
             (payload, context) -> reply(context.player(), handleLaunch(context.player(), payload)));
         ServerPlayNetworking.registerGlobalReceiver(AviationPayloads.SiloRequest.TYPE,
             (payload, context) -> reply(context.player(), handleService(context.player(), payload)));
+        ServerPlayNetworking.registerGlobalReceiver(AviationPayloads.WarheadLaunchRequest.TYPE,
+            (payload, context) -> reply(context.player(), handleLaunch(context.player(), payload.launch(), payload.piercing())));
+        ServerPlayNetworking.registerGlobalReceiver(AviationPayloads.WarheadRequest.TYPE, (payload, context) -> {
+            handleWarhead(context.player(), payload);
+            sendSnapshot(context.player());
+        });
 
         ServerBlockEntityEvents.BLOCK_ENTITY_LOAD.register((be, level) -> {
             if (be instanceof LaunchSiloBlockEntity) PENDING.add(new Pending(level.dimension(), be.getBlockPos().immutable(), null));
@@ -306,6 +314,7 @@ public final class AviationService {
         MissileTier tier = be != null ? be.tier() : MissileTier.of(Mth.clamp(e.tier(), 1, 4));
         boolean strike = be != null ? be.mode() == LaunchSiloBlockEntity.Mode.MANUAL : e.strike();
         boolean loaded = be != null ? be.hasMissile() : e.loaded() || level.getGameRules().get(Missiles.INFINITE);
+        boolean piercing = be != null ? be.warhead().pierce() : e.piercing();
         String phase = be != null ? be.phase().name().toLowerCase(Locale.ROOT) : "unknown";
         Vec3 mouth = SiloStructure.mouth(pos, tier);
         double distance = player.position().distanceTo(mouth);
@@ -319,7 +328,7 @@ public final class AviationService {
             (int) tier.minRange, (int) tier.maxRange, distance, problem == null,
             problem == null ? ready : problem,
             service == null, service == null ? AviationPayloads.text("status.ready", "ready") : service,
-            ad.detectionRadius(), ad.range);
+            ad.detectionRadius(), ad.range, piercing, (int) tier.pierceMinRange(), tier.pierceRadius());
     }
 
     /**
@@ -419,6 +428,15 @@ public final class AviationService {
      * "pending" now and the real answer once the chunk has loaded.
      */
     public static LaunchResult handleLaunch(ServerPlayer player, AviationPayloads.LaunchRequest request) {
+        return handleLaunch(player, request, null);
+    }
+
+    /**
+     * {@link #handleLaunch(ServerPlayer, AviationPayloads.LaunchRequest)} with the warhead of this one launch:
+     * {@code pierce} true the tier's piercing warhead, false its ordinary blast, null the silo's own setting. A remote
+     * launch carries it until the silo's chunk has loaded.
+     */
+    public static LaunchResult handleLaunch(ServerPlayer player, AviationPayloads.LaunchRequest request, @Nullable Boolean pierce) {
         ServerLevel level = (ServerLevel) player.level();
         Component border = level.getWorldBorder().isWithinBounds(request.x() + 0.5, request.z() + 0.5) ? null
             : AviationPayloads.text("refuse.border", "the target is outside the world border");
@@ -428,11 +446,11 @@ public final class AviationService {
             return refused(player, at.master(), SiloAction.LAUNCH, AviationPayloads.text("refuse.silo", "silo at %s cannot launch: %s",
                 at.master().toShortString(), "busy (loading the silo's chunk)"));
         }
-        if (at.be() == null) return RemoteLaunch.start(level, player, at.master(), request);
+        if (at.be() == null) return RemoteLaunch.start(level, player, at.master(), request, pierce);
         LaunchSiloBlockEntity be = at.be();
         double distance = player.position().distanceTo(SiloStructure.mouth(at.master(), be.tier()));
         return launchFrom(level, player, player.getName().getString(), be, at.master(), request.x(), request.y(), request.z(),
-            distance > NEAR_RADIUS ? "remote, chunk already loaded" : null);
+            pierce, distance > NEAR_RADIUS ? "remote, chunk already loaded" : null);
     }
 
     /**
@@ -441,25 +459,37 @@ public final class AviationService {
      * the note the audit line carries.
      */
     static LaunchResult launchFrom(ServerLevel level, @Nullable ServerPlayer player, String name, LaunchSiloBlockEntity be,
-                                   BlockPos master, int x, int y, int z, @Nullable String remote) {
+                                   BlockPos master, int x, int y, int z, @Nullable Boolean pierce, @Nullable String remote) {
         MissileTier tier = be.tier();
         Vec3 mouth = SiloStructure.mouth(master, tier);
         Vec3 target = new Vec3(x + 0.5, targetY(level, x, z, y), z + 0.5);
-        String problem = be.launch(level, target);
+        String problem = be.launch(level, target, pierce);
         SiloIndex.get(level).update(be, level.getGameTime());
         if (problem != null) {
             return refused(player, name, master, SiloAction.LAUNCH, AviationPayloads.text("refuse.silo", "silo at %s cannot launch: %s",
                 master.toShortString(), problem));
         }
         double range = Math.hypot(target.x - mouth.x, target.z - mouth.z);
-        LOGGER.info("[aviation] {} launched silo {} T{} from the map at {} {} {} ({} blocks){}", name,
+        boolean piercing = be.launchPiercing();
+        LOGGER.info("[aviation] {} launched silo {} T{} from the map at {} {} {} ({} blocks), warhead {}{}{}", name,
             master.toShortString(), tier.tier, fmt(target.x), fmt(target.y), fmt(target.z), fmt(range),
+            LaunchSiloBlockEntity.Warhead.of(piercing).label, pierce == null ? "" : " (this launch)",
             remote == null ? "" : " [" + remote + "]");
-        Component message = remote == null
-            ? AviationPayloads.text("launched", "Launch: tier %s missile from %s to %s %s %s (%s blocks)",
-                tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range))
-            : AviationPayloads.text("launched_remote", "Remote launch: tier %s missile from %s to %s %s %s (%s blocks)",
-                tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range));
+        Component message;
+        if (piercing) {
+            message = remote == null
+                ? AviationPayloads.text("launched_pierce", "Launch: tier %s missile, piercing warhead, from %s to %s %s %s (%s blocks)",
+                    tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range))
+                : AviationPayloads.text("launched_remote_pierce",
+                    "Remote launch: tier %s missile, piercing warhead, from %s to %s %s %s (%s blocks)",
+                    tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range));
+        } else {
+            message = remote == null
+                ? AviationPayloads.text("launched", "Launch: tier %s missile from %s to %s %s %s (%s blocks)",
+                    tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range))
+                : AviationPayloads.text("launched_remote", "Remote launch: tier %s missile from %s to %s %s %s (%s blocks)",
+                    tier.tier, master.toShortString(), fmt(target.x), fmt(target.y), fmt(target.z), (int) Math.round(range));
+        }
         if (player != null) player.sendOverlayMessage(message.copy().withStyle(ChatFormatting.GREEN));
         return new LaunchResult(master, true, message, target.x, target.y, target.z, SiloAction.LAUNCH);
     }
@@ -503,6 +533,70 @@ public final class AviationService {
             : AviationPayloads.text("unloaded", "Unloaded the tier %s missile from the silo at %s", tier.tier, master.toShortString());
         player.sendOverlayMessage(message.copy().withStyle(ChatFormatting.GREEN));
         return new LaunchResult(master, true, message, 0, 0, 0, action);
+    }
+
+    /**
+     * Sets a silo's strike warhead from the map, like {@code /missile silo warhead}. Checks: operator permission, the
+     * shared rate limit, the silo's chunk loaded (any distance), a silo there. Allowed in either mode and any phase: a
+     * launch under way keeps its warhead. The answer goes to the action bar and the log; the caller sends a snapshot.
+     *
+     * @return the silo's master position when the setting was applied, else null.
+     */
+    public static @Nullable BlockPos handleWarhead(ServerPlayer player, AviationPayloads.WarheadRequest request) {
+        ServerLevel level = (ServerLevel) player.level();
+        BlockPos requested = request.silo().immutable();
+        String label = LaunchSiloBlockEntity.Warhead.of(request.piercing()).label;
+        Component problem = null;
+        LaunchSiloBlockEntity be = null;
+        BlockPos master = null;
+        long now = Util.getMillis();
+        Long last = LAST_LAUNCH.get(player.getUUID());
+        if (!permitted(player)) {
+            problem = AviationPayloads.text("refuse.permission_warhead",
+                "operator permission is required to set the warhead (the same as /missile silo warhead)");
+        } else if (last != null && now - last < LAUNCH_INTERVAL_MS) {
+            LAST_LAUNCH.put(player.getUUID(), now);
+            problem = AviationPayloads.text("refuse.rate", "too many silo requests; wait a second");
+        } else {
+            LAST_LAUNCH.put(player.getUUID(), now);
+            if (!level.isInWorldBounds(requested)) {
+                problem = AviationPayloads.text("refuse.no_silo", "there is no silo at %s", requested.toShortString());
+            } else if (!level.isLoaded(requested)) {
+                problem = AviationPayloads.text("refuse.warhead_unloaded",
+                    "the silo's chunk is not loaded; choose the warhead with the launch instead");
+            } else {
+                master = SiloStructure.masterOf(level, requested);
+                if (master != null && level.getBlockEntity(master) instanceof LaunchSiloBlockEntity silo) {
+                    be = silo;
+                } else {
+                    problem = AviationPayloads.text("refuse.no_silo", "there is no silo at %s", requested.toShortString());
+                }
+            }
+        }
+        if (problem != null || be == null) {
+            Component message = AviationPayloads.text("refused_warhead", "Warhead not changed: %s", problem);
+            player.sendOverlayMessage(message.copy().withStyle(ChatFormatting.RED));
+            LOGGER.info("[aviation] warhead request ({}) by {} for silo {} refused: {}", label, player.getName().getString(),
+                requested.toShortString(), problem == null ? "" : problem.getString());
+            return null;
+        }
+        be.setWarhead(LaunchSiloBlockEntity.Warhead.of(request.piercing()));
+        SiloIndex.get(level).update(be, level.getGameTime());
+        LOGGER.info("[aviation] {} set the warhead of silo {} T{} to {} from the map", player.getName().getString(),
+            master.toShortString(), be.tier().tier, label);
+        Component message = request.piercing()
+            ? AviationPayloads.text("warhead_pierce", "Silo at %s: piercing warhead (radius %s, entities only)",
+                master.toShortString(), (int) be.tier().pierceRadius())
+            : AviationPayloads.text("warhead_blast", "Silo at %s: ordinary blast warhead", master.toShortString());
+        player.sendOverlayMessage(message.copy().withStyle(ChatFormatting.GREEN));
+        return master;
+    }
+
+    /** A fresh snapshot to a map client that asked with the current protocol; nothing to anybody else. */
+    static void sendSnapshot(ServerPlayer player) {
+        if (player instanceof FakePlayer || !CURRENT.contains(player.getUUID())
+            || !ServerPlayNetworking.canSend(player, AviationPayloads.Snapshot.TYPE)) return;
+        ServerPlayNetworking.send(player, new AviationPayloads.Snapshot(snapshot(player)));
     }
 
     /**

@@ -73,13 +73,20 @@ public final class MissileCommand {
                     .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(c -> load(c, false))))
                 .then(Commands.literal("status")
                     .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(MissileCommand::status)))
+                .then(Commands.literal("warhead")
+                    .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                        .executes(c -> warhead(c, null))
+                        .then(Commands.literal("blast").executes(c -> warhead(c, LaunchSiloBlockEntity.Warhead.BLAST)))
+                        .then(Commands.literal("pierce").executes(c -> warhead(c, LaunchSiloBlockEntity.Warhead.PIERCING)))))
                 .then(Commands.literal("reset")
                     .then(Commands.argument("pos", BlockPosArgument.blockPos()).executes(MissileCommand::reset))));
 
             root.then(Commands.literal("launch")
                 .then(Commands.argument("silo", BlockPosArgument.blockPos())
                     .then(Commands.argument("target", Vec3Argument.vec3())
-                        .executes(MissileCommand::launch))));
+                        .executes(c -> launch(c, null))
+                        .then(Commands.literal("pierce").executes(c -> launch(c, true)))
+                        .then(Commands.literal("blast").executes(c -> launch(c, false))))));
 
             root.then(Commands.literal("list").executes(MissileCommand::list));
             root.then(Commands.literal("report")
@@ -329,21 +336,48 @@ public final class MissileCommand {
         return ok(c, be.describe() + (intact ? "" : ", STRUCTURE DAMAGED"));
     }
 
-    private static int launch(CommandContext<CommandSourceStack> c) {
+    /** {@code pierce}: the warhead of this one launch (true piercing, false blast), or null for the silo's setting. */
+    private static int launch(CommandContext<CommandSourceStack> c, @Nullable Boolean pierce) {
         ServerLevel level = c.getSource().getLevel();
         BlockPos pos = BlockPosArgument.getBlockPos(c, "silo");
         LaunchSiloBlockEntity be = resolve(level, pos);
         if (be == null) return noSilo(c, level, pos);
         Vec3 target = Vec3Argument.getVec3(c, "target");
-        String problem = be.launch(level, target);
+        String problem = be.launch(level, target, pierce);
         if (problem != null) return fail(c, "Silo at " + be.getBlockPos().toShortString() + " cannot launch: " + problem + ".");
         MissileTier tier = be.tier();
         Vec3 mouth = SiloStructure.mouth(be.getBlockPos(), tier);
-        ok(c, String.format(Locale.ROOT, "Silo at %s: hatch opening, tier %d missile to %s (%.1f blocks).",
-            be.getBlockPos().toShortString(), tier.tier, MissileTracker.fmt(target), Math.hypot(target.x - mouth.x, target.z - mouth.z)));
+        String warhead = be.launchPiercing()
+            ? String.format(Locale.ROOT, "piercing warhead %.0f, radius %.0f", tier.pierceWarhead.power(), tier.pierceRadius())
+            : String.format(Locale.ROOT, "blast %.0f", tier.warhead.power());
+        ok(c, String.format(Locale.ROOT, "Silo at %s: hatch opening, tier %d missile (%s%s) to %s (%.1f blocks).",
+            be.getBlockPos().toShortString(), tier.tier, warhead, pierce == null ? "" : ", this launch only",
+            MissileTracker.fmt(target), Math.hypot(target.x - mouth.x, target.z - mouth.z)));
         if (LaunchSiloBlockEntity.frozen(level))
             fail(c, "The game is frozen (/tick freeze): the hatch won't move and the missile won't leave until /tick unfreeze.");
         return 1;
+    }
+
+    /** Prints the silo's strike warhead setting, or sets it ({@code next} non-null). */
+    private static int warhead(CommandContext<CommandSourceStack> c, LaunchSiloBlockEntity.@Nullable Warhead next) {
+        ServerLevel level = c.getSource().getLevel();
+        BlockPos pos = BlockPosArgument.getBlockPos(c, "pos");
+        LaunchSiloBlockEntity be = resolve(level, pos);
+        if (be == null) return noSilo(c, level, pos);
+        String at = "Silo at " + be.getBlockPos().toShortString();
+        if (next == null) return ok(c, at + ": warhead " + be.warheadLine() + ".");
+        boolean changed = be.warhead() != next;
+        be.setWarhead(next);
+        if (changed) {
+            MissileTracker.LOGGER.info("[silo] {} warhead set to {} by {}", be.getBlockPos().toShortString(), next.label,
+                c.getSource().getTextName());
+        }
+        MissileTier tier = be.tier();
+        String busy = be.phase() != LaunchSiloBlockEntity.Phase.IDLE && be.phase() != LaunchSiloBlockEntity.Phase.COOLDOWN
+            ? " The launch under way keeps its own warhead." : "";
+        return ok(c, at + ": warhead " + (changed ? "set to " : "already ") + be.warheadLine()
+            + (next.pierce() ? String.format(Locale.ROOT, "; strike targets at least %.0f blocks away", tier.pierceMinRange()) : "")
+            + "." + busy);
     }
 
     /** Op recovery: puts a silo back to idle whatever its phase; a missile not yet fired stays loaded. */

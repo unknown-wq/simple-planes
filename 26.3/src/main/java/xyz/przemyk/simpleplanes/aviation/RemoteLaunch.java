@@ -56,15 +56,18 @@ final class RemoteLaunch {
         final int x;
         final int y;
         final int z;
+        /** The warhead of this launch, or null for the silo's own setting (read once the chunk has loaded). */
+        final @Nullable Boolean pierce;
         int ticks;
 
-        Job(UUID player, String name, BlockPos silo, int x, int y, int z) {
+        Job(UUID player, String name, BlockPos silo, int x, int y, int z, @Nullable Boolean pierce) {
             this.player = player;
             this.name = name;
             this.silo = silo;
             this.x = x;
             this.y = y;
             this.z = z;
+            this.pierce = pierce;
         }
     }
 
@@ -80,7 +83,8 @@ final class RemoteLaunch {
      * Starts a remote launch of the indexed silo at {@code pos}, whose chunk is not loaded. Permission, rate limit
      * and world border are already checked. Returns the pending answer, or a refusal.
      */
-    static LaunchResult start(ServerLevel level, ServerPlayer player, BlockPos pos, AviationPayloads.LaunchRequest request) {
+    static LaunchResult start(ServerLevel level, ServerPlayer player, BlockPos pos, AviationPayloads.LaunchRequest request,
+                              @Nullable Boolean pierce) {
         SiloIndex index = SiloIndex.peek(level);
         SiloIndex.Entry entry = index == null ? null : index.get(pos);
         if (entry == null) {
@@ -92,12 +96,14 @@ final class RemoteLaunch {
         if (pending(level, pos)) problem = "busy (loading the silo's chunk)";
         else if (!entry.strike()) problem = "the silo is in air-defence mode (last known state)";
         else if (!entry.loaded() && !level.getGameRules().get(Missiles.INFINITE)) problem = "no missile loaded (last known state)";
-        else problem = LaunchSiloBlockEntity.rangeProblem(pos, tier, new Vec3(request.x() + 0.5, 0, request.z() + 0.5));
+        // the warhead as far as the index knows; the silo is asked again once its chunk has loaded
+        else problem = LaunchSiloBlockEntity.rangeProblem(pos, tier, new Vec3(request.x() + 0.5, 0, request.z() + 0.5),
+            pierce != null ? pierce : entry.piercing());
         if (problem != null) {
             return AviationService.refused(player, pos, SiloAction.LAUNCH, AviationPayloads.text("refuse.silo",
                 "silo at %s cannot launch: %s", pos.toShortString(), problem));
         }
-        Job job = new Job(player.getUUID(), player.getName().getString(), pos, request.x(), request.y(), request.z());
+        Job job = new Job(player.getUUID(), player.getName().getString(), pos, request.x(), request.y(), request.z(), pierce);
         JOBS.computeIfAbsent(level.dimension(), k -> new LinkedHashMap<>()).put(pos, job);
         ticket(level, pos);
         double distance = player.position().distanceTo(SiloStructure.mouth(pos, tier));
@@ -138,7 +144,7 @@ final class RemoteLaunch {
             }
             return refuse(level, job, player, "there is no silo at " + job.silo.toShortString() + " any more");
         }
-        return AviationService.launchFrom(level, player, job.name, be, job.silo, job.x, job.y, job.z,
+        return AviationService.launchFrom(level, player, job.name, be, job.silo, job.x, job.y, job.z, job.pierce,
             "remote, chunk loaded in " + job.ticks + " ticks");
     }
 

@@ -52,7 +52,8 @@ final class MissileTestGuard implements BlastGuard {
         for (Zone zone : ZONES) {
             if (zone.dimension() != level.dimension() || !zone.box().intersects(reach)) continue;
             if (zone.suppress()) return null;
-            blast = new Blast(blast.power(), false, false);
+            // keeps a piercing blast piercing: it has no block damage or fire to take away
+            blast = new Blast(blast.power(), false, false, blast.pierce());
         }
         return blast;
     }

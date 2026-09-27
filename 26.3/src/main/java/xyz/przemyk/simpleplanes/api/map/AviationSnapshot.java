@@ -78,9 +78,33 @@ public record AviationSnapshot(String dimension, long gameTime, int nearRadius, 
      *                    {@code InterceptorSpec#detectionRadius}; meaningful in either mode
      * @param engagementRange air-defence interceptor motor path of the tier ({@code InterceptorSpec#range}): how far
      *                    an interceptor can fly, so an upper bound on how far from the silo it can engage
+     * @param piercing    the silo's strike warhead setting: true for the tier's piercing warhead (entities only, armour
+     *                    ignored, no block broken), false for its ordinary blast. A launch without a warhead
+     *                    ({@link AviationMap#requestLaunch(BlockPos, int, int, int)}) uses it. Since API 4; false from
+     *                    the index's last known state when the chunk is not loaded and the silo was never seen with it
+     * @param pierceMinRange strike minimum horizontal range of a piercing launch: {@code minRange} raised to
+     *                    {@code pierceRadius}, so the silo is outside its own missile's radius. Since API 4
+     * @param pierceRadius radius of the tier's piercing warhead ({@code 2 x power}); nothing beyond it is touched,
+     *                    death is certain inside a quarter of it. Since API 4
      */
     public record Silo(BlockPos pos, int tier, boolean strike, boolean loaded, String phase, boolean chunkLoaded,
                        double mouthX, double mouthZ, int minRange, int maxRange, double distance,
                        boolean usable, Component status, boolean serviceable, Component serviceStatus,
-                       double detectionRadius, double engagementRange) {}
+                       double detectionRadius, double engagementRange, boolean piercing, int pierceMinRange,
+                       double pierceRadius) {
+
+        /** The API 3 shape, without the warhead fields: an ordinary-blast silo. Kept for callers built against it. */
+        public Silo(BlockPos pos, int tier, boolean strike, boolean loaded, String phase, boolean chunkLoaded,
+                    double mouthX, double mouthZ, int minRange, int maxRange, double distance,
+                    boolean usable, Component status, boolean serviceable, Component serviceStatus,
+                    double detectionRadius, double engagementRange) {
+            this(pos, tier, strike, loaded, phase, chunkLoaded, mouthX, mouthZ, minRange, maxRange, distance, usable, status,
+                serviceable, serviceStatus, detectionRadius, engagementRange, false, minRange, 0.0);
+        }
+
+        /** Minimum horizontal range of a launch with this warhead: {@link #pierceMinRange} or {@link #minRange}. */
+        public int minRange(boolean piercing) {
+            return piercing ? pierceMinRange : minRange;
+        }
+    }
 }

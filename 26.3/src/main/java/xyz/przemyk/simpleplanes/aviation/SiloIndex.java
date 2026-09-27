@@ -30,18 +30,22 @@ import java.util.Map;
  */
 public final class SiloIndex extends SavedData {
 
-    /** One silo as last seen. {@code pos} is the master block. */
-    public record Entry(BlockPos pos, int tier, boolean strike, boolean loaded, long seen) {
+    /**
+     * One silo as last seen. {@code pos} is the master block. {@code piercing} is its strike warhead setting
+     * ({@link LaunchSiloBlockEntity#warhead()}); false in indexes written before it existed.
+     */
+    public record Entry(BlockPos pos, int tier, boolean strike, boolean loaded, long seen, boolean piercing) {
         static final Codec<Entry> CODEC = RecordCodecBuilder.create(i -> i.group(
             BlockPos.CODEC.fieldOf("pos").forGetter(Entry::pos),
             Codec.INT.fieldOf("tier").forGetter(Entry::tier),
             Codec.BOOL.optionalFieldOf("strike", true).forGetter(Entry::strike),
             Codec.BOOL.optionalFieldOf("loaded", false).forGetter(Entry::loaded),
-            Codec.LONG.optionalFieldOf("seen", 0L).forGetter(Entry::seen)
+            Codec.LONG.optionalFieldOf("seen", 0L).forGetter(Entry::seen),
+            Codec.BOOL.optionalFieldOf("piercing", false).forGetter(Entry::piercing)
         ).apply(i, Entry::new));
 
         boolean sameState(Entry other) {
-            return tier == other.tier && strike == other.strike && loaded == other.loaded;
+            return tier == other.tier && strike == other.strike && loaded == other.loaded && piercing == other.piercing;
         }
     }
 
@@ -89,7 +93,8 @@ public final class SiloIndex extends SavedData {
     /** Records the silo's current state. Marks the file dirty only when something persistent changed. */
     public void update(LaunchSiloBlockEntity be, long now) {
         BlockPos pos = be.getBlockPos().immutable();
-        Entry next = new Entry(pos, be.tier().tier, be.mode() == LaunchSiloBlockEntity.Mode.MANUAL, be.hasMissile(), now);
+        Entry next = new Entry(pos, be.tier().tier, be.mode() == LaunchSiloBlockEntity.Mode.MANUAL, be.hasMissile(), now,
+            be.warhead().pierce());
         Entry previous = silos.put(pos, next);
         if (previous == null || !previous.sameState(next)) setDirty();
     }

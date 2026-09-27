@@ -14,6 +14,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 import xyz.przemyk.simpleplanes.api.map.AviationMap;
 import xyz.przemyk.simpleplanes.api.map.AviationSnapshot;
 import xyz.przemyk.simpleplanes.api.map.LaunchResult;
@@ -45,14 +46,19 @@ final class AviationCommand {
                     .then(Commands.literal("op").executes(c -> snapshot(c, fake(c, true))))
                     .then(Commands.literal("nonop").executes(c -> snapshot(c, fake(c, false))))));
 
+            // ... <tz> [op|nonop [<y>]] [pierce|blast]: the warhead keyword goes through the API 4 launch with a warhead
             RequiredArgumentBuilder<CommandSourceStack, Integer> tz = Commands.argument("tz", IntegerArgumentType.integer())
-                .executes(c -> launch(c, true, AviationMap.SURFACE));
+                .executes(c -> launch(c, true, AviationMap.SURFACE, null));
+            warheads(tz, true, null);
             for (String who : new String[]{"op", "nonop"}) {
                 boolean op = who.equals("op");
-                tz.then(Commands.literal(who)
-                    .executes(c -> launch(c, op, AviationMap.SURFACE))
-                    .then(Commands.argument("y", IntegerArgumentType.integer())
-                        .executes(c -> launch(c, op, IntegerArgumentType.getInteger(c, "y")))));
+                LiteralArgumentBuilder<CommandSourceStack> whoNode = Commands.literal(who)
+                    .executes(c -> launch(c, op, AviationMap.SURFACE, null));
+                warheads(whoNode, op, null);
+                RequiredArgumentBuilder<CommandSourceStack, Integer> yNode = Commands.argument("y", IntegerArgumentType.integer())
+                    .executes(c -> launch(c, op, IntegerArgumentType.getInteger(c, "y"), null));
+                warheads(yNode, op, "y");
+                tz.then(whoNode.then(yNode));
             }
             root.then(Commands.literal("test")
                 .then(Commands.literal("launch")
@@ -60,6 +66,11 @@ final class AviationCommand {
                         .then(Commands.argument("silo", BlockPosArgument.blockPos())
                             .then(Commands.argument("tx", IntegerArgumentType.integer())
                                 .then(tz)))))
+                .then(Commands.literal("warhead")
+                    .then(Commands.argument("at", Vec3Argument.vec3())
+                        .then(Commands.argument("silo", BlockPosArgument.blockPos())
+                            .then(warheadSetting("blast", false))
+                            .then(warheadSetting("pierce", true)))))
                 .then(service(SiloAction.LOAD))
                 .then(service(SiloAction.UNLOAD))
                 .then(Commands.literal("resetlimits").executes(c -> {
@@ -69,6 +80,34 @@ final class AviationCommand {
 
             dispatcher.register(root);
         });
+    }
+
+    /** Adds {@code pierce} and {@code blast} under {@code node}: a test launch with the warhead of that one launch. */
+    private static void warheads(com.mojang.brigadier.builder.ArgumentBuilder<CommandSourceStack, ?> node, boolean op,
+                                 @Nullable String yArg) {
+        for (boolean pierce : new boolean[]{true, false}) {
+            node.then(Commands.literal(pierce ? "pierce" : "blast").executes(c ->
+                launch(c, op, yArg == null ? AviationMap.SURFACE : IntegerArgumentType.getInteger(c, yArg), pierce)));
+        }
+    }
+
+    /** {@code warhead <at> <silo> blast|pierce [op|nonop]}: the map's warhead setting request. */
+    private static LiteralArgumentBuilder<CommandSourceStack> warheadSetting(String name, boolean piercing) {
+        return Commands.literal(name)
+            .executes(c -> warhead(c, piercing, true))
+            .then(Commands.literal("op").executes(c -> warhead(c, piercing, true)))
+            .then(Commands.literal("nonop").executes(c -> warhead(c, piercing, false)));
+    }
+
+    private static int warhead(CommandContext<CommandSourceStack> c, boolean piercing, boolean op) {
+        AviationTestPlayer player = fake(c, op);
+        BlockPos silo = BlockPosArgument.getBlockPos(c, "silo");
+        BlockPos set = AviationService.handleWarhead(player, new AviationPayloads.WarheadRequest(silo, piercing));
+        String line = String.format(Locale.ROOT, "Test warhead %s as %s from %.1f %.1f %.1f, silo %s: %s",
+            piercing ? "pierce" : "blast", op ? "operator" : "non-operator", player.getX(), player.getY(), player.getZ(),
+            silo.toShortString(), set != null ? "SET" : "REFUSED");
+        if (player.lastMessage() != null) line += " | action bar: " + player.lastMessage().getString();
+        return set != null ? ok(c, line) : fail(c, line);
     }
 
     /** {@code load|unload <at> <silo> [op|nonop]}. */
@@ -95,8 +134,8 @@ final class AviationCommand {
         if (index == null || index.size() == 0) return ok(c, "Silo index for " + level.dimension().identifier() + ": empty.");
         ok(c, "Silo index for " + level.dimension().identifier() + ": " + index.size() + " silo(s).");
         for (SiloIndex.Entry e : index.entries()) {
-            ok(c, String.format(Locale.ROOT, "  %s T%d %s %s seen=%d chunk=%s", e.pos().toShortString(), e.tier(),
-                e.strike() ? "strike" : "air_defence", e.loaded() ? "loaded" : "empty", e.seen(),
+            ok(c, String.format(Locale.ROOT, "  %s T%d %s %s %s seen=%d chunk=%s", e.pos().toShortString(), e.tier(),
+                e.strike() ? "strike" : "air_defence", e.loaded() ? "loaded" : "empty", e.piercing() ? "piercing" : "blast", e.seen(),
                 level.isLoaded(e.pos()) ? "loaded" : "unloaded"));
         }
         return index.size();
@@ -126,23 +165,25 @@ final class AviationCommand {
                 f.mode(), f.x(), f.y(), f.z(), f.hasDestination() ? String.format(Locale.ROOT, "%.0f %.0f %s", f.destX(), f.destZ(), f.destination()) : "-"));
         }
         for (AviationSnapshot.Silo o : s.silos()) {
-            ok(c, String.format(Locale.ROOT, "  silo %s T%d %s %s %s chunk=%s dist=%.1f range=%d-%d ad=%.0f/%.0f "
-                    + "usable=%s status=%s serviceable=%s service=%s",
+            ok(c, String.format(Locale.ROOT, "  silo %s T%d %s %s %s chunk=%s dist=%.1f range=%d-%d warhead=%s pierce_min=%d "
+                    + "pierce_radius=%.0f ad=%.0f/%.0f usable=%s status=%s serviceable=%s service=%s",
                 o.pos().toShortString(), o.tier(), o.strike() ? "strike" : "air_defence", o.loaded() ? "loaded" : "empty",
                 o.phase(), o.chunkLoaded() ? "loaded" : "unloaded", o.distance(), o.minRange(), o.maxRange(),
+                o.piercing() ? "piercing" : "blast", o.pierceMinRange(), o.pierceRadius(),
                 o.detectionRadius(), o.engagementRange(), o.usable(), o.status().getString(), o.serviceable(),
                 o.serviceStatus().getString()));
         }
         return s.silos().size();
     }
 
-    private static int launch(CommandContext<CommandSourceStack> c, boolean op, int y) {
+    private static int launch(CommandContext<CommandSourceStack> c, boolean op, int y, @Nullable Boolean pierce) {
         AviationTestPlayer player = fake(c, op);
         BlockPos silo = BlockPosArgument.getBlockPos(c, "silo");
         int tx = IntegerArgumentType.getInteger(c, "tx");
         int tz = IntegerArgumentType.getInteger(c, "tz");
-        LaunchResult result = AviationService.handleLaunch(player, new AviationPayloads.LaunchRequest(silo, tx, y, tz));
-        String line = String.format(Locale.ROOT, "Test launch as %s from %.1f %.1f %.1f, silo %s, target %d %s %d: %s -- %s",
+        LaunchResult result = AviationService.handleLaunch(player, new AviationPayloads.LaunchRequest(silo, tx, y, tz), pierce);
+        String line = String.format(Locale.ROOT, "Test launch%s as %s from %.1f %.1f %.1f, silo %s, target %d %s %d: %s -- %s",
+            pierce == null ? "" : pierce ? " (pierce)" : " (blast)",
             op ? "operator" : "non-operator", player.getX(), player.getY(), player.getZ(), silo.toShortString(), tx,
             y == AviationMap.SURFACE ? "surface" : Integer.toString(y), tz,
             result.accepted() ? "ACCEPTED" : result.pending() ? "PENDING" : "REFUSED",

@@ -19,7 +19,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
- * The five payloads of the aviation map. Registered on both sides from {@link AviationService#init()}.
+ * The seven payloads of the aviation map. Registered on both sides from {@link AviationService#init()}.
  * Clientbound payloads are only ever sent in reply to a request, and only to a player whose client
  * registered the channel ({@code ServerPlayNetworking.canSend}).
  */
@@ -31,9 +31,10 @@ public final class AviationPayloads {
      * Protocol version carried by the snapshot request; bumped on an incompatible payload change. The server
      * answers only a client that asked with this version (see {@code AviationService}). 2: load / unload
      * request, action on the reply, service and air-defence fields on each silo. 3: pending flag on the reply
-     * (remote launch).
+     * (remote launch). 4: the warhead fields on each silo; the warhead launch and warhead setting requests, which
+     * are payloads of their own so the three older requests keep their exact bytes.
      */
-    public static final int PROTOCOL = 3;
+    public static final int PROTOCOL = 4;
 
     public static final int MAX_AIRFIELDS = 128;
     public static final int MAX_HELIPADS = 128;
@@ -78,6 +79,45 @@ public final class AviationPayloads {
             ByteBufCodecs.INT, LaunchRequest::y,
             ByteBufCodecs.VAR_INT, LaunchRequest::z,
             LaunchRequest::new);
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * C2S: a {@link LaunchRequest} with the warhead of this one launch, {@code piercing} or the ordinary blast, over
+     * the silo's own setting. A payload of its own rather than a field on {@link LaunchRequest}: a server without it
+     * is simply not sent one ({@code canSend}), instead of failing to decode a longer launch request.
+     */
+    public record WarheadLaunchRequest(BlockPos silo, int x, int y, int z, boolean piercing) implements CustomPacketPayload {
+        public static final Type<WarheadLaunchRequest> TYPE = new Type<>(id("aviation_launch_warhead"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, WarheadLaunchRequest> CODEC = StreamCodec.composite(
+            BlockPos.STREAM_CODEC, WarheadLaunchRequest::silo,
+            ByteBufCodecs.VAR_INT, WarheadLaunchRequest::x,
+            ByteBufCodecs.INT, WarheadLaunchRequest::y,
+            ByteBufCodecs.VAR_INT, WarheadLaunchRequest::z,
+            ByteBufCodecs.BOOL, WarheadLaunchRequest::piercing,
+            WarheadLaunchRequest::new);
+
+        public LaunchRequest launch() {
+            return new LaunchRequest(silo, x, y, z);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** C2S: set the strike warhead of {@code silo}: piercing, or the ordinary blast. Answered by a snapshot. */
+    public record WarheadRequest(BlockPos silo, boolean piercing) implements CustomPacketPayload {
+        public static final Type<WarheadRequest> TYPE = new Type<>(id("aviation_warhead"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, WarheadRequest> CODEC = StreamCodec.composite(
+            BlockPos.STREAM_CODEC, WarheadRequest::silo,
+            ByteBufCodecs.BOOL, WarheadRequest::piercing,
+            WarheadRequest::new);
 
         @Override
         public Type<? extends CustomPacketPayload> type() {
@@ -192,6 +232,9 @@ public final class AviationPayloads {
             ComponentSerialization.STREAM_CODEC.encode(b, o.serviceStatus());
             b.writeDouble(o.detectionRadius());
             b.writeDouble(o.engagementRange());
+            b.writeBoolean(o.piercing());
+            b.writeVarInt(o.pierceMinRange());
+            b.writeDouble(o.pierceRadius());
         });
     }
 
@@ -217,7 +260,8 @@ public final class AviationPayloads {
             BlockPos.STREAM_CODEC.decode(b), b.readVarInt(), b.readBoolean(), b.readBoolean(), b.readUtf(32),
             b.readBoolean(), b.readDouble(), b.readDouble(), b.readVarInt(), b.readVarInt(), b.readDouble(),
             b.readBoolean(), ComponentSerialization.STREAM_CODEC.decode(b), b.readBoolean(),
-            ComponentSerialization.STREAM_CODEC.decode(b), b.readDouble(), b.readDouble()));
+            ComponentSerialization.STREAM_CODEC.decode(b), b.readDouble(), b.readDouble(), b.readBoolean(), b.readVarInt(),
+            b.readDouble()));
         return new AviationSnapshot(dimension, gameTime, nearRadius, permitted, radius,
             airfields, helipads, routes, flights, silos);
     }

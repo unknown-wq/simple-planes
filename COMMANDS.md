@@ -363,6 +363,72 @@ and the right-click-the-air line show the current one.
 
 ---
 
+## Missiles: piercing warhead
+
+A launch silo can fire the same **piercing blast** as a strike aircraft (see "Piercing blast"
+above) instead of its missile's ordinary warhead: living things only, armour ignored, not one
+block broken, nothing set on fire. The missile items and their recipes do not change; the
+warhead is chosen at launch time. All the missile commands are in `26.3/MISSILES.md` §4.
+
+```
+/missile silo warhead <silo> [pierce|blast]
+/missile launch <silo> <x y z> [pierce|blast]
+```
+
+| Command | What it does |
+|---|---|
+| `/missile silo warhead <silo>` | shows what the silo fires: `blast 16.0, blocks, fire` or `piercing 64.0 (radius 128, entities only)` |
+| `/missile silo warhead <silo> pierce` | from now on the silo fires its tier's piercing warhead. Saved with the silo, so it survives a restart; shown in `/missile silo status` |
+| `/missile silo warhead <silo> blast` | back to the ordinary warhead (the default) |
+| `/missile launch <silo> <x y z>` | fires whatever the silo is set to |
+| `/missile launch <silo> <x y z> pierce` | this one missile piercing, whatever the silo is set to; the setting is not changed |
+| `/missile launch <silo> <x y z> blast` | this one missile with the ordinary warhead |
+
+`<silo>` is any block of the silo. The setting can be changed at any time; a missile already on
+its way keeps the warhead it was launched with.
+
+| Tier | Ordinary warhead | Piercing: power | radius | certain death within | 50 % in the open at | nearest target |
+|---|---|---|---|---|---|---|
+| 1 | 2, breaks blocks | 16 | 32 | 8 | 20 | 32 |
+| 2 | 4 (TNT), breaks blocks | 24 | 48 | 12 | 30 | 48 |
+| 3 | 8, breaks blocks, fire | 40 | 80 | 20 | 50 | 80 |
+| 4 | 16, breaks blocks, fire | **64** (the aircraft's maximum) | **128** | 32 | 80 | 128 |
+
+* **Nearest target.** A piercing missile needs its target at least its own radius away from
+  the silo, so the silo is never inside the blast. Closer targets are refused with the reason.
+  The ordinary warheads keep their old minimum (24, 32, 48, 64).
+* **Who dies** follows the table under "Piercing blast", with `R` the radius above: the inner
+  quarter is certain death, then the chance falls smoothly to nothing at `R`, and cover helps.
+  The chances per tier are in `26.3/design/MISSILE-PIERCE.md`.
+* **Air defence is not affected.** A silo in air-defence mode fires its ordinary warhead at
+  aircraft, whatever the setting (aircraft are not living things; a piercing blast would not
+  touch them).
+* **Off switch.** `/gamerule simpleplanes:missile_explosions false` stops every warhead,
+  piercing ones included.
+* **Blast guards** (see "Blast protection") are asked as for any explosion. A MineColonies
+  colony lets a piercing blast through (it breaks nothing) and citizens hit by a lethal roll go
+  down CRITICAL.
+
+```mcfunction
+# set the tier 4 silo to piercing, then fire at a point 480 blocks away
+/missile silo warhead 10 -20 20 pierce
+/missile launch 10 -20 20 -350 -19 -300
+
+# one piercing tier 1 from a silo left on the ordinary warhead
+/missile launch 0 -20 0 -350 -19 -300 pierce
+
+# one ordinary tier 4 from the piercing silo, without changing its setting
+/missile launch 10 -20 20 600 -19 20 blast
+
+# refused: a piercing tier 4 needs its target at least 128 blocks away
+/missile launch 10 -20 20 100 -19 20 pierce
+```
+
+The world map's aviation tab launches with the silo's setting. The Simple Planes map API can
+also send a warhead with a launch and change the setting (`26.3/MISSILES.md` §8i).
+
+---
+
 ## Flights
 
 ```
