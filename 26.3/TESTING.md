@@ -415,6 +415,68 @@ useful for an incendiary test where nothing is expected to move but something is
 Unlike `tooltest use`, `charge` and `crater diff` are fine under `tick sprint`: nothing here depends
 on a fake player's click.
 
+### Recipe: a piercing blast against armoured rings
+
+What `pierce` promises is a death rate against distance that armour does not change, and no block
+touched. Both are counted, not looked at. Pick a site well away from villages (`locate structure
+#minecraft:village`; a house in the ring is cover and lowers the count), force-load it, and put rings
+of armoured, AI-less zombies at fixed fractions of the radius `R = 2 × power`:
+
+```sh
+./cmd.sh "gamerule minecraft:spawn_mobs false"
+./cmd.sh "forceload add -390 -144 -250 143"; ./cmd.sh "forceload add -249 -144 -110 143"   # R 128 around -250 -60 0
+# one zombie; repeat 20 per ring at r = 0.15, 0.30, 0.45, 0.60, 0.75, 0.90 and 1.05 x R,
+# alternating Protection IV and Blast Protection IV full netherite
+./cmd.sh 'summon minecraft:zombie -225.4 -60 0 {NoAI:1b,PersistenceRequired:1b,Silent:1b,Tags:["pt","d0"],equipment:{head:{id:"minecraft:netherite_helmet",components:{"minecraft:enchantments":{"minecraft:blast_protection":4}}},chest:{...},legs:{...},feet:{...}}}'
+./cmd.sh "autopilot tooltest charge -250 -60 0 64 pierce"
+# ... piercing blast 64.0 (radius 128): 120 in range, 70 lethal rolls (70 reached death), 50 wounded, 4.4 ms at -250.0 -60.0 0.0
+./cmd.sh "execute if entity @e[tag=d3]"          # survivors of one ring, after the 20-tick death animation
+./cmd.sh "data get entity @e[tag=d3,limit=1] Health"   # a survivor's health: 20 - 15 x (1 - u)
+```
+
+`tooltest charge ... pierce` goes through `Blast#detonate`, guards included, without an aircraft, so
+the centre is exactly where it is asked to be. The log line is written for every piercing blast,
+aircraft or not, and is the cost measurement as well (the time covers the entity query, the cover
+rays and every hurt, death and drop). Compare the counts with the table in
+`design/PIERCING-BLAST.md`; a ring of 20 over five runs gives 100 samples, about ±5 % at the middle of
+the curve. An armour stand should follow the same curve (it breaks only on a lethal roll); that
+variant has not been measured yet.
+
+The same without armour and without `pierce` is the control: a vanilla blast 16 kills an armoured
+zombie a few blocks away and leaves one at 20 blocks with its health; `charge ... 20` and
+`autopilot strike ... 32` without `pierce` are refused with the reason.
+
+No block touched, with the crater tools from the previous recipe around a few blocks worth losing:
+
+```sh
+./cmd.sh "fill -255 -60 -5 -245 -58 5 minecraft:glass"
+./cmd.sh "autopilot tooltest crater snapshot -260 -64 -10 -240 -50 10"
+./cmd.sh "autopilot tooltest charge -250 -57 0 64 pierce"
+./cmd.sh "autopilot tooltest crater diff -250 -57 0"      # crater: 0 changed ... fire 0
+```
+
+And through a real aircraft: `autopilot strike -250 -60 0 300 90 64 type fighter pierce`.
+
+With MineColonies (headless is enough), citizens are the other half. The default explosion setting,
+`DAMAGE_ENTITIES`, protects the blocks and lets entities be hurt:
+
+```sh
+./cmd.sh "mc debug headless on"
+./cmd.sh "mc colony found Testville -250 -60 -400"
+./cmd.sh "mc colony forceloadclaims 1 on"
+./cmd.sh "mc citizens fill 1"
+./cmd.sh "autopilot tooltest crater snapshot -275 -61 -425 -225 -48 -375"
+./cmd.sh "autopilot tooltest charge -250 -59 -397 8 true"     # ordinary blast: the colony guard defuses it
+./cmd.sh "autopilot tooltest charge -250 -59 -397 64 pierce"  # piercing: citizens go down
+./cmd.sh "autopilot tooltest crater diff -250 -59 -397"       # crater: 0 changed, both times
+./cmd.sh "mc citizens carestatus 1"   # CRITICAL INJURY after a lethal roll, lowered hp after a non-lethal one
+```
+
+About one lethal roll in ten kills a citizen outright. That is MineColonies' own
+`criticalcareinstantdeathchance` (10 by default), not the blast. A citizen that is already down
+when a second piercing blast reaches it dies, because MineColonies ignores further damage to a
+downed citizen only when that damage has an attacker, and this blast has none.
+
 ### Recipe: proving something survives a save
 
 `autopilot status` after a restart is **not** proof: a plane in a chunk nobody loads is not ticking

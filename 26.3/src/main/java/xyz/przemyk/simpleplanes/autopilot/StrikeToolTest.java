@@ -45,7 +45,7 @@ import java.util.UUID;
  * /autopilot tooltest use &lt;target&gt;                   right-click the top of that block
  * /autopilot tooltest air [sneak]                      right-click the air
  * /autopilot tooltest run &lt;autopilot arguments&gt;      run /autopilot … as the fake player
- * /autopilot tooltest charge &lt;pos&gt; &lt;power&gt; [&lt;blocks&gt;]  set a fireless Blast off there
+ * /autopilot tooltest charge &lt;pos&gt; &lt;power&gt; [&lt;blocks&gt;|pierce]  set a fireless Blast off there
  * /autopilot tooltest crater snapshot &lt;from&gt; &lt;to&gt;      remember every block in that box
  * /autopilot tooltest crater diff &lt;centre&gt;            what changed since, and how far out
  * </pre>
@@ -84,10 +84,11 @@ final class StrikeToolTest {
                     .executes(StrikeToolTest::run)))
             .then(Commands.literal("charge")
                 .then(Commands.argument("pos", Vec3Argument.vec3(false))
-                    .then(Commands.argument("power", FloatArgumentType.floatArg(0.0F, Blast.MAX_POWER))
-                        .executes(c -> charge(c, true))
+                    .then(Commands.argument("power", FloatArgumentType.floatArg(0.0F, Blast.MAX_PIERCE_POWER))
+                        .executes(c -> charge(c, true, false))
+                        .then(Commands.literal("pierce").executes(c -> charge(c, false, true)))
                         .then(Commands.argument("blocks", BoolArgumentType.bool())
-                            .executes(c -> charge(c, BoolArgumentType.getBool(c, "blocks")))))))
+                            .executes(c -> charge(c, BoolArgumentType.getBool(c, "blocks"), false))))))
             .then(Commands.literal("crater")
                 .then(Commands.literal("snapshot")
                     .then(Commands.argument("from", BlockPosArgument.blockPos())
@@ -99,9 +100,14 @@ final class StrikeToolTest {
     }
 
     /** The warhead on its own, through the same {@link Blast#detonate} path an aircraft takes. */
-    private static int charge(CommandContext<CommandSourceStack> c, boolean blocks) {
+    private static int charge(CommandContext<CommandSourceStack> c, boolean blocks, boolean pierce) {
         Vec3 at = Vec3Argument.getVec3(c, "pos");
-        Blast applied = new Blast(FloatArgumentType.getFloat(c, "power"), blocks, false)
+        float power = FloatArgumentType.getFloat(c, "power");
+        if (power > Blast.MAX_POWER && !pierce) {
+            c.getSource().sendFailure(Component.literal("[StrikeTest] above " + Blast.MAX_POWER + " only with pierce"));
+            return 0;
+        }
+        Blast applied = new Blast(power, blocks, false, pierce)
             .detonate(c.getSource().getLevel(), null, at);
         c.getSource().sendSuccess(() -> Component.literal("[StrikeTest] charge at " + at + ": "
             + (applied == null ? "suppressed" : applied.describe())), false);

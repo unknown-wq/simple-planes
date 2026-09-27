@@ -2974,11 +2974,19 @@ a repeatable test wants to do anyway.
 
 | Argument | Range | Default | What it does |
 |---|---|---|---|
-| `blast` | 0.0 – 16.0 | **4.0** | Vanilla explosion strength. The damage radius is `2 × blast`. |
+| `blast` | 0.0 – 16.0 (64.0 with `pierce`) | **4.0** | Vanilla explosion strength. The damage radius is `2 × blast`. |
 | `blocks` | true / false | **true** | Whether the blast breaks blocks. |
 | `fire` | true / false | **false** | Whether it leaves fires behind. |
+| `pierce` | trailing keyword | **off** | An entity-only, armour-ignoring blast; forces `blocks` and `fire` off. |
 
 The defaults are exactly what a plane has always done, so `/autopilot strike <x y z>` is unchanged.
+
+**`pierce`** replaces the vanilla explosion with `PiercingBlast`: every living entity within
+`2 × blast` rolls once against a death chance that depends only on its distance from the centre and
+on cover, certain inside the inner quarter of the radius and falling smoothly to zero at the edge.
+Armour, enchantments, shields and difficulty do not enter into it. No block is touched, so the
+bound that exists for the crater's cost does not apply and the ceiling is 64 (radius 128). The model,
+its numbers and the measurements are in [`design/PIERCING-BLAST.md`](design/PIERCING-BLAST.md).
 
 **A drone (`type strike_drone`/`type fpv_drone`) ignores all three** and flies its own small fixed
 charge instead — see [The drones](#the-drones). `blocks` still applies to it (a no-block-damage tool

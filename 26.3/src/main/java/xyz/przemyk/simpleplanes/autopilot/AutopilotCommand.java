@@ -46,9 +46,9 @@ import java.util.Locale;
  * attack run comes in from.
  *
  * <pre>
- * /autopilot strike &lt;target&gt; [distance] [bearing] [blast] [blocks] [fire] [type &lt;aircraft&gt;]
- * /autopilot tool &lt;distance&gt; [bearing] [blast] [blocks] [fire] [type &lt;aircraft&gt;]
- * /autopilot tool type &lt;aircraft&gt;
+ * /autopilot strike &lt;target&gt; [distance] [bearing] [blast] [blocks] [fire] [type &lt;aircraft&gt;] [pierce [true|false]]
+ * /autopilot tool &lt;distance&gt; [bearing] [blast] [blocks] [fire] [type &lt;aircraft&gt;] [pierce [true|false]]
+ * /autopilot tool type &lt;aircraft&gt; [pierce [true|false]]
  * /autopilot route &lt;from&gt; &lt;to&gt; [speed]
  * /autopilot flight &lt;fromAirfield&gt; &lt;toAirfield&gt; [speed] [delay &lt;seconds&gt;]
  * /autopilot inbound &lt;from&gt; &lt;airfield&gt; [speed]
@@ -118,7 +118,7 @@ public final class AutopilotCommand {
                             .executes(AutopilotCommand::strike)
                             .then(strikeTypeArgument(AutopilotCommand::strike))
                             .then(Commands.argument("blast",
-                                    FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_POWER))
+                                    FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_PIERCE_POWER))
                                 .executes(AutopilotCommand::strike)
                                 .then(strikeTypeArgument(AutopilotCommand::strike))
                                 .then(Commands.argument("blocks", BoolArgumentType.bool())
@@ -146,7 +146,7 @@ public final class AutopilotCommand {
                         .executes(AutopilotCommand::tool)
                         .then(strikeTypeArgument(AutopilotCommand::tool))
                         .then(Commands.argument("blast",
-                                FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_POWER))
+                                FloatArgumentType.floatArg(Blast.MIN_POWER, Blast.MAX_PIERCE_POWER))
                             .executes(AutopilotCommand::tool)
                             .then(strikeTypeArgument(AutopilotCommand::tool))
                             .then(Commands.argument("blocks", BoolArgumentType.bool())
@@ -386,7 +386,84 @@ public final class AutopilotCommand {
                     .executes(AutopilotCommand::stopOne)));
 
             dispatcher.register(root);
+            graftPierce(dispatcher);
         });
+    }
+
+    /** The trailing keyword that makes a strike's blast a piercing one. See {@link #graftPierce}. */
+    private static final String PIERCE = "pierce";
+    /** Its optional value, for {@code tool}, where a keyword left off keeps what the tool had. */
+    private static final String PIERCE_ON = "pierce_on";
+
+    /**
+     * {@code pierce [true|false]} after every executable node of {@code strike} and {@code tool}.
+     *
+     * <p>Grafted onto the finished tree, the way {@code hostile} is (see
+     * {@link xyz.przemyk.simpleplanes.airdefence.AllegianceOption}), so neither command's own tree
+     * changes shape and every existing invocation parses as it did. It is grafted first, and
+     * {@code hostile} walks the tree afterwards, so the two read {@code ... pierce hostile}.
+     * {@code pierce} alone means true; the explicit value exists for {@code tool}, whose arguments
+     * keep the tool's current setting when left off, so turning it back off has to be sayable.
+     */
+    private static void graftPierce(com.mojang.brigadier.CommandDispatcher<CommandSourceStack> dispatcher) {
+        com.mojang.brigadier.tree.CommandNode<CommandSourceStack> autopilot = dispatcher.getRoot().getChild("autopilot");
+        if (autopilot == null) {
+            return;
+        }
+        for (String name : new String[] {"strike", "tool"}) {
+            com.mojang.brigadier.tree.CommandNode<CommandSourceStack> node = autopilot.getChild(name);
+            if (node != null) {
+                graftPierceBelow(node);
+            }
+        }
+    }
+
+    private static void graftPierceBelow(com.mojang.brigadier.tree.CommandNode<CommandSourceStack> node) {
+        List<com.mojang.brigadier.tree.CommandNode<CommandSourceStack>> children = new java.util.ArrayList<>(node.getChildren());
+        if (node.getCommand() != null && node.getChild(PIERCE) == null) {
+            node.addChild(Commands.<CommandSourceStack>literal(PIERCE)
+                .executes(node.getCommand())
+                .then(Commands.argument(PIERCE_ON, BoolArgumentType.bool()).executes(node.getCommand()))
+                .build());
+        }
+        for (com.mojang.brigadier.tree.CommandNode<CommandSourceStack> child : children) {
+            graftPierceBelow(child);
+        }
+    }
+
+    /** The pierce setting on this invocation: {@code fallback} when the keyword is absent. */
+    private static boolean pierceFrom(CommandContext<CommandSourceStack> context, boolean fallback) {
+        if (has(context, PIERCE_ON)) {
+            return BoolArgumentType.getBool(context, PIERCE_ON);
+        }
+        return has(context, PIERCE) || fallback;
+    }
+
+    /**
+     * The one check the argument range cannot make, because Brigadier parses the power before it
+     * has seen whether {@code pierce} follows: above {@value Blast#MAX_POWER} only a piercing blast
+     * is allowed. Says so and returns false.
+     */
+    private static boolean powerAllowed(CommandContext<CommandSourceStack> context, float power, boolean pierce) {
+        if (power <= Blast.MAX_POWER || pierce) {
+            return true;
+        }
+        context.getSource().sendFailure(Component.literal(String.format(Locale.ROOT,
+            "Blast %.1f is above %.0f, the limit for a blast that breaks blocks. Add \"pierce\" for an"
+                + " entity-only piercing blast (up to %.0f), or use %.0f or less.",
+            power, Blast.MAX_POWER, Blast.MAX_PIERCE_POWER, Blast.MAX_POWER)));
+        return false;
+    }
+
+    /** " Piercing: blocks and fire are ignored." when the command asked for either along with pierce. */
+    private static String pierceNote(CommandContext<CommandSourceStack> context, Blast blast) {
+        if (!blast.pierce()) {
+            return "";
+        }
+        boolean askedBlocks = has(context, "blocks") && BoolArgumentType.getBool(context, "blocks");
+        boolean askedFire = has(context, "fire") && BoolArgumentType.getBool(context, "fire");
+        return askedBlocks || askedFire
+            ? " A piercing blast never breaks blocks or starts fires; blocks/fire true is ignored." : "";
     }
 
     /**
@@ -580,11 +657,16 @@ public final class AutopilotCommand {
      * {@link Blast} clamps the power itself, so the range on the argument is a helpful error message
      * rather than the actual guard.
      */
-    private static Blast blastFrom(CommandContext<CommandSourceStack> context) {
-        return new Blast(
-            optionalFloat(context, "blast", Blast.DEFAULT_POWER),
+    private static @Nullable Blast blastFrom(CommandContext<CommandSourceStack> context) {
+        float power = optionalFloat(context, "blast", Blast.DEFAULT_POWER);
+        boolean pierce = pierceFrom(context, false);
+        if (!powerAllowed(context, power, pierce)) {
+            return null;
+        }
+        return new Blast(power,
             optionalBool(context, "blocks", true),
-            optionalBool(context, "fire", false));
+            optionalBool(context, "fire", false),
+            pierce);
     }
 
     private static int strike(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -597,6 +679,9 @@ public final class AutopilotCommand {
             ? (double) IntegerArgumentType.getInteger(context, "bearing")
             : null;
         Blast blast = blastFrom(context);
+        if (blast == null) {
+            return 0;
+        }
         AircraftType type = strikeType(context, AircraftType.PLANE);
         if (type == null) {
             return 0;
@@ -627,7 +712,8 @@ public final class AutopilotCommand {
         // Always hostile (set in launchStrike); the trailing keyword is accepted and changes nothing.
         source.sendSuccess(() -> Component.literal(
             AutopilotSpawner.describeLaunch(plane, target, distance, AutopilotMath.compassHeading(bearing))
-                + " Warhead: " + plane.warhead(blast).describe() + ". " + AutopilotSpawner.describeAirframe(plane)), true);
+                + " Warhead: " + plane.warhead(blast).describe() + "." + pierceNote(context, blast) + " "
+                + AutopilotSpawner.describeAirframe(plane)), true);
         return 1;
     }
 
@@ -665,17 +751,28 @@ public final class AutopilotCommand {
         }
 
         Blast current = PlaneStrikeToolItem.getBlast(stack);
-        Blast blast = new Blast(
-            optionalFloat(context, "blast", current.power()),
-            optionalBool(context, "blocks", current.breaksBlocks()),
-            optionalBool(context, "fire", current.fire()));
+        boolean pierce = pierceFrom(context, current.pierce());
+        float power = optionalFloat(context, "blast", current.power());
+        if (!powerAllowed(context, power, pierce)) {
+            return 0;
+        }
+        // The stored flags, not the record's: a piercing blast forces both off, and turning pierce
+        // back off later should find the tool's own block and fire settings where they were.
+        boolean blocks = optionalBool(context, "blocks", stack.get(AutopilotComponents.STRIKE_BLOCKS) == null
+            || Boolean.TRUE.equals(stack.get(AutopilotComponents.STRIKE_BLOCKS)));
+        boolean fire = optionalBool(context, "fire", Boolean.TRUE.equals(stack.get(AutopilotComponents.STRIKE_FIRE)));
+        Blast blast = new Blast(power, blocks, fire, pierce);
 
         // Absent only in "tool type <aircraft>", which touches nothing but the airframe.
         if (has(context, "distance")) {
             stack.set(AutopilotComponents.STRIKE_DISTANCE, IntegerArgumentType.getInteger(context, "distance"));
             stack.set(AutopilotComponents.STRIKE_BLAST, blast.power());
-            stack.set(AutopilotComponents.STRIKE_BLOCKS, blast.breaksBlocks());
-            stack.set(AutopilotComponents.STRIKE_FIRE, blast.fire());
+            stack.set(AutopilotComponents.STRIKE_BLOCKS, blocks);
+            stack.set(AutopilotComponents.STRIKE_FIRE, fire);
+        }
+        // The keyword is honoured on its own too, so "tool type <aircraft> pierce" works.
+        if (has(context, PIERCE)) {
+            stack.set(AutopilotComponents.STRIKE_PIERCE, pierce);
         }
 
         Integer bearing = PlaneStrikeToolItem.getBearing(stack);
@@ -697,7 +794,7 @@ public final class AutopilotCommand {
             + (reportedBearing == null
                 ? "from wherever you stand" : String.format("%03d", reportedBearing))
             + ", warhead " + blast.describe() + (type.isDrone() ? " (a drone flies " + type.warhead(blast).describe() + ")" : "")
-            + ", aircraft " + type.getSerializedName() + "."), false);
+            + ", aircraft " + type.getSerializedName() + "." + pierceNote(context, blast)), false);
         return 1;
     }
 

@@ -112,6 +112,17 @@ public class AutopilotComponents {
             .build());
 
     /**
+     * Whether the tool's blast is a piercing one ({@link Blast#pierce()}): entity-only, armour
+     * ignored, power up to {@link Blast#MAX_PIERCE_POWER}. Absent means it is not, as it always has
+     * been; while it is set, {@link #STRIKE_BLOCKS} and {@link #STRIKE_FIRE} are kept but ignored.
+     */
+    public static final DataComponentType<Boolean> STRIKE_PIERCE = register("autopilot_strike_pierce",
+        DataComponentType.<Boolean>builder()
+            .persistent(Codec.BOOL)
+            .networkSynchronized(ByteBufCodecs.BOOL)
+            .build());
+
+    /**
      * Fixed run-in bearing, in compass degrees, for the strike tool.
      *
      * <p>Absent — the normal state — means the run-in is worked out from where the player is
